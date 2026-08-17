@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   DatasetDisplayInfo,
   EpisodeLengthStats,
@@ -33,6 +33,8 @@ interface DatasetReviewPanelProps {
   datasetInfo: DatasetDisplayInfo;
   episodeLengthStats: EpisodeLengthStats | null;
   episodeLengthStatsLoading: boolean;
+  episodeLengthStatsError: string | null;
+  onRetryEpisodeStats: () => void;
   encodedPath: string | null;
   datasetName: string;
 }
@@ -192,6 +194,8 @@ export default function DatasetReviewPanel({
   datasetInfo,
   episodeLengthStats,
   episodeLengthStatsLoading,
+  episodeLengthStatsError,
+  onRetryEpisodeStats,
   encodedPath,
   datasetName,
 }: DatasetReviewPanelProps) {
@@ -199,11 +203,14 @@ export default function DatasetReviewPanel({
   const [qualityError, setQualityError] = useState<string | null>(null);
   const [qualityLoading, setQualityLoading] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
+  const qualityRequestIdRef = useRef(0);
 
   useEffect(() => {
+    const requestId = ++qualityRequestIdRef.current;
     if (!encodedPath) {
       setQuality(null);
       setQualityError("Custom checks are available only for local datasets.");
+      setQualityLoading(false);
       return;
     }
 
@@ -211,6 +218,7 @@ export default function DatasetReviewPanel({
     if (cached && refreshToken === 0) {
       setQuality(cached);
       setQualityError(null);
+      setQualityLoading(false);
       return;
     }
 
@@ -236,15 +244,19 @@ export default function DatasetReviewPanel({
         return payload as QualityResponse;
       })
       .then((payload) => {
+        if (qualityRequestIdRef.current !== requestId) return;
         qualityCache.set(encodedPath, payload);
         setQuality(payload);
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === "AbortError")
           return;
+        if (qualityRequestIdRef.current !== requestId) return;
         setQualityError(error instanceof Error ? error.message : String(error));
       })
-      .finally(() => setQualityLoading(false));
+      .finally(() => {
+        if (qualityRequestIdRef.current === requestId) setQualityLoading(false);
+      });
 
     return () => controller.abort();
   }, [encodedPath, refreshToken]);
@@ -340,6 +352,28 @@ export default function DatasetReviewPanel({
           />
         </div>
 
+        {episodeLengthStatsError && (
+          <div className="mt-5 rounded-lg border border-red-400/30 bg-red-400/5 p-4 text-sm text-red-200">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="font-medium text-red-100">
+                  Episode statistics could not be loaded
+                </p>
+                <p className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-red-200/85">
+                  {episodeLengthStatsError}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onRetryEpisodeStats}
+                className="shrink-0 rounded-md border border-red-300/30 px-3 py-1.5 text-xs text-red-100 transition-colors hover:border-red-200/70 hover:bg-red-300/10"
+              >
+                Retry statistics
+              </button>
+            </div>
+          </div>
+        )}
+
         {episodeLengthStatsLoading ? (
           <div className="mt-5 rounded-lg border border-white/10 bg-[var(--surface-0)]/40 p-4">
             <LoadingLine>Computing episode length distribution…</LoadingLine>
@@ -374,11 +408,11 @@ export default function DatasetReviewPanel({
               <EpisodeDurationGroups stats={episodeLengthStats} />
             </div>
           </div>
-        ) : (
+        ) : !episodeLengthStatsError ? (
           <div className="mt-5 rounded-lg border border-amber-400/20 bg-amber-400/5 p-4 text-xs text-amber-200/80">
             Episode duration metadata is unavailable for this dataset version.
           </div>
-        )}
+        ) : null}
       </section>
 
       <section className="rounded-xl border border-emerald-400/20 bg-[var(--surface-1)]/30 p-4 sm:p-5">

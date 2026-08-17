@@ -51,6 +51,7 @@ import {
 } from "@/utils/datasetRoute";
 import { type DatasetTags, EMPTY_TAGS } from "@/lib/dataset-tags";
 import DatasetTagsEditor from "@/components/dataset-tags-editor";
+import DatasetReviewErrorBoundary from "@/components/dataset-review-error-boundary";
 
 const URDFViewer = lazy(() => import("@/components/urdf-viewer"));
 const ActionInsightsPanel = lazy(
@@ -69,7 +70,13 @@ const DatasetReviewPanel = lazy(
 // videos start downloading in parallel with the chart bundle.
 const DataRecharts = lazy(() => import("@/components/data-recharts"));
 
-/** Skip every global shortcut while typing in a field. */
+function describeError(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  return fallback;
+}
+
+/** Skip global playback / navigation shortcuts while typing in a field. */
 function isKeyboardFocusInsideTextEntry(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable || target.closest('[contenteditable="true"]')) {
@@ -426,7 +433,9 @@ function EpisodeViewerInner({
   const [episodeLengthStats, setEpisodeLengthStats] =
     useState<EpisodeLengthStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState<string | null>(null);
   const statsLoadedRef = useRef(false);
+  const statsRequestIdRef = useRef(0);
   const [episodeFramesData, setEpisodeFramesData] =
     useState<EpisodeFramesData | null>(null);
   const [framesLoading, setFramesLoading] = useState(false);
@@ -456,9 +465,11 @@ function EpisodeViewerInner({
 
   useEffect(() => {
     statsLoadedRef.current = false;
+    statsRequestIdRef.current += 1;
     framesLoadedRef.current = false;
     insightsLoadedRef.current = false;
     setEpisodeLengthStats(null);
+    setStatsError(null);
     setEpisodeFramesData(null);
     setCrossEpData(null);
   }, [datasetInfo.repoId]);
@@ -486,8 +497,23 @@ function EpisodeViewerInner({
   const loadStats = () => {
     if (statsLoadedRef.current) return;
     statsLoadedRef.current = true;
+    const requestId = ++statsRequestIdRef.current;
     setStatsLoading(true);
-    setColumnMinMax(computeColumnMinMax(data.chartDataGroups));
+    setStatsError(null);
+
+    try {
+      setColumnMinMax(computeColumnMinMax(data.chartDataGroups));
+    } catch (error) {
+      if (mountedRef.current && statsRequestIdRef.current === requestId) {
+        statsLoadedRef.current = false;
+        setStatsError(
+          describeError(error, "Unable to prepare dataset statistics."),
+        );
+        setStatsLoading(false);
+      }
+      return;
+    }
+
     if (repoId) {
       getDatasetVersionAndInfo(repoId)
         .then(({ version, info }) => {
@@ -495,15 +521,26 @@ function EpisodeViewerInner({
           return loadAllEpisodeLengthsV3(repoId, version, info.fps);
         })
         .then((result) => {
-          if (!mountedRef.current) return;
+          if (!mountedRef.current || statsRequestIdRef.current !== requestId)
+            return;
           setEpisodeLengthStats(result);
         })
-        .catch(() => {})
+        .catch((error: unknown) => {
+          if (!mountedRef.current || statsRequestIdRef.current !== requestId)
+            return;
+          statsLoadedRef.current = false;
+          setStatsError(
+            describeError(error, "Unable to load episode duration metadata."),
+          );
+        })
         .finally(() => {
-          if (mountedRef.current) setStatsLoading(false);
+          if (mountedRef.current && statsRequestIdRef.current === requestId)
+            setStatsLoading(false);
         });
     } else {
-      setStatsLoading(false);
+      if (mountedRef.current && statsRequestIdRef.current === requestId) {
+        setStatsLoading(false);
+      }
     }
   };
 
@@ -1054,15 +1091,19 @@ function EpisodeViewerInner({
           )}
 
           {activeTab === "dataset-review" && (
-            <Suspense fallback={<Loading />}>
-              <DatasetReviewPanel
-                datasetInfo={datasetInfo}
-                episodeLengthStats={episodeLengthStats}
-                episodeLengthStatsLoading={statsLoading}
-                encodedPath={encodedDatasetPath}
-                datasetName={datasetDisplayName}
-              />
-            </Suspense>
+            <DatasetReviewErrorBoundary>
+              <Suspense fallback={<Loading />}>
+                <DatasetReviewPanel
+                  datasetInfo={datasetInfo}
+                  episodeLengthStats={episodeLengthStats}
+                  episodeLengthStatsLoading={statsLoading}
+                  episodeLengthStatsError={statsError}
+                  onRetryEpisodeStats={loadStats}
+                  encodedPath={encodedDatasetPath}
+                  datasetName={datasetDisplayName}
+                />
+              </Suspense>
+            </DatasetReviewErrorBoundary>
           )}
         </div>
       </div>
