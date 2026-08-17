@@ -61,6 +61,9 @@ const DoctorPanel = lazy(() => import("@/components/doctor-panel"));
 const ParquetTablePanel = lazy(
   () => import("@/components/parquet-table-panel"),
 );
+const DatasetReviewPanel = lazy(
+  () => import("@/components/dataset-review-panel"),
+);
 // Recharts is ~150KB gz and not above-the-fold (videos render first on the
 // Episodes tab). Lazy-load it so the initial chunk can ship faster and
 // videos start downloading in parallel with the chart bundle.
@@ -103,7 +106,8 @@ type ActiveTab =
   | "doctor"
   | "filtering"
   | "urdf"
-  | "parquet";
+  | "parquet"
+  | "dataset-review";
 
 // Subscribes to `currentTime` so its parent doesn't have to. Keeping this
 // in a leaf component means the throttled time ticks (~12.5/s during
@@ -394,6 +398,7 @@ function EpisodeViewerInner({
           "filtering",
           "urdf",
           "parquet",
+          "dataset-review",
         ].includes(stored)
       ) {
         return stored as ActiveTab;
@@ -554,6 +559,7 @@ function EpisodeViewerInner({
   useEffect(() => {
     if (activeTab === "statistics") loadStats();
     if (activeTab === "doctor") loadStats();
+    if (activeTab === "dataset-review") loadStats();
     if (activeTab === "frames") loadFrames();
     if (activeTab === "insights") loadInsights();
     if (activeTab === "filtering") {
@@ -567,6 +573,7 @@ function EpisodeViewerInner({
     setActiveTab(tab);
     if (tab === "statistics") loadStats();
     if (tab === "doctor") loadStats();
+    if (tab === "dataset-review") loadStats();
     if (tab === "frames") loadFrames();
     if (tab === "insights") loadInsights();
     if (tab === "filtering") {
@@ -752,7 +759,12 @@ function EpisodeViewerInner({
           t("viewer.tab.parquet"),
           t("viewer.tab.parquetTitle"),
         )}
-        <div className="ml-auto flex shrink-0 items-center gap-2 pr-3">
+        {renderTab(
+          "dataset-review",
+          "Dataset Review",
+          "Workbench-style dataset statistics and custom quality checks",
+        )}
+        <div className="ml-auto flex shrink-0 items-center gap-1 pr-2">
           <Link
             href="/"
             className="inline-flex items-center px-2 py-3 text-xs font-medium tracking-wide uppercase text-slate-400 transition-colors hover:text-slate-100"
@@ -1037,6 +1049,18 @@ function EpisodeViewerInner({
               <ParquetTablePanel
                 encodedPath={encodedDatasetPath}
                 episodeId={episodeId}
+              />
+            </Suspense>
+          )}
+
+          {activeTab === "dataset-review" && (
+            <Suspense fallback={<Loading />}>
+              <DatasetReviewPanel
+                datasetInfo={datasetInfo}
+                episodeLengthStats={episodeLengthStats}
+                episodeLengthStatsLoading={statsLoading}
+                encodedPath={encodedDatasetPath}
+                datasetName={datasetDisplayName}
               />
             </Suspense>
           )}

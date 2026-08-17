@@ -1666,27 +1666,39 @@ export async function loadAllEpisodeLengthsV3(
 ): Promise<EpisodeLengthStats | null> {
   try {
     const allEpisodes: { index: number; length: number }[] = [];
-    let fileIndex = 0;
-    const chunkIndex = 0;
-
+    // Episode metadata can span multiple chunk directories.  Keep walking
+    // file-000, file-001, … inside each chunk and then advance to the next
+    // chunk until its first file is missing.  The previous implementation
+    // hard-coded chunk-000, which silently omitted the tail of larger
+    // datasets from the Statistics and Doctor episode-length views.
+    let chunkIndex = 0;
     while (true) {
-      const path = `meta/episodes/chunk-${chunkIndex.toString().padStart(3, "0")}/file-${fileIndex.toString().padStart(3, "0")}.parquet`;
-      const url = buildVersionedUrl(repoId, version, path);
-      try {
-        const buf = await fetchParquetFile(url);
-        const rows = await readParquetAsObjects(buf, []);
-        if (rows.length === 0 && fileIndex > 0) break;
-        for (const row of rows) {
-          const parsed = parseEpisodeRowSimple(row);
-          allEpisodes.push({
-            index: parsed.episode_index,
-            length: parsed.length,
-          });
+      let fileIndex = 0;
+      let sawFileInChunk = false;
+
+      while (true) {
+        const path = `meta/episodes/chunk-${chunkIndex.toString().padStart(3, "0")}/file-${fileIndex.toString().padStart(3, "0")}.parquet`;
+        const url = buildVersionedUrl(repoId, version, path);
+        try {
+          const buf = await fetchParquetFile(url);
+          const rows = await readParquetAsObjects(buf, []);
+          if (rows.length === 0 && fileIndex > 0) break;
+          sawFileInChunk = true;
+          for (const row of rows) {
+            const parsed = parseEpisodeRowSimple(row);
+            allEpisodes.push({
+              index: parsed.episode_index,
+              length: parsed.length,
+            });
+          }
+          fileIndex++;
+        } catch {
+          break;
         }
-        fileIndex++;
-      } catch {
-        break;
       }
+
+      if (!sawFileInChunk) break;
+      chunkIndex++;
     }
 
     if (allEpisodes.length === 0) return null;
