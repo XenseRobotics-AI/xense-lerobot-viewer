@@ -6,6 +6,7 @@ import type {
   EpisodeLengthStats,
 } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import { EpisodeLengthHistogram } from "@/components/stats-panel";
+import WorkbenchGroupingPanel from "@/components/workbench-grouping-panel";
 import { assignEpisodesToBins } from "@/utils/episodeLengthHistogram";
 
 type QualityCheckResult = {
@@ -203,6 +204,9 @@ export default function DatasetReviewPanel({
   const [qualityError, setQualityError] = useState<string | null>(null);
   const [qualityLoading, setQualityLoading] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
+  const [workbenchView, setWorkbenchView] = useState<"statistics" | "grouping">(
+    "statistics",
+  );
   const qualityRequestIdRef = useRef(0);
 
   useEffect(() => {
@@ -275,7 +279,7 @@ export default function DatasetReviewPanel({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[10px] uppercase tracking-[0.18em] text-cyan-300">
-            Dataset Review
+            Workbench
           </p>
           <h2
             className="mt-1 truncate text-xl font-semibold text-slate-100"
@@ -299,199 +303,233 @@ export default function DatasetReviewPanel({
         )}
       </div>
 
-      <section className="rounded-xl border border-cyan-400/20 bg-[var(--surface-1)]/30 p-4 sm:p-5">
-        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-          <div>
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-cyan-200">
-              Dataset Statistics
-            </h3>
-            <p className="mt-1 text-xs text-slate-500">
-              Summary derived from meta/info.json and episode metadata.
-            </p>
-          </div>
-          {episodeLengthStatsLoading && (
-            <span className="text-xs text-slate-500">
-              Loading episode metadata…
-            </span>
-          )}
-        </div>
+      <div className="flex flex-wrap gap-1 border-b border-white/10 pb-1">
+        {(
+          [
+            ["statistics", "Dataset checks"],
+            ["grouping", "Grouped statistics"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setWorkbenchView(value)}
+            className={`rounded-md px-3 py-1.5 text-xs transition-colors ${
+              workbenchView === value
+                ? "bg-cyan-400/15 text-cyan-200"
+                : "text-slate-500 hover:bg-white/5 hover:text-slate-200"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Card
-            label="Total Episodes"
-            value={datasetInfo.total_episodes.toLocaleString()}
-          />
-          <Card
-            label="Total Frames"
-            value={datasetInfo.total_frames.toLocaleString()}
-          />
-          <Card
-            label="Recording Time"
-            value={formatHours(datasetInfo.total_frames, datasetInfo.fps)}
-          />
-          <Card
-            label="Average Episode"
-            value={
-              episodeLengthStats
-                ? `${episodeLengthStats.meanEpisodeLength.toFixed(2)}s`
-                : "—"
-            }
-          />
-          <Card
-            label="Dataset Size"
-            value={formatSize(datasetInfo.dataset_size_mb)}
-          />
-          <Card label="FPS" value={datasetInfo.fps || "—"} />
-          <Card
-            label="Tasks"
-            value={datasetInfo.total_tasks.toLocaleString()}
-          />
-          <Card
-            label="Robot Type"
-            value={datasetInfo.robot_type ?? "unknown"}
-          />
-        </div>
-
-        {episodeLengthStatsError && (
-          <div className="mt-5 rounded-lg border border-red-400/30 bg-red-400/5 p-4 text-sm text-red-200">
-            <div className="flex flex-wrap items-start justify-between gap-3">
+      {workbenchView === "grouping" ? (
+        <WorkbenchGroupingPanel />
+      ) : (
+        <>
+          <section className="rounded-xl border border-cyan-400/20 bg-[var(--surface-1)]/30 p-4 sm:p-5">
+            <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
               <div>
-                <p className="font-medium text-red-100">
-                  Episode statistics could not be loaded
-                </p>
-                <p className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-red-200/85">
-                  {episodeLengthStatsError}
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-cyan-200">
+                  Dataset Statistics
+                </h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Summary derived from meta/info.json and episode metadata.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={onRetryEpisodeStats}
-                className="shrink-0 rounded-md border border-red-300/30 px-3 py-1.5 text-xs text-red-100 transition-colors hover:border-red-200/70 hover:bg-red-300/10"
-              >
-                Retry statistics
-              </button>
-            </div>
-          </div>
-        )}
-
-        {episodeLengthStatsLoading ? (
-          <div className="mt-5 rounded-lg border border-white/10 bg-[var(--surface-0)]/40 p-4">
-            <LoadingLine>Computing episode length distribution…</LoadingLine>
-          </div>
-        ) : episodeLengthStats ? (
-          <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.9fr)]">
-            <div className="rounded-lg border border-white/10 bg-[var(--surface-0)]/40 p-4">
-              <div className="mb-3 flex items-baseline justify-between gap-2">
-                <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
-                  Episode Length Distribution
-                </h4>
-                <span className="text-[10px] text-slate-500">
-                  {episodeLengthStats.allEpisodeLengths.length.toLocaleString()}{" "}
-                  episodes
+              {episodeLengthStatsLoading && (
+                <span className="text-xs text-slate-500">
+                  Loading episode metadata…
                 </span>
-              </div>
-              <EpisodeLengthHistogram
-                data={episodeLengthStats.episodeLengthHistogram}
-                episodes={episodeLengthStats.allEpisodeLengths}
-                binning={episodeLengthStats.episodeLengthHistogramBinning}
+              )}
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Card
+                label="Total Episodes"
+                value={datasetInfo.total_episodes.toLocaleString()}
+              />
+              <Card
+                label="Total Frames"
+                value={datasetInfo.total_frames.toLocaleString()}
+              />
+              <Card
+                label="Recording Time"
+                value={formatHours(datasetInfo.total_frames, datasetInfo.fps)}
+              />
+              <Card
+                label="Average Episode"
+                value={
+                  episodeLengthStats
+                    ? `${episodeLengthStats.meanEpisodeLength.toFixed(2)}s`
+                    : "—"
+                }
+              />
+              <Card
+                label="Dataset Size"
+                value={formatSize(datasetInfo.dataset_size_mb)}
+              />
+              <Card label="FPS" value={datasetInfo.fps || "—"} />
+              <Card
+                label="Tasks"
+                value={datasetInfo.total_tasks.toLocaleString()}
+              />
+              <Card
+                label="Robot Type"
+                value={datasetInfo.robot_type ?? "unknown"}
               />
             </div>
-            <div className="rounded-lg border border-white/10 bg-[var(--surface-0)]/40 p-4">
-              <div className="mb-3 flex items-baseline justify-between gap-2">
-                <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
-                  Episode Details
-                </h4>
-                <span className="text-[10px] text-slate-500">
-                  expand a duration range
-                </span>
-              </div>
-              <EpisodeDurationGroups stats={episodeLengthStats} />
-            </div>
-          </div>
-        ) : !episodeLengthStatsError ? (
-          <div className="mt-5 rounded-lg border border-amber-400/20 bg-amber-400/5 p-4 text-xs text-amber-200/80">
-            Episode duration metadata is unavailable for this dataset version.
-          </div>
-        ) : null}
-      </section>
 
-      <section className="rounded-xl border border-emerald-400/20 bg-[var(--surface-1)]/30 p-4 sm:p-5">
-        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
-          <div>
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-emerald-200">
-              Custom Checks
-            </h3>
-            <p className="mt-1 text-xs text-slate-500">
-              Workbench rules only: name format, average duration, and prompt
-              quality. PICO MoTracker is intentionally excluded.
-            </p>
-          </div>
-          {checkSummary && (
-            <span className="text-xs text-slate-400">{checkSummary}</span>
-          )}
-        </div>
-
-        {qualityLoading ? (
-          <LoadingLine>Loading task metadata and custom checks…</LoadingLine>
-        ) : qualityError ? (
-          <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 p-4 text-sm text-amber-200">
-            {qualityError}
-          </div>
-        ) : quality ? (
-          <div className="space-y-3">
-            <div className="flex flex-wrap gap-2 text-[10px] text-slate-500">
-              <span className="rounded border border-white/10 px-2 py-1">
-                {quality.tasks.length.toLocaleString()} task prompts loaded
-              </span>
-              {quality.config?.avg_duration && (
-                <span className="rounded border border-white/10 px-2 py-1">
-                  Average duration target: {quality.config.avg_duration.min_sec}
-                  –{quality.config.avg_duration.max_sec}s
-                </span>
-              )}
-              {quality.config?.prompt && (
-                <span className="rounded border border-white/10 px-2 py-1">
-                  Prompt target: {quality.config.prompt.min_words}–
-                  {quality.config.prompt.max_words} words
-                </span>
-              )}
-            </div>
-            {quality.checks.map((check) => (
-              <div
-                key={check.id}
-                className="rounded-lg border border-white/10 bg-[var(--surface-0)]/40 p-3"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-slate-200">
-                      {check.title}
+            {episodeLengthStatsError && (
+              <div className="mt-5 rounded-lg border border-red-400/30 bg-red-400/5 p-4 text-sm text-red-200">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-medium text-red-100">
+                      Episode statistics could not be loaded
                     </p>
-                    <p className="mt-1 text-xs text-slate-400">
-                      {check.message}
+                    <p className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-red-200/85">
+                      {episodeLengthStatsError}
                     </p>
                   </div>
-                  <StatusBadge status={check.status} />
+                  <button
+                    type="button"
+                    onClick={onRetryEpisodeStats}
+                    className="shrink-0 rounded-md border border-red-300/30 px-3 py-1.5 text-xs text-red-100 transition-colors hover:border-red-200/70 hover:bg-red-300/10"
+                  >
+                    Retry statistics
+                  </button>
                 </div>
-                {check.details && check.details.length > 0 && (
-                  <details className="mt-2 text-xs text-slate-500">
-                    <summary className="cursor-pointer select-none hover:text-slate-300">
-                      {check.details.length} detail
-                      {check.details.length === 1 ? "" : "s"}
-                    </summary>
-                    <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto border-l border-white/10 pl-3">
-                      {check.details.map((detail, index) => (
-                        <li key={`${check.id}-${index}`}>{detail}</li>
-                      ))}
-                    </ul>
-                  </details>
-                )}
               </div>
-            ))}
-          </div>
-        ) : (
-          <LoadingLine>Custom checks have not run yet.</LoadingLine>
-        )}
-      </section>
+            )}
+
+            {episodeLengthStatsLoading ? (
+              <div className="mt-5 rounded-lg border border-white/10 bg-[var(--surface-0)]/40 p-4">
+                <LoadingLine>
+                  Computing episode length distribution…
+                </LoadingLine>
+              </div>
+            ) : episodeLengthStats ? (
+              <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.9fr)]">
+                <div className="rounded-lg border border-white/10 bg-[var(--surface-0)]/40 p-4">
+                  <div className="mb-3 flex items-baseline justify-between gap-2">
+                    <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
+                      Episode Length Distribution
+                    </h4>
+                    <span className="text-[10px] text-slate-500">
+                      {episodeLengthStats.allEpisodeLengths.length.toLocaleString()}{" "}
+                      episodes
+                    </span>
+                  </div>
+                  <EpisodeLengthHistogram
+                    data={episodeLengthStats.episodeLengthHistogram}
+                    episodes={episodeLengthStats.allEpisodeLengths}
+                    binning={episodeLengthStats.episodeLengthHistogramBinning}
+                  />
+                </div>
+                <div className="rounded-lg border border-white/10 bg-[var(--surface-0)]/40 p-4">
+                  <div className="mb-3 flex items-baseline justify-between gap-2">
+                    <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
+                      Episode Details
+                    </h4>
+                    <span className="text-[10px] text-slate-500">
+                      expand a duration range
+                    </span>
+                  </div>
+                  <EpisodeDurationGroups stats={episodeLengthStats} />
+                </div>
+              </div>
+            ) : !episodeLengthStatsError ? (
+              <div className="mt-5 rounded-lg border border-amber-400/20 bg-amber-400/5 p-4 text-xs text-amber-200/80">
+                Episode duration metadata is unavailable for this dataset
+                version.
+              </div>
+            ) : null}
+          </section>
+
+          <section className="rounded-xl border border-emerald-400/20 bg-[var(--surface-1)]/30 p-4 sm:p-5">
+            <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-emerald-200">
+                  Custom Checks
+                </h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Workbench rules only: name format, average duration, and
+                  prompt quality. PICO MoTracker is intentionally excluded.
+                </p>
+              </div>
+              {checkSummary && (
+                <span className="text-xs text-slate-400">{checkSummary}</span>
+              )}
+            </div>
+
+            {qualityLoading ? (
+              <LoadingLine>
+                Loading task metadata and custom checks…
+              </LoadingLine>
+            ) : qualityError ? (
+              <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 p-4 text-sm text-amber-200">
+                {qualityError}
+              </div>
+            ) : quality ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-2 text-[10px] text-slate-500">
+                  <span className="rounded border border-white/10 px-2 py-1">
+                    {quality.tasks.length.toLocaleString()} task prompts loaded
+                  </span>
+                  {quality.config?.avg_duration && (
+                    <span className="rounded border border-white/10 px-2 py-1">
+                      Average duration target:{" "}
+                      {quality.config.avg_duration.min_sec}–
+                      {quality.config.avg_duration.max_sec}s
+                    </span>
+                  )}
+                  {quality.config?.prompt && (
+                    <span className="rounded border border-white/10 px-2 py-1">
+                      Prompt target: {quality.config.prompt.min_words}–
+                      {quality.config.prompt.max_words} words
+                    </span>
+                  )}
+                </div>
+                {quality.checks.map((check) => (
+                  <div
+                    key={check.id}
+                    className="rounded-lg border border-white/10 bg-[var(--surface-0)]/40 p-3"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-slate-200">
+                          {check.title}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-400">
+                          {check.message}
+                        </p>
+                      </div>
+                      <StatusBadge status={check.status} />
+                    </div>
+                    {check.details && check.details.length > 0 && (
+                      <details className="mt-2 text-xs text-slate-500">
+                        <summary className="cursor-pointer select-none hover:text-slate-300">
+                          {check.details.length} detail
+                          {check.details.length === 1 ? "" : "s"}
+                        </summary>
+                        <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto border-l border-white/10 pl-3">
+                          {check.details.map((detail, index) => (
+                            <li key={`${check.id}-${index}`}>{detail}</li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <LoadingLine>Custom checks have not run yet.</LoadingLine>
+            )}
+          </section>
+        </>
+      )}
     </div>
   );
 }

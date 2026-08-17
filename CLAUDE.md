@@ -4,10 +4,11 @@
 
 A **local-only** LeRobot dataset visualizer (forked from huggingface/lerobot PR #1055 / @Mishig25). The Hugging Face Hub remote-loading path has been removed: every dataset is read directly from the filesystem via `/api/local-datasets/[encodedPath]/[...filePath]`. Standard robot URDF/mesh assets for the 3D replay are fetched from the public HF bucket `lerobot/robot-urdfs`; TacCap data-collection gripper assets are bundled under `public/urdf/taccap-grippers`.
 
-**Two deliberate exceptions to "local-only"**, both added for the homepage dashboard — do not let either leak into the browse path:
+**Three deliberate exceptions to "local-only"**, all isolated to explicit homepage actions or dashboard history — do not let them leak into the browse path:
 
-1. **Manual HF sync.** The homepage's per-source Sync button downloads datasets from the Hub via `POST /api/local-datasets/sync` → `scripts/sync_hf_dataset.py`. It runs **only** on an explicit click, always lists before transferring, and is the single outbound data path. Rendering, parsing and playback never touch the network.
-2. **A written history file.** The homepage records a daily snapshot to `<LOCAL_DATASET_ROOT>/.xense-viewer/corpus-history.json` so it can show growth. Writes are atomic and failure-tolerant; a read-only root just means no "since last snapshot" figures.
+1. **Manual HF account/catalog checks.** The homepage Workbench controls contact the Hub only after the user presses account check/login or refresh statistics. `GET /api/hf/account` and cached catalog reads stay local. Tokens are stored server-side below `<LOCAL_DATASET_ROOT>/.xense-viewer/secrets/`, never in browser storage or command arguments.
+2. **Manual HF sync.** The homepage's Sync controls download datasets from the Hub via `POST /api/local-datasets/sync` → `scripts/sync_hf_dataset.py`. They run **only** on an explicit click and always list before transferring. Rendering, parsing and playback never touch the network.
+3. **A written history file.** The homepage records a daily snapshot to `<LOCAL_DATASET_ROOT>/.xense-viewer/corpus-history.json` so it can show growth. Writes are atomic and failure-tolerant; a read-only root just means no "since last snapshot" figures.
 
 ## Package manager
 

@@ -114,7 +114,7 @@ type ActiveTab =
   | "filtering"
   | "urdf"
   | "parquet"
-  | "dataset-review";
+  | "workbench";
 
 // Subscribes to `currentTime` so its parent doesn't have to. Keeping this
 // in a leaf component means the throttled time ticks (~12.5/s during
@@ -405,10 +405,14 @@ function EpisodeViewerInner({
           "filtering",
           "urdf",
           "parquet",
+          "workbench",
           "dataset-review",
         ].includes(stored)
       ) {
-        return stored as ActiveTab;
+        // Keep links/session state created by the pre-Workbench build usable.
+        return (
+          stored === "dataset-review" ? "workbench" : stored
+        ) as ActiveTab;
       }
     }
     return "episodes";
@@ -596,7 +600,7 @@ function EpisodeViewerInner({
   useEffect(() => {
     if (activeTab === "statistics") loadStats();
     if (activeTab === "doctor") loadStats();
-    if (activeTab === "dataset-review") loadStats();
+    if (activeTab === "workbench") loadStats();
     if (activeTab === "frames") loadFrames();
     if (activeTab === "insights") loadInsights();
     if (activeTab === "filtering") {
@@ -610,7 +614,7 @@ function EpisodeViewerInner({
     setActiveTab(tab);
     if (tab === "statistics") loadStats();
     if (tab === "doctor") loadStats();
-    if (tab === "dataset-review") loadStats();
+    if (tab === "workbench") loadStats();
     if (tab === "frames") loadFrames();
     if (tab === "insights") loadInsights();
     if (tab === "filtering") {
@@ -797,8 +801,8 @@ function EpisodeViewerInner({
           t("viewer.tab.parquetTitle"),
         )}
         {renderTab(
-          "dataset-review",
-          "Dataset Review",
+          "workbench",
+          "Workbench",
           "Workbench-style dataset statistics and custom quality checks",
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1 pr-2">
@@ -1090,7 +1094,7 @@ function EpisodeViewerInner({
             </Suspense>
           )}
 
-          {activeTab === "dataset-review" && (
+          {activeTab === "workbench" && (
             <DatasetReviewErrorBoundary>
               <Suspense fallback={<Loading />}>
                 <DatasetReviewPanel

@@ -59,11 +59,12 @@ export type SyncResult = {
 export async function listSyncCandidates(
   source: string,
   signal?: AbortSignal,
+  repoIds?: string[],
 ): Promise<SyncListing> {
   const response = await fetch(SYNC_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source }),
+    body: JSON.stringify({ source, ...(repoIds ? { repoIds } : {}) }),
     signal,
   });
   const payload = await response.json().catch(() => null);
@@ -84,13 +85,18 @@ export async function listSyncCandidates(
 export async function runSync(
   source: string,
   onProgress: (progress: SyncProgress) => void,
-  options: { signal?: AbortSignal; force?: boolean } = {},
+  options: { signal?: AbortSignal; force?: boolean; repoIds?: string[] } = {},
 ): Promise<SyncResult> {
-  const { signal, force = false } = options;
+  const { signal, force = false, repoIds } = options;
   const response = await fetch(SYNC_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source, confirm: true, force }),
+    body: JSON.stringify({
+      source,
+      confirm: true,
+      force,
+      ...(repoIds ? { repoIds } : {}),
+    }),
     signal,
   });
 

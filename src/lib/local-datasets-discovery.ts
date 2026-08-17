@@ -34,6 +34,7 @@ type LocalDatasetInfoJson = {
   robot_type?: string | null;
   total_episodes?: number;
   total_frames?: number;
+  total_tasks?: number;
   fps?: number;
   chunks_size?: number;
   data_path?: string;
@@ -48,6 +49,7 @@ export type LocalDatasetSummary = {
   robot_type: string | null;
   total_episodes: number;
   total_frames: number;
+  total_tasks?: number;
   fps: number;
   /** Bytes on disk for the whole dataset directory. See `directorySizeBytes`. */
   sizeBytes: number;
@@ -223,6 +225,7 @@ async function walkForDatasets(
         robot_type: info.robot_type ?? null,
         total_episodes: info.total_episodes ?? 0,
         total_frames: info.total_frames ?? 0,
+        total_tasks: info.total_tasks ?? 0,
         fps: info.fps ?? 0,
         sizeBytes,
         thumbnailVideoUrl,

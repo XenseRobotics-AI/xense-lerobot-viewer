@@ -8,6 +8,13 @@ import {
   resolvePython,
   type ResolvedPython,
 } from "@/lib/python-runtime";
+import { resolveHfToken } from "@/lib/hf-token-store";
+import { redactHfSecrets } from "@/lib/hf-identity";
+import { isSameOriginRequest } from "@/lib/request-security";
+import {
+  MAX_HF_REPOS_PER_REQUEST,
+  normalizeHfSource,
+} from "@/utils/hfValidation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,10 +42,20 @@ export const dynamic = "force-dynamic";
 
 /** Org names become a path segment under the dataset root, so anything that
  *  could climb out of it is rejected outright. */
-const SOURCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
 const HF_MIRROR = "https://hf-mirror.com";
 const LIST_TIMEOUT_MS = 120_000;
+const DOWNLOAD_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+const MAX_ERROR_LENGTH = 4_000;
+
+function redactSyncMessage(message: string, token: string | null): string {
+  const redacted = redactHfSecrets(message, [
+    token ?? "",
+    process.env.HF_TOKEN ?? "",
+  ]);
+  return redacted.length > MAX_ERROR_LENGTH
+    ? `${redacted.slice(0, MAX_ERROR_LENGTH)}…`
+    : redacted;
+}
 
 /** One sync at a time, process-wide: concurrent runs would write the same files. */
 let activeSync: { source: string; startedAt: number } | null = null;
@@ -56,6 +73,13 @@ type SyncResult = {
   listOnly: boolean;
 };
 
+type SyncRequestBody = {
+  source?: unknown;
+  confirm?: unknown;
+  force?: unknown;
+  repoIds?: unknown;
+};
+
 function scriptPath(): string {
   return path.join(process.cwd(), "scripts", "sync_hf_dataset.py");
 }
@@ -63,15 +87,21 @@ function scriptPath(): string {
 function spawnScript(
   pythonBin: string,
   args: string[],
+  token?: string | null,
 ): ChildProcessWithoutNullStreams {
+  const env = {
+    ...pythonSpawnEnv(),
+    // Belt and braces: the script also defaults this, but setting it here
+    // means the mirror holds even if the script is run through a wrapper.
+    HF_ENDPOINT: process.env.HF_ENDPOINT || HF_MIRROR,
+  } as NodeJS.ProcessEnv;
+  // A viewer-owned token takes precedence over an environment/cache token.
+  // It is passed only through the child environment, never command arguments
+  // or an NDJSON event.
+  if (token) env.HF_TOKEN = token;
   return spawn(pythonBin, [scriptPath(), ...args], {
     cwd: process.cwd(),
-    env: {
-      ...pythonSpawnEnv(),
-      // Belt and braces: the script also defaults this, but setting it here
-      // means the mirror holds even if the script is run through a wrapper.
-      HF_ENDPOINT: process.env.HF_ENDPOINT || HF_MIRROR,
-    },
+    env,
   });
 }
 
@@ -88,6 +118,7 @@ function syncPython(): Promise<ResolvedPython> {
 async function runToCompletion(
   args: string[],
   timeoutMs: number,
+  token?: string | null,
 ): Promise<{ result: SyncResult | null; error: string | null }> {
   let python: ResolvedPython;
   try {
@@ -98,16 +129,22 @@ async function runToCompletion(
       error:
         err instanceof PythonUnavailableError
           ? err.message
-          : `Failed to launch Python: ${err}`,
+          : redactSyncMessage(`Failed to launch Python: ${err}`, token ?? null),
     };
   }
 
   return new Promise((resolve) => {
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = spawnScript(python.bin, args);
+      child = spawnScript(python.bin, args, token);
     } catch (err) {
-      resolve({ result: null, error: `Failed to launch Python: ${err}` });
+      resolve({
+        result: null,
+        error: redactSyncMessage(
+          `Failed to launch Python: ${err}`,
+          token ?? null,
+        ),
+      });
       return;
     }
 
@@ -134,7 +171,10 @@ async function runToCompletion(
     child.on("error", (err) =>
       finish({
         result: null,
-        error: `Failed to launch ${python.bin}: ${err.message}. Is Python installed?`,
+        error: redactSyncMessage(
+          `Failed to launch ${python.bin}: ${err.message}. Is Python installed?`,
+          token ?? null,
+        ),
       }),
     );
     child.on("close", () => {
@@ -152,9 +192,14 @@ async function runToCompletion(
       }
       finish({
         result,
-        error:
-          error ??
-          (result ? null : stderr.trim().split(/\r?\n/).pop() || "Sync failed"),
+        error: error
+          ? redactSyncMessage(error, token ?? null)
+          : result
+            ? null
+            : redactSyncMessage(
+                stderr.trim().split(/\r?\n/).pop() || "Sync failed",
+                token ?? null,
+              ),
       });
     });
   });
@@ -166,16 +211,25 @@ function streamDownload(
   root: string,
   force: boolean,
   pythonBin: string,
+  repoIds: string[],
+  token?: string | null,
 ): Response {
   const encoder = new TextEncoder();
+  let activeChild: ChildProcessWithoutNullStreams | null = null;
+  let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
   return new Response(
     new ReadableStream<Uint8Array>({
       start(controller) {
         let closed = false;
+        let idleTimer: ReturnType<typeof setTimeout> | null = null;
+        const secretValues = [token ?? "", process.env.HF_TOKEN ?? ""];
         const send = (obj: unknown) => {
           if (closed) return;
           try {
-            controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+            const serialized = JSON.stringify(obj);
+            controller.enqueue(
+              encoder.encode(`${redactHfSecrets(serialized, secretValues)}\n`),
+            );
           } catch {
             closed = true;
           }
@@ -183,6 +237,8 @@ function streamDownload(
         const close = () => {
           if (closed) return;
           closed = true;
+          if (idleTimer) clearTimeout(idleTimer);
+          if (forceKillTimer) clearTimeout(forceKillTimer);
           try {
             controller.close();
           } catch {
@@ -190,37 +246,71 @@ function streamDownload(
           }
         };
 
-        let child: ChildProcessWithoutNullStreams;
         try {
           const args = ["--org", source, "--root", root];
+          for (const repoId of repoIds) args.push("--repo", repoId);
           if (force) args.push("--force");
-          child = spawnScript(pythonBin, args);
+          activeChild = spawnScript(pythonBin, args, token);
         } catch (err) {
-          send({ type: "error", error: `Failed to launch Python: ${err}` });
+          send({
+            type: "error",
+            error: redactSyncMessage(
+              `Failed to launch Python: ${err}`,
+              token ?? null,
+            ),
+          });
           activeSync = null;
           close();
           return;
         }
 
+        const child = activeChild;
+        if (!child) {
+          send({ type: "error", error: "Sync process was not created." });
+          activeSync = null;
+          close();
+          return;
+        }
+
+        let sentError = false;
+        const armIdleTimeout = () => {
+          if (idleTimer) clearTimeout(idleTimer);
+          idleTimer = setTimeout(() => {
+            if (closed) return;
+            send({
+              type: "error",
+              error: `下载进程超过 ${DOWNLOAD_IDLE_TIMEOUT_MS / 60_000} 分钟没有进展，已终止。`,
+            });
+            sentError = true;
+            if (!child.killed) child.kill("SIGTERM");
+            forceKillTimer = setTimeout(() => {
+              if (!child.killed) child.kill("SIGKILL");
+            }, 5_000);
+          }, DOWNLOAD_IDLE_TIMEOUT_MS);
+        };
+        armIdleTimeout();
+
         // The script reports its own failures as an error event and then exits
         // non-zero. Track that, or the generic exit-code message below would
         // land second and overwrite the diagnosis the user actually needs.
-        let sentError = false;
-
         // The script emits one JSON object per line; hold a buffer because a
         // chunk boundary can land mid-line.
         let buffer = "";
         const forward = (line: string) => {
           if (!line.trim()) return;
           try {
-            const event = JSON.parse(line);
+            const event = JSON.parse(line) as Record<string, unknown>;
             if (event?.type === "error") sentError = true;
+            if (typeof event.error === "string") {
+              event.error = redactSyncMessage(event.error, token ?? null);
+            }
             send(event);
           } catch {
             /* ignore an unparseable line rather than killing the stream */
           }
         };
         child.stdout.on("data", (chunk) => {
+          armIdleTimeout();
           buffer += chunk.toString();
           const lines = buffer.split(/\r?\n/);
           buffer = lines.pop() ?? "";
@@ -228,10 +318,19 @@ function streamDownload(
         });
 
         let stderr = "";
-        child.stderr.on("data", (d) => (stderr += d.toString()));
+        child.stderr.on("data", (d) => {
+          armIdleTimeout();
+          stderr += d.toString();
+        });
 
         child.on("error", (err) => {
-          send({ type: "error", error: `Python failed: ${err.message}` });
+          send({
+            type: "error",
+            error: redactSyncMessage(
+              `Python failed: ${err.message}`,
+              token ?? null,
+            ),
+          });
           activeSync = null;
           close();
         });
@@ -243,19 +342,28 @@ function streamDownload(
           if (code !== 0 && !sentError) {
             send({
               type: "error",
-              error:
+              error: redactSyncMessage(
                 stderr.trim().split(/\r?\n/).pop() ||
-                `Sync exited with code ${code} and no output.`,
+                  `Sync exited with code ${code} and no output.`,
+                token ?? null,
+              ),
             });
           }
+          activeChild = null;
           activeSync = null;
           close();
         });
       },
       cancel() {
-        // Client navigated away; the child keeps running to completion so a
-        // half-written dataset directory isn't left behind.
-        activeSync = null;
+        // A disconnected browser no longer has a way to show progress. Stop
+        // the child instead of leaving an unbounded process holding the global
+        // sync lock; snapshot_download can resume the partial files later.
+        if (activeChild && !activeChild.killed) {
+          activeChild.kill("SIGTERM");
+          forceKillTimer = setTimeout(() => {
+            if (activeChild && !activeChild.killed) activeChild.kill("SIGKILL");
+          }, 5_000);
+        }
       },
     }),
     {
@@ -268,17 +376,38 @@ function streamDownload(
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  let body: { source?: unknown; confirm?: unknown; force?: unknown };
+  if (!isSameOriginRequest(request)) {
+    return Response.json(
+      {
+        error: "Cross-origin sync requests are not allowed.",
+        code: "ORIGIN_REJECTED",
+      },
+      { status: 403 },
+    );
+  }
+
+  let body: SyncRequestBody;
   try {
     body = await request.json();
   } catch {
     return Response.json({ error: "Expected a JSON body." }, { status: 400 });
   }
 
-  const source = typeof body.source === "string" ? body.source.trim() : "";
-  if (!source || !SOURCE_PATTERN.test(source)) {
+  const source = normalizeHfSource(body.source);
+  if (!source) {
     return Response.json(
       { error: "`source` must be a plain Hugging Face org name." },
+      { status: 400 },
+    );
+  }
+
+  const repoIds = parseRepoIds(body.repoIds, source);
+  if (repoIds === null) {
+    return Response.json(
+      {
+        error:
+          "`repoIds` must contain only dataset ids belonging to the requested source.",
+      },
       { status: 400 },
     );
   }
@@ -297,15 +426,31 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
+  let token: string | null = null;
+  try {
+    token = (await resolveHfToken(root)).token;
+  } catch {
+    // Credential lookup is best-effort; huggingface_hub can still use an
+    // anonymous request when no token is available.
+  }
+
   // Listing pass — cheap, transfers nothing, and always runs first.
   if (body.confirm !== true) {
     const { result, error } = await runToCompletion(
-      ["--org", source, "--root", root, "--list-only"],
+      [
+        "--org",
+        source,
+        "--root",
+        root,
+        "--list-only",
+        ...repoIds.flatMap((repoId) => ["--repo", repoId]),
+      ],
       LIST_TIMEOUT_MS,
+      token,
     );
     if (!result) {
       return Response.json(
-        { error: error ?? "Listing failed" },
+        { error: redactSyncMessage(error ?? "Listing failed", token) },
         { status: 502 },
       );
     }
@@ -338,5 +483,35 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   activeSync = { source, startedAt: Date.now() };
-  return streamDownload(source, root, body.force === true, python.bin);
+  return streamDownload(
+    source,
+    root,
+    body.force === true,
+    python.bin,
+    repoIds,
+    token,
+  );
+}
+
+/** Validate selected repo ids before handing them to the Python process. */
+function parseRepoIds(value: unknown, source: string): string[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_HF_REPOS_PER_REQUEST) {
+    return null;
+  }
+  const repoPattern = new RegExp(
+    `^${escapeRegExp(source)}\\/[A-Za-z0-9][A-Za-z0-9._-]*$`,
+  );
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") return null;
+    const repo = item.trim();
+    if (!repoPattern.test(repo)) return null;
+    if (!out.includes(repo)) out.push(repo);
+  }
+  return out;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

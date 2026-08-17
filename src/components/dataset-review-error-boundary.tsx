@@ -11,7 +11,7 @@ type DatasetReviewErrorBoundaryState = {
 };
 
 /**
- * Keeps failures in the optional Dataset Review bundle local to that tab.
+ * Keeps failures in the optional Workbench bundle local to that tab.
  *
  * Fetch failures are rendered by DatasetReviewPanel itself. This boundary is
  * for failures that happen while loading the lazy chunk or rendering a
@@ -42,7 +42,7 @@ export default class DatasetReviewErrorBoundary extends Component<
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <p className="text-[10px] uppercase tracking-[0.18em] text-red-300">
-                Dataset Review error
+                Workbench error
               </p>
               <h2 className="mt-1 text-lg font-semibold text-red-100">
                 检查页加载失败
@@ -60,7 +60,7 @@ export default class DatasetReviewErrorBoundary extends Component<
             {this.state.error.message || String(this.state.error)}
           </p>
           <p className="mt-3 text-xs text-red-200/60">
-            该错误已限制在 Dataset Review 页签内，不会影响 Episodes、Doctor 或
+            该错误已限制在 Workbench 页签内，不会影响 Episodes、Doctor 或
             Parquet。
           </p>
         </section>
