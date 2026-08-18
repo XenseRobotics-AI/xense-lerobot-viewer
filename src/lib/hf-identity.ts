@@ -7,7 +7,12 @@ import {
   type ResolvedPython,
 } from "@/lib/python-runtime";
 
-export const HF_DEFAULT_ENDPOINT = "https://hf-mirror.com";
+/**
+ * Identity checks must use the official Hub. Download mirrors are useful for
+ * large files, but they are not an authentication authority and can reject or
+ * mishandle a perfectly valid access token.
+ */
+export const HF_DEFAULT_ENDPOINT = "https://huggingface.co";
 const IDENTITY_TIMEOUT_MS = 30_000;
 
 export type HfIdentityResult = {
@@ -64,17 +69,30 @@ export function parseHfIdentityOutput(stdout: string): HfIdentityResult | null {
   return parseJsonLines(stdout);
 }
 
+/** Child environment for an explicit identity check. Exported for regression
+ * tests so a submitted token can never silently fall back to inherited auth. */
+export function hfIdentityEnv(token: string | null): NodeJS.ProcessEnv {
+  const env = pythonSpawnEnv();
+  env.HF_ENDPOINT =
+    process.env.HF_IDENTITY_ENDPOINT?.trim() || HF_DEFAULT_ENDPOINT;
+  if (token) {
+    delete env.HF_TOKEN;
+    env.XENSE_HF_TOKEN = token;
+  }
+  return env;
+}
+
 function spawnIdentity(
   python: ResolvedPython,
   org: string,
   token: string | null,
   whoamiOnly: boolean,
 ): ChildProcessWithoutNullStreams {
-  const env = pythonSpawnEnv();
-  env.HF_ENDPOINT = process.env.HF_ENDPOINT?.trim() || HF_DEFAULT_ENDPOINT;
-  // Do not put secrets in argv. When token is null, leave HF_TOKEN untouched so
-  // huggingface_hub can use the normal CLI cache or an inherited environment.
-  if (token) env.HF_TOKEN = token;
+  const env = hfIdentityEnv(token);
+  // Do not put secrets in argv. When a resolved token is supplied, remove the
+  // inherited variable and pass the value through a Viewer-specific name. This
+  // avoids huggingface_hub's misleading “HF_TOKEN environment variable is
+  // invalid” suffix when the official endpoint rejects a submitted token.
   const args = [scriptPath(), "--org", org];
   if (whoamiOnly) args.push("--whoami-only");
   return spawn(python.bin, args, {

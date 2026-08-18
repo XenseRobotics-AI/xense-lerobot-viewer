@@ -6,7 +6,7 @@ A **local-only** LeRobot dataset visualizer (forked from huggingface/lerobot PR 
 
 **Three deliberate exceptions to "local-only"**, all isolated to explicit homepage actions or dashboard history — do not let them leak into the browse path:
 
-1. **Manual HF account/catalog checks.** The homepage Workbench controls contact the Hub only after the user presses account check/login or refresh statistics. `GET /api/hf/account` and cached catalog reads stay local. Tokens are stored server-side below `<LOCAL_DATASET_ROOT>/.xense-viewer/secrets/`, never in browser storage or command arguments.
+1. **Manual HF account/catalog checks.** The homepage account controls contact the official Hub only after an explicit account check/login or statistics refresh. Tokens are stored server-side below `<LOCAL_DATASET_ROOT>/.xense-viewer/secrets/`, never in browser storage or command arguments. Keep identity/catalog traffic on the official API (`HF_IDENTITY_ENDPOINT` / `HF_CATALOG_ENDPOINT`); a download mirror is not the token issuer. Dataset transfer itself stays in the native Source panel.
 2. **Manual HF sync.** The homepage's Sync controls download datasets from the Hub via `POST /api/local-datasets/sync` → `scripts/sync_hf_dataset.py`. They run **only** on an explicit click and always list before transferring. Rendering, parsing and playback never touch the network.
 3. **A written history file.** The homepage records a daily snapshot to `<LOCAL_DATASET_ROOT>/.xense-viewer/corpus-history.json` so it can show growth. Writes are atomic and failure-tolerant; a read-only root just means no "since last snapshot" figures.
 

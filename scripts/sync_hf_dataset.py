@@ -25,7 +25,7 @@ overrides that and re-fetches everything.
 
 Usage:
     sync_hf_dataset.py --org TacVerse --root /path/to/lerobot [--list-only]
-                       [--limit N] [--repo A --repo B] [--force]
+                       [--limit N] [--force]
 """
 
 from __future__ import annotations
@@ -102,20 +102,6 @@ def list_org_repos(org: str, limit: int | None) -> list[tuple[str, str | None]]:
         for d in list_datasets(author=org, sort="lastModified", expand=["sha"])
     ]
     return repos[:limit] if limit else repos
-
-
-def fetch_shas(repo_ids: list[str]) -> list[tuple[str, str | None]]:
-    """Remote commit per repo, for the explicit `--repo` path that never lists."""
-    from huggingface_hub import HfApi
-
-    api = HfApi()
-    out: list[tuple[str, str | None]] = []
-    for repo_id in repo_ids:
-        try:
-            out.append((repo_id, api.dataset_info(repo_id).sha))
-        except Exception:
-            out.append((repo_id, None))  # unknown → treat as work
-    return out
 
 
 def repo_target(root: str, org: str, repo_id: str) -> str:
@@ -416,12 +402,6 @@ def main() -> int:
         action="store_true",
         help="report what would be downloaded, transfer nothing",
     )
-    parser.add_argument(
-        "--repo",
-        action="append",
-        default=[],
-        help="restrict to these repo ids (repeatable); default is the whole org",
-    )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument(
         "--force",
@@ -438,11 +418,7 @@ def main() -> int:
     progress(phase="listing", endpoint=endpoint, org=args.org, percent=0)
 
     try:
-        listed = (
-            fetch_shas(args.repo)
-            if args.repo
-            else list_org_repos(args.org, args.limit)
-        )
+        listed = list_org_repos(args.org, args.limit)
     except Exception as exc:  # network down, bad token, unknown org
         return fail(f"Could not list datasets for {args.org}: {exc}")
 

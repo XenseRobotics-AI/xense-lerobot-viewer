@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Resolve the Hugging Face identity used by the Viewer.
 
-The token is intentionally read from the process environment / the standard
-huggingface-cli cache. It is never printed and never included in the JSON
-response. The Node route injects a Viewer-owned token as ``HF_TOKEN`` when one
-has been saved in the local dataset root.
+The token is intentionally read from the private child-process environment or
+the standard huggingface-cli cache. It is never printed and never included in
+the JSON response. The Node route uses ``XENSE_HF_TOKEN`` for an explicitly
+resolved credential, then this script removes it before calling the Hub.
 """
 
 from __future__ import annotations
@@ -15,7 +15,9 @@ import os
 import sys
 import traceback
 
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+# Account verification deliberately uses the official Hub. A download mirror
+# is a transfer optimization, not the authority that issued the token.
+os.environ.setdefault("HF_ENDPOINT", "https://huggingface.co")
 
 
 def emit(payload: dict) -> None:
@@ -49,7 +51,7 @@ def main() -> int:
         })
         return 0
 
-    token = get_token()
+    token = os.environ.pop("XENSE_HF_TOKEN", None) or get_token()
     token_present = bool(token)
     username = None
     token_valid = None

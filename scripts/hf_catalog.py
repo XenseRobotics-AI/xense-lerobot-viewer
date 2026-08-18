@@ -19,7 +19,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+# Catalog/account metadata is small and authenticated against the authority
+# that issued the token. Large dataset transfers remain free to use a mirror.
+os.environ.setdefault("HF_ENDPOINT", "https://huggingface.co")
 
 
 def emit(payload: dict[str, Any]) -> None:

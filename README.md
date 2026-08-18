@@ -39,6 +39,11 @@ bun install
 bun dev
 ```
 
+```bash
+LOCAL_DATASET_ROOT=/home/xense/src/tacverse-workbench/datasets
+bun dev
+```
+
 Open <http://localhost:3000>. The homepage scans your local LeRobot root and shows everything it finds.
 
 ## Local dataset root
@@ -236,7 +241,9 @@ would be pulled before transferring anything — some orgs hold far more on the
 Hub than you have locally, and the count is the only warning you get.
 
 Requires Python with `huggingface_hub` (`pip install -r scripts/requirements.txt`)
-and a token for private repos (`huggingface-cli login`).
+and a token for private repos (`hf auth login`, or the optional HF token login
+shown on the homepage). The homepage login only validates/stores the
+credential; dataset transfer still starts from the source tab below.
 
 > **Endpoint note.** Sync defaults to `HF_ENDPOINT=https://hf-mirror.com` to keep
 > downloads off a metered VPN. If the mirror answers with a `308` redirect to

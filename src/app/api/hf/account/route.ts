@@ -52,7 +52,9 @@ function requestOrg(request: NextRequest, body?: unknown): string | null {
 
 function endpoint(identity?: HfIdentityResult): string {
   return (
-    identity?.endpoint || process.env.HF_ENDPOINT?.trim() || HF_DEFAULT_ENDPOINT
+    identity?.endpoint ||
+    process.env.HF_IDENTITY_ENDPOINT?.trim() ||
+    HF_DEFAULT_ENDPOINT
   );
 }
 

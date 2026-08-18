@@ -11,10 +11,7 @@ import {
 import { resolveHfToken } from "@/lib/hf-token-store";
 import { redactHfSecrets } from "@/lib/hf-identity";
 import { isSameOriginRequest } from "@/lib/request-security";
-import {
-  MAX_HF_REPOS_PER_REQUEST,
-  normalizeHfSource,
-} from "@/utils/hfValidation";
+import { normalizeHfSource } from "@/utils/hfValidation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,7 +44,10 @@ const LIST_TIMEOUT_MS = 120_000;
 const DOWNLOAD_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_ERROR_LENGTH = 4_000;
 
-function redactSyncMessage(message: string, token: string | null): string {
+function redactSyncMessage(
+  message: string,
+  token: string | null = null,
+): string {
   const redacted = redactHfSecrets(message, [
     token ?? "",
     process.env.HF_TOKEN ?? "",
@@ -77,7 +77,6 @@ type SyncRequestBody = {
   source?: unknown;
   confirm?: unknown;
   force?: unknown;
-  repoIds?: unknown;
 };
 
 function scriptPath(): string {
@@ -87,7 +86,7 @@ function scriptPath(): string {
 function spawnScript(
   pythonBin: string,
   args: string[],
-  token?: string | null,
+  token: string | null = null,
 ): ChildProcessWithoutNullStreams {
   const env = {
     ...pythonSpawnEnv(),
@@ -95,9 +94,10 @@ function spawnScript(
     // means the mirror holds even if the script is run through a wrapper.
     HF_ENDPOINT: process.env.HF_ENDPOINT || HF_MIRROR,
   } as NodeJS.ProcessEnv;
-  // A viewer-owned token takes precedence over an environment/cache token.
-  // It is passed only through the child environment, never command arguments
-  // or an NDJSON event.
+  // Native SourcePanel sync accepts the same credential sources as the
+  // original viewer (CLI cache / HF_TOKEN), plus an explicitly validated
+  // viewer token when the optional account controls were used. Never put it in
+  // argv or the progress stream.
   if (token) env.HF_TOKEN = token;
   return spawn(pythonBin, [scriptPath(), ...args], {
     cwd: process.cwd(),
@@ -118,7 +118,7 @@ function syncPython(): Promise<ResolvedPython> {
 async function runToCompletion(
   args: string[],
   timeoutMs: number,
-  token?: string | null,
+  token: string | null = null,
 ): Promise<{ result: SyncResult | null; error: string | null }> {
   let python: ResolvedPython;
   try {
@@ -129,7 +129,7 @@ async function runToCompletion(
       error:
         err instanceof PythonUnavailableError
           ? err.message
-          : redactSyncMessage(`Failed to launch Python: ${err}`, token ?? null),
+          : redactSyncMessage(`Failed to launch Python: ${err}`, token),
     };
   }
 
@@ -140,10 +140,7 @@ async function runToCompletion(
     } catch (err) {
       resolve({
         result: null,
-        error: redactSyncMessage(
-          `Failed to launch Python: ${err}`,
-          token ?? null,
-        ),
+        error: redactSyncMessage(`Failed to launch Python: ${err}`, token),
       });
       return;
     }
@@ -173,7 +170,7 @@ async function runToCompletion(
         result: null,
         error: redactSyncMessage(
           `Failed to launch ${python.bin}: ${err.message}. Is Python installed?`,
-          token ?? null,
+          token,
         ),
       }),
     );
@@ -193,12 +190,12 @@ async function runToCompletion(
       finish({
         result,
         error: error
-          ? redactSyncMessage(error, token ?? null)
+          ? redactSyncMessage(error, token)
           : result
             ? null
             : redactSyncMessage(
                 stderr.trim().split(/\r?\n/).pop() || "Sync failed",
-                token ?? null,
+                token,
               ),
       });
     });
@@ -211,8 +208,7 @@ function streamDownload(
   root: string,
   force: boolean,
   pythonBin: string,
-  repoIds: string[],
-  token?: string | null,
+  token: string | null = null,
 ): Response {
   const encoder = new TextEncoder();
   let activeChild: ChildProcessWithoutNullStreams | null = null;
@@ -248,16 +244,12 @@ function streamDownload(
 
         try {
           const args = ["--org", source, "--root", root];
-          for (const repoId of repoIds) args.push("--repo", repoId);
           if (force) args.push("--force");
           activeChild = spawnScript(pythonBin, args, token);
         } catch (err) {
           send({
             type: "error",
-            error: redactSyncMessage(
-              `Failed to launch Python: ${err}`,
-              token ?? null,
-            ),
+            error: redactSyncMessage(`Failed to launch Python: ${err}`, token),
           });
           activeSync = null;
           close();
@@ -302,7 +294,7 @@ function streamDownload(
             const event = JSON.parse(line) as Record<string, unknown>;
             if (event?.type === "error") sentError = true;
             if (typeof event.error === "string") {
-              event.error = redactSyncMessage(event.error, token ?? null);
+              event.error = redactSyncMessage(event.error, token);
             }
             send(event);
           } catch {
@@ -326,10 +318,7 @@ function streamDownload(
         child.on("error", (err) => {
           send({
             type: "error",
-            error: redactSyncMessage(
-              `Python failed: ${err.message}`,
-              token ?? null,
-            ),
+            error: redactSyncMessage(`Python failed: ${err.message}`, token),
           });
           activeSync = null;
           close();
@@ -345,7 +334,7 @@ function streamDownload(
               error: redactSyncMessage(
                 stderr.trim().split(/\r?\n/).pop() ||
                   `Sync exited with code ${code} and no output.`,
-                token ?? null,
+                token,
               ),
             });
           }
@@ -401,17 +390,6 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
-  const repoIds = parseRepoIds(body.repoIds, source);
-  if (repoIds === null) {
-    return Response.json(
-      {
-        error:
-          "`repoIds` must contain only dataset ids belonging to the requested source.",
-      },
-      { status: 400 },
-    );
-  }
-
   let root: string;
   try {
     root = resolveLocalDatasetRoot();
@@ -430,21 +408,14 @@ export async function POST(request: NextRequest): Promise<Response> {
   try {
     token = (await resolveHfToken(root)).token;
   } catch {
-    // Credential lookup is best-effort; huggingface_hub can still use an
-    // anonymous request when no token is available.
+    // Credential lookup is best-effort; public datasets can still sync
+    // anonymously and huggingface_hub can use its normal CLI cache.
   }
 
   // Listing pass — cheap, transfers nothing, and always runs first.
   if (body.confirm !== true) {
     const { result, error } = await runToCompletion(
-      [
-        "--org",
-        source,
-        "--root",
-        root,
-        "--list-only",
-        ...repoIds.flatMap((repoId) => ["--repo", repoId]),
-      ],
+      ["--org", source, "--root", root, "--list-only"],
       LIST_TIMEOUT_MS,
       token,
     );
@@ -483,35 +454,5 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   activeSync = { source, startedAt: Date.now() };
-  return streamDownload(
-    source,
-    root,
-    body.force === true,
-    python.bin,
-    repoIds,
-    token,
-  );
-}
-
-/** Validate selected repo ids before handing them to the Python process. */
-function parseRepoIds(value: unknown, source: string): string[] | null {
-  if (value === undefined) return [];
-  if (!Array.isArray(value) || value.length > MAX_HF_REPOS_PER_REQUEST) {
-    return null;
-  }
-  const repoPattern = new RegExp(
-    `^${escapeRegExp(source)}\\/[A-Za-z0-9][A-Za-z0-9._-]*$`,
-  );
-  const out: string[] = [];
-  for (const item of value) {
-    if (typeof item !== "string") return null;
-    const repo = item.trim();
-    if (!repoPattern.test(repo)) return null;
-    if (!out.includes(repo)) out.push(repo);
-  }
-  return out;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return streamDownload(source, root, body.force === true, python.bin, token);
 }

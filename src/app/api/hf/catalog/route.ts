@@ -17,7 +17,7 @@ import { normalizeHfSource } from "@/utils/hfValidation";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const DEFAULT_ENDPOINT = "https://hf-mirror.com";
+const DEFAULT_ENDPOINT = "https://huggingface.co";
 const CATALOG_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_ERROR_LENGTH = 4_000;
 
@@ -47,7 +47,7 @@ function spawnCatalog(
 ): ChildProcessWithoutNullStreams {
   const env = {
     ...pythonSpawnEnv(),
-    HF_ENDPOINT: process.env.HF_ENDPOINT || DEFAULT_ENDPOINT,
+    HF_ENDPOINT: process.env.HF_CATALOG_ENDPOINT || DEFAULT_ENDPOINT,
   } as NodeJS.ProcessEnv;
   if (token) env.HF_TOKEN = token;
   const args = [scriptPath(), "--org", org, "--root", root, "--cache", cache];
