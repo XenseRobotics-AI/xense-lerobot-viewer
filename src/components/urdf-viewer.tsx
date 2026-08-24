@@ -65,11 +65,37 @@ function loadCachedStlGeometry(
   url: string,
   manager: THREE.LoadingManager,
 ): Promise<THREE.BufferGeometry> {
+  // A cache hit still has to be announced to the LoadingManager. Without it,
+  // a remount with a warm cache leaves the manager tracking only the .urdf
+  // file, so `manager.onLoad` fires — and the caller clears its loading
+  // overlay — while these meshes are still pending callbacks. itemEnd is
+  // deferred a macrotask so the caller's `then` attaches the mesh first; same
+  // ordering hazard STLLoader itself has (see CLAUDE.md).
+  const releaseManagerAfterAttach = () => {
+    setTimeout(() => manager.itemEnd(url), 0);
+  };
+
   const cached = stlGeometryCache.get(url);
-  if (cached) return Promise.resolve(cached);
+  if (cached) {
+    manager.itemStart(url);
+    releaseManagerAfterAttach();
+    return Promise.resolve(cached);
+  }
 
   const inFlight = stlGeometryLoading.get(url);
-  if (inFlight) return inFlight;
+  if (inFlight) {
+    manager.itemStart(url);
+    return inFlight.then(
+      (geometry) => {
+        releaseManagerAfterAttach();
+        return geometry;
+      },
+      (error) => {
+        releaseManagerAfterAttach();
+        throw error;
+      },
+    );
+  }
 
   const loading = new Promise<THREE.BufferGeometry>((resolve, reject) => {
     new STLLoader(manager).load(url, resolve, undefined, reject);
@@ -99,7 +125,11 @@ const URDF_BASE_URL =
 
 function getRobotConfig(robotType: string | null) {
   const lower = (robotType ?? "").toLowerCase();
-  if (lower.includes("taccap_gripper")) {
+  // Must be the *same* predicate `hasURDFSupport` uses. A looser match here
+  // hands back an empty urdfUrl for robot types whose 3D tab is hidden — or,
+  // worse, for one that is mounted through another branch, which then calls
+  // URDFLoader.load("").
+  if (isTacCapRobot(robotType)) {
     return { urdfUrl: "", scale: 1 };
   }
   if (lower.includes("g1") || lower.includes("unitree")) {
@@ -705,6 +735,15 @@ function TacCapPoseTrail({
     line.visible = false;
     return { line, material };
   }, [alwaysVisible]);
+  // This effect runs once per rendered frame per track. Scratch buffers sized
+  // to the whole trajectory are reused across frames so the hot path only
+  // writes into them — allocating a pair of Float32Arrays here (plus the
+  // Array.from copies the geometry does not need) is what made the trail the
+  // GC-heaviest thing in the scene.
+  const scratch = useRef<{ positions: Float32Array; colors: Float32Array }>({
+    positions: new Float32Array(0),
+    colors: new Float32Array(0),
+  });
 
   useLayoutEffect(() => {
     resources.material.resolution.set(viewportSize.width, viewportSize.height);
@@ -736,8 +775,15 @@ function TacCapPoseTrail({
       return;
     }
 
-    const positions = new Float32Array(visiblePointCount * 3);
-    const colors = new Float32Array(visiblePointCount * 3);
+    const required = visiblePointCount * 3;
+    if (scratch.current.positions.length < required) {
+      scratch.current = {
+        positions: new Float32Array(required),
+        colors: new Float32Array(required),
+      };
+    }
+    const positions = scratch.current.positions.subarray(0, required);
+    const colors = scratch.current.colors.subarray(0, required);
     for (
       let pointIndex = 0;
       pointIndex < completedPointCount;
@@ -781,14 +827,22 @@ function TacCapPoseTrail({
       colors[offset + 2] = trailColor.b;
     }
 
-    // Match RobotScene's original trail implementation exactly. Replacing
-    // LineGeometry after position/colour attributes exist ensures Line2's
-    // vertex-colour shader is compiled with the gradient attributes.
-    const geometry = new LineGeometry();
-    geometry.setPositions(Array.from(positions));
-    geometry.setColors(Array.from(colors));
-    resources.line.geometry.dispose();
-    resources.line.geometry = geometry;
+    // The *first* build has to replace the geometry: Line2's vertex-colour
+    // shader is compiled from the attributes present at that moment, so the
+    // colour attribute must exist before the material is first used. Once it
+    // does, updating the same geometry in place is enough — and avoids
+    // building and disposing a LineGeometry on every frame.
+    const current = resources.line.geometry as LineGeometry;
+    if (current.getAttribute("instanceColorStart")) {
+      current.setPositions(positions);
+      current.setColors(colors);
+    } else {
+      const geometry = new LineGeometry();
+      geometry.setPositions(positions);
+      geometry.setColors(colors);
+      current.dispose();
+      resources.line.geometry = geometry;
+    }
     resources.line.computeLineDistances();
     resources.line.visible = true;
   }, [enabled, pose, resources, scenePositions, timeSeconds, trailColor]);
@@ -1506,14 +1560,15 @@ function RobotScene({
 // ─── Playback ticker ───
 function PlaybackDriver({
   playing,
-  fps,
+  rowsPerSecond,
   replayRevision,
   totalFrames,
   frameRef,
   setFrame,
 }: {
   playing: boolean;
-  fps: number;
+  /** Chart rows to advance per second — see `rowsPerSecond` in URDFViewer. */
+  rowsPerSecond: number;
   replayRevision: number;
   totalFrames: number;
   frameRef: React.MutableRefObject<number>;
@@ -1531,9 +1586,9 @@ function PlaybackDriver({
       last.current = now;
       if (dt > 0 && dt < 0.5) {
         elapsed.current += dt;
-        const fd = Math.floor(elapsed.current * fps);
+        const fd = Math.floor(elapsed.current * rowsPerSecond);
         if (fd > 0) {
-          elapsed.current -= fd / fps;
+          elapsed.current -= fd / rowsPerSecond;
           frameRef.current = (frameRef.current + fd) % totalFrames;
           setFrame(frameRef.current);
         }
@@ -1543,7 +1598,7 @@ function PlaybackDriver({
     elapsed.current = 0;
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing, fps, replayRevision, totalFrames, frameRef, setFrame]);
+  }, [playing, rowsPerSecond, replayRevision, totalFrames, frameRef, setFrame]);
   return null;
 }
 
@@ -1648,6 +1703,22 @@ export default function URDFViewer({
 
   const totalFrames = chartData.length;
 
+  // `chartData` is the *downsampled* row set (MAX_EPISODE_POINTS), so one row
+  // is not one 1/fps frame: a 6000-frame 30fps episode arrives as 4000 rows
+  // spanning the same 200s. Advancing rows at `fps` would run playback ~1.5x
+  // fast against the timestamps `replayTimeSeconds` reads — and the video
+  // overlay, which seeks from that value, would be dragged along. Derive the
+  // rate from the timestamps instead so driver, clock and videos share it.
+  const rowsPerSecond = useMemo(() => {
+    if (totalFrames < 2) return fps;
+    const first = chartData[0]?.timestamp;
+    const last = chartData[totalFrames - 1]?.timestamp;
+    if (typeof first !== "number" || typeof last !== "number") return fps;
+    const span = last - first;
+    if (!Number.isFinite(span) || span <= 0) return fps;
+    return (totalFrames - 1) / span;
+  }, [chartData, totalFrames, fps]);
+
   // URDF joint names
   const [urdfJointNames, setUrdfJointNames] = useState<string[]>([]);
   const onJointsLoaded = useCallback(
@@ -1740,7 +1811,7 @@ export default function URDFViewer({
 
   const replayTimeSeconds =
     chartData[Math.min(frame, Math.max(totalFrames - 1, 0))]?.timestamp ??
-    frame / fps;
+    frame / rowsPerSecond;
   const tacCapFrames = useMemo(
     () =>
       tacCapTracks.flatMap((track) => {
@@ -1799,7 +1870,10 @@ export default function URDFViewer({
         let high = chartData.length - 1;
         while (low < high) {
           const middle = Math.floor((low + high) / 2);
-          if ((chartData[middle]?.timestamp ?? middle / fps) < targetTime) {
+          if (
+            (chartData[middle]?.timestamp ?? middle / rowsPerSecond) <
+            targetTime
+          ) {
             low = middle + 1;
           } else {
             high = middle;
@@ -1807,14 +1881,14 @@ export default function URDFViewer({
         }
         const upper = low;
         const lower = Math.max(0, upper - 1);
-        const upperTime = chartData[upper]?.timestamp ?? upper / fps;
-        const lowerTime = chartData[lower]?.timestamp ?? lower / fps;
+        const upperTime = chartData[upper]?.timestamp ?? upper / rowsPerSecond;
+        const lowerTime = chartData[lower]?.timestamp ?? lower / rowsPerSecond;
         targetFrame =
           Math.abs(targetTime - lowerTime) <= Math.abs(upperTime - targetTime)
             ? lower
             : upper;
       } else {
-        targetFrame = Math.round(targetTime * fps);
+        targetFrame = Math.round(targetTime * rowsPerSecond);
       }
       targetFrame = Math.max(0, Math.min(totalFrames - 1, targetFrame));
       frameRef.current = targetFrame;
@@ -1824,7 +1898,13 @@ export default function URDFViewer({
       // a false line across the skipped five-second interval.
       setReplayRevision((revision) => revision + 1);
     },
-    [chartData, fps, playbackDisabled, replayTimeSeconds, totalFrames],
+    [
+      chartData,
+      playbackDisabled,
+      replayTimeSeconds,
+      rowsPerSecond,
+      totalFrames,
+    ],
   );
 
   useEffect(() => {
@@ -2064,7 +2144,7 @@ export default function URDFViewer({
           />
           <PlaybackDriver
             playing={playing}
-            fps={fps}
+            rowsPerSecond={rowsPerSecond}
             replayRevision={replayRevision}
             totalFrames={totalFrames}
             frameRef={frameRef}
@@ -2094,7 +2174,7 @@ export default function URDFViewer({
         <UrdfPlaybackBar
           frame={frame}
           totalFrames={totalFrames}
-          fps={fps}
+          rowsPerSecond={rowsPerSecond}
           playing={playing}
           onBackward={() => handleSeekBy(-5)}
           onForward={() => handleSeekBy(5)}

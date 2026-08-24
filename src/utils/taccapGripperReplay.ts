@@ -1,8 +1,11 @@
+import { CHART_CONFIG } from "@/utils/constants";
 import {
   extractEpisodePoseTrajectories,
+  finiteNumber,
   locateEpisodePoseTrajectory,
   rotation6dToMatrix,
   sampleEpisodePoseRotation,
+  sourceOrder,
   type EpisodePoseTrajectory,
   type RotationMatrix3,
 } from "@/utils/poseTrajectory3d";
@@ -16,7 +19,7 @@ import {
 
 export type { TacCapSide } from "@/utils/taccapPoseSemantics";
 
-const SERIES_NAME_DELIMITER = " | ";
+const SERIES_NAME_DELIMITER = CHART_CONFIG.SERIES_NAME_DELIMITER;
 
 export type TacCapGripperTrack = {
   side: TacCapSide;
@@ -111,19 +114,6 @@ export type TacCapGripperFrame = {
   opening: number;
 };
 
-function finiteNumber(value: unknown): number | null {
-  if (value === null || value === undefined || value === "") return null;
-  const number = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(number) ? number : null;
-}
-
-function sourcePriority(source: string): number {
-  const lower = source.toLowerCase();
-  if (lower === "action") return 0;
-  if (lower === "observation.state") return 1;
-  return 2;
-}
-
 function findGripperKey(
   rows: Record<string, number>[],
   source: string,
@@ -187,8 +177,7 @@ export function extractTacCapGripperTracks(
           Number(b.source === preferredSource) -
           Number(a.source === preferredSource);
         return (
-          preferredDifference ||
-          sourcePriority(a.source) - sourcePriority(b.source)
+          preferredDifference || sourceOrder(a.source) - sourceOrder(b.source)
         );
       })[0];
     if (!pose) return [];
@@ -238,8 +227,7 @@ export function extractTacCapHeadTrack(
         Number(b.source === preferredSource) -
         Number(a.source === preferredSource);
       return (
-        preferredDifference ||
-        sourcePriority(a.source) - sourcePriority(b.source)
+        preferredDifference || sourceOrder(a.source) - sourceOrder(b.source)
       );
     })[0];
 
@@ -258,7 +246,7 @@ export function tacCapGripperSources(rows: Record<string, number>[]): string[] {
         )
         .map((trajectory) => trajectory.source),
     ),
-  ].sort((a, b) => sourcePriority(a) - sourcePriority(b));
+  ].sort((a, b) => sourceOrder(a) - sourceOrder(b));
 }
 
 export function hasTacCapGripperTracks(

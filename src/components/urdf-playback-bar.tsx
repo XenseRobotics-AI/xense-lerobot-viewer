@@ -7,7 +7,12 @@ import { useT } from "@/context/locale-context";
 interface UrdfPlaybackBarProps {
   frame: number;
   totalFrames: number;
-  fps: number;
+  /**
+   * Rows advanced per second of playback. `frame` indexes the *downsampled*
+   * chart rows, so this is not the dataset fps unless the episode was short
+   * enough to escape downsampling.
+   */
+  rowsPerSecond: number;
   playing: boolean;
   onBackward: () => void;
   onForward: () => void;
@@ -22,7 +27,7 @@ interface UrdfPlaybackBarProps {
 export default function UrdfPlaybackBar({
   frame,
   totalFrames,
-  fps,
+  rowsPerSecond,
   playing,
   onBackward,
   onForward,
@@ -34,8 +39,9 @@ export default function UrdfPlaybackBar({
   disabled = false,
 }: UrdfPlaybackBarProps) {
   const t = useT();
-  const currentTime = totalFrames > 0 ? (frame / fps).toFixed(2) : "0.00";
-  const totalTime = (totalFrames / fps).toFixed(2);
+  const rate = rowsPerSecond > 0 ? rowsPerSecond : 1;
+  const currentTime = totalFrames > 0 ? (frame / rate).toFixed(2) : "0.00";
+  const totalTime = (totalFrames / rate).toFixed(2);
 
   return (
     <div

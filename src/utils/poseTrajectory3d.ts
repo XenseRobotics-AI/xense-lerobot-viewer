@@ -1,4 +1,6 @@
-const SERIES_NAME_DELIMITER = " | ";
+import { CHART_CONFIG } from "@/utils/constants";
+
+const SERIES_NAME_DELIMITER = CHART_CONFIG.SERIES_NAME_DELIMITER;
 
 type PoseAxis = "x" | "y" | "z";
 type RotationAxis = `r${1 | 2 | 3 | 4 | 5 | 6}`;
@@ -70,7 +72,8 @@ export type EpisodePoseTrajectoryLocation = {
   completedPointCount: number;
 };
 
-function finiteNumber(value: unknown): number | null {
+/** Shared with the TacCap replay helpers, which parse the same chart rows. */
+export function finiteNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   const number = typeof value === "number" ? value : Number(value);
   return Number.isFinite(number) ? number : null;
@@ -98,12 +101,25 @@ function parsePoseComponentKey(key: string): PoseComponentKey | null {
   };
 }
 
-function sourceOrder(source: string): number {
+/** `action` first, then `observation.state`, then anything else. */
+export function sourceOrder(source: string): number {
   const lower = source.toLowerCase();
   if (lower === "action") return 0;
   if (lower === "observation.state") return 1;
   return 2;
 }
+
+/**
+ * Memoised per rows array. One episode load asks for these trajectories five
+ * times over — the gripper tracks, the head track, the source list, the
+ * Episodes-tab 3D view and the "is there anything to show" probe — and each
+ * pass is O(rows × keys) plus a full copy of every point and rotation array.
+ * The chart rows are a stable memoised array, so keying on identity collapses
+ * those into one. Entries die with the rows array.
+ *
+ * Callers must treat the result as read-only: it is shared.
+ */
+const trajectoryCache = new WeakMap<object, EpisodePoseTrajectory[]>();
 
 /**
  * Extract complete Cartesian pose trajectories from the flat chart rows used
@@ -113,6 +129,9 @@ function sourceOrder(source: string): number {
 export function extractEpisodePoseTrajectories(
   rows: Record<string, number>[],
 ): EpisodePoseTrajectory[] {
+  const cached = trajectoryCache.get(rows);
+  if (cached) return cached;
+
   const groups = new Map<string, PoseAxisGroup>();
 
   for (const row of rows) {
@@ -132,7 +151,7 @@ export function extractEpisodePoseTrajectories(
     }
   }
 
-  return [...groups.values()]
+  const trajectories = [...groups.values()]
     .filter(
       (group) =>
         group.components.x !== undefined &&
@@ -201,6 +220,9 @@ export function extractEpisodePoseTrajectories(
         a.source.localeCompare(b.source) ||
         a.label.localeCompare(b.label),
     );
+
+  trajectoryCache.set(rows, trajectories);
+  return trajectories;
 }
 
 export function hasEpisodePoseTrajectories(

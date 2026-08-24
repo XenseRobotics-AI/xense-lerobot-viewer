@@ -26,6 +26,7 @@ import {
   type HistogramBinning,
 } from "@/utils/episodeLengthHistogram";
 import { buildPoseVelocityChartGroups } from "@/utils/poseVelocity";
+import { evenlySampleArray, evenlySampleIndices } from "@/utils/sampling";
 import {
   extractSpatialTrajectory,
   findSpatialAxisGroups,
@@ -210,6 +211,15 @@ const MAX_SPATIAL_TRAJECTORY_POINTS_PER_EPISODE = parsePositiveIntEnv(
   240,
   2,
 );
+// Spatial trajectories want more episodes than the statistics sample, but
+// "more" is not "all": each extra episode is a parquet read (a whole ~100MB
+// file on v3, one HTTP round trip on v2), and the point budget above caps
+// what can be *drawn* long before every episode is worth *fetching*.
+const MAX_SPATIAL_TRAJECTORY_EPISODES = parsePositiveIntEnv(
+  process.env.MAX_SPATIAL_TRAJECTORY_EPISODES,
+  400,
+  10,
+);
 const CROSS_EPISODE_FILE_CONCURRENCY = parsePositiveIntEnv(
   process.env.CROSS_EPISODE_FILE_CONCURRENCY,
   8,
@@ -224,26 +234,6 @@ const PREFERRED_PROGRESS_COLUMNS = [
   "progress_dense",
   "progress",
 ] as const;
-
-function evenlySampleIndices(length: number, target: number): number[] {
-  if (length <= 0) return [];
-  if (target >= length) return Array.from({ length }, (_, i) => i);
-  if (target <= 1) return [0];
-
-  const sampled = new Set<number>();
-  for (let i = 0; i < target; i++) {
-    sampled.add(Math.round((i * (length - 1)) / (target - 1)));
-  }
-
-  // Fill potential gaps caused by rounding collisions.
-  if (sampled.size < target) {
-    for (let i = 0; i < length && sampled.size < target; i++) {
-      sampled.add(i);
-    }
-  }
-
-  return Array.from(sampled).sort((a, b) => a - b);
-}
 
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -264,11 +254,6 @@ async function mapWithConcurrency<T, R>(
     Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
   );
   return results;
-}
-
-function evenlySampleArray<T>(items: T[], maxCount: number): T[] {
-  if (items.length <= maxCount) return items;
-  return evenlySampleIndices(items.length, maxCount).map((idx) => items[idx]);
 }
 
 function toFiniteNumber(value: unknown): number | null {
@@ -2053,8 +2038,32 @@ export async function loadCrossEpisodeActionVariance(
   const sampledOrder = new Map(
     sampled.map((episode, index) => [episode.index, index]),
   );
+
+  // Episodes whose action rows are read only to draw a spatial trajectory.
+  const spatialEps =
+    spatialAxisGroups.length === 0
+      ? []
+      : evenlySampleIndices(
+          allEps.length,
+          Math.min(allEps.length, MAX_SPATIAL_TRAJECTORY_EPISODES),
+        ).map((i) => allEps[i]);
+  const spatialEpisodeIds = new Set(spatialEps.map((episode) => episode.index));
+  const episodesToLoad =
+    spatialEps.length === 0
+      ? sampled
+      : [
+          ...new Map(
+            [...sampled, ...spatialEps].map((ep) => [ep.index, ep]),
+          ).values(),
+        ].sort((a, b) => a.index - b.index);
+  if (spatialEps.length > 0) {
+    console.log(
+      `[cross-ep] Loading ${episodesToLoad.length} episode(s): ${sampled.length} sampled for statistics, ${spatialEps.length} for spatial trajectories`,
+    );
+  }
+
   const spatialSampleSize = spatialPointsPerEpisode(
-    allEps.length,
+    spatialEps.length,
     spatialAxisGroups.length,
     MAX_SPATIAL_TRAJECTORY_POINTS,
     MAX_SPATIAL_TRAJECTORY_POINTS_PER_EPISODE,
@@ -2068,6 +2077,7 @@ export async function loadCrossEpisodeActionVariance(
     actions: number[][],
   ) => {
     if (spatialSampleSize === 0) return;
+    if (!spatialEpisodeIds.has(episodeIndex)) return;
     for (const axes of spatialAxisGroups) {
       const points = extractSpatialTrajectory(actions, axes, spatialSampleSize);
       if (points.length < 6) continue;
@@ -2084,7 +2094,6 @@ export async function loadCrossEpisodeActionVariance(
 
   if (version === "v3.0") {
     const byFile = new Map<string, EpMeta[]>();
-    const episodesToLoad = spatialAxisGroups.length > 0 ? allEps : sampled;
     for (const ep of episodesToLoad) {
       const key = `${ep.chunkIdx}-${ep.fileIdx}`;
       if (!byFile.has(key)) byFile.set(key, []);
@@ -2153,7 +2162,6 @@ export async function loadCrossEpisodeActionVariance(
       loadedEpisodes.push(...fileEpisodes);
   } else {
     const chunkSize = info.chunks_size || 1000;
-    const episodesToLoad = spatialAxisGroups.length > 0 ? allEps : sampled;
     const epResults = await mapWithConcurrency(
       episodesToLoad,
       CROSS_EPISODE_FILE_CONCURRENCY,

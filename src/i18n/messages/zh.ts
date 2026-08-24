@@ -426,7 +426,7 @@ export const zh: Record<MessageKey, string> = {
   "insights.trajHoverPrompt":
     "悬停轨迹可查看编号；聚焦的轨迹会以更亮的颜色显示。",
   "insights.trajHoveredStatus":
-    "对应轨迹：Episode {episode} · action · {layer}",
+    "对应轨迹：Episode {episode} · {feature} · {layer}",
   "insights.trajFocusedStatus": "当前聚焦：Episode {episode}",
   "insights.trajControls": "拖动旋转 · 滚轮缩放 · 右键拖动平移",
   "insights.trajCoordinate": "Z 轴向上 · 位置单位：m",

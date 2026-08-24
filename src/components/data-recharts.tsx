@@ -20,6 +20,7 @@ import {
 } from "recharts";
 import { useT } from "@/context/locale-context";
 import { hasEpisodePoseTrajectories } from "@/utils/poseTrajectory3d";
+import { CHART_CONFIG } from "@/utils/constants";
 
 const EpisodePose3DViewer = React.lazy(
   () => import("@/components/episode-pose-3d-viewer"),
@@ -39,7 +40,7 @@ type DataGraphProps = {
 
 type EpisodeGraphMode = "position" | "velocity" | "threeD";
 
-const SERIES_NAME_DELIMITER = " | ";
+const SERIES_NAME_DELIMITER = CHART_CONFIG.SERIES_NAME_DELIMITER;
 
 const CHART_COLORS = [
   "#f97316",

@@ -66,17 +66,32 @@ const ParquetTablePanel = lazy(
 // videos start downloading in parallel with the chart bundle.
 const DataRecharts = lazy(() => import("@/components/data-recharts"));
 
-/** Skip global playback / navigation shortcuts while typing in a field. */
+/** Skip every global shortcut while typing in a field. */
 function isKeyboardFocusInsideTextEntry(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable || target.closest('[contenteditable="true"]')) {
     return true;
   }
   const tag = target.tagName;
+  // The playback slider is an <input>, but it is *the* thing the shortcuts
+  // drive — keep them global while it has focus so clicking the scrubber
+  // doesn't disable Space/arrows.
   if (tag === "INPUT") {
     return (target as HTMLInputElement).type !== "range";
   }
   return tag === "TEXTAREA" || tag === "SELECT";
+}
+
+/**
+ * Space *activates* a focused button or link. Stealing it for play/pause
+ * would leave every button in the viewer un-activatable by keyboard, so the
+ * Space shortcut yields here — the arrow shortcuts, which these elements
+ * don't consume, deliberately do not.
+ */
+function isKeyboardFocusOnActivatable(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === "BUTTON" || (tag === "A" && target.hasAttribute("href"));
 }
 
 type ActiveTab =
@@ -642,7 +657,7 @@ function EpisodeViewerInner({
       const inTextEntry = isKeyboardFocusInsideTextEntry(e.target);
 
       if (key === " ") {
-        if (inTextEntry) return;
+        if (inTextEntry || isKeyboardFocusOnActivatable(e.target)) return;
         e.preventDefault();
         if (s.activeTab === "urdf") {
           urdfPlayToggleRef.current?.();

@@ -1,3 +1,5 @@
+import { evenlySampleIndices } from "@/utils/sampling";
+
 export type SpatialAxisGroup = {
   id: string;
   label: string;
@@ -69,6 +71,16 @@ export function findSpatialAxisGroups(
     }));
 }
 
+/**
+ * The dataset feature a layer came from — the `action` in `action:left_tcp`.
+ * Both halves are parquet column names, so they are shown verbatim rather
+ * than translated.
+ */
+export function spatialLayerFeatureKey(layerId: string): string {
+  const separator = layerId.indexOf(":");
+  return separator > 0 ? layerId.slice(0, separator) : layerId;
+}
+
 export function spatialPointsPerEpisode(
   totalEpisodes: number,
   layerCount: number,
@@ -76,20 +88,14 @@ export function spatialPointsPerEpisode(
   maxPointsPerEpisode: number,
 ): number {
   if (totalEpisodes <= 0 || layerCount <= 0) return 0;
-  const fairShare = Math.floor(
-    maxTotalPoints / Math.max(1, totalEpisodes * layerCount),
-  );
-  return Math.max(2, Math.min(maxPointsPerEpisode, fairShare));
-}
-
-function evenlySampleIndices(length: number, target: number): number[] {
-  if (length <= 0 || target <= 0) return [];
-  if (target >= length) return Array.from({ length }, (_, index) => index);
-  if (target === 1) return [0];
-
-  return Array.from({ length: target }, (_, index) =>
-    Math.round((index * (length - 1)) / (target - 1)),
-  );
+  const lines = totalEpisodes * layerCount;
+  const fairShare = Math.floor(maxTotalPoints / Math.max(1, lines));
+  // Below 2 there is not even one segment per line to draw, and flooring to 2
+  // anyway would push the total past `maxTotalPoints` — the one number this
+  // function exists to respect. Callers cap the episode count so the budget
+  // is spent on fewer, denser trajectories instead of more, emptier ones.
+  if (fairShare < 2) return 0;
+  return Math.min(maxPointsPerEpisode, fairShare);
 }
 
 export function extractSpatialTrajectory(

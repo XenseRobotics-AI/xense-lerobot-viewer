@@ -1,13 +1,25 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Canvas, useThree } from "@react-three/fiber";
-import { Grid, Html, Line, OrbitControls } from "@react-three/drei";
+import { Canvas } from "@react-three/fiber";
+import { Grid, Line, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import { useT } from "@/context/locale-context";
-import type {
-  SpatialTrajectoryData,
-  SpatialTrajectoryLayer,
+import {
+  AxisGuide,
+  CameraFit,
+  type ControlsHandle,
+} from "@/components/scene3d-guides";
+import {
+  niceGridStep,
+  sceneBoundsFromPointArrays,
+  toScenePoint,
+  type SceneBounds,
+} from "@/utils/scene3d";
+import {
+  spatialLayerFeatureKey,
+  type SpatialTrajectoryData,
+  type SpatialTrajectoryLayer,
 } from "@/utils/spatialTrajectories";
 
 const LAYER_COLORS = ["#22d3ee", "#f472b6", "#34d399", "#fbbf24"];
@@ -32,71 +44,32 @@ function episodeColor(episodeIndex: number, layerLabel?: string): string {
 type HoveredEpisode = {
   episodeIndex: number;
   layerLabel: string;
+  /** Dataset feature the hovered layer came from, e.g. `action`. */
+  featureKey: string;
 };
-
-type SceneBounds = {
-  min: THREE.Vector3;
-  max: THREE.Vector3;
-  center: THREE.Vector3;
-  extent: number;
-};
-
-function toScenePoint(
-  x: number,
-  y: number,
-  z: number,
-): [number, number, number] {
-  // Three.js is Y-up. Map the dataset's Z-up frame into it while keeping a
-  // right-handed coordinate system: dataset (x, y, z) -> scene (x, z, -y).
-  return [x, z, -y];
-}
 
 function computeBounds(layers: SpatialTrajectoryLayer[]): SceneBounds {
-  const min = new THREE.Vector3(Infinity, Infinity, Infinity);
-  const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
-
-  for (const layer of layers) {
-    for (const trajectory of layer.trajectories) {
-      for (let index = 0; index + 2 < trajectory.points.length; index += 3) {
-        const point = toScenePoint(
-          trajectory.points[index],
-          trajectory.points[index + 1],
-          trajectory.points[index + 2],
-        );
-        min.min(new THREE.Vector3(...point));
-        max.max(new THREE.Vector3(...point));
-      }
-    }
-  }
-
-  if (!Number.isFinite(min.x)) {
-    min.set(-0.5, -0.5, -0.5);
-    max.set(0.5, 0.5, 0.5);
-  }
-  const center = min.clone().add(max).multiplyScalar(0.5);
-  const size = max.clone().sub(min);
-  return { min, max, center, extent: Math.max(size.x, size.y, size.z, 0.1) };
-}
-
-function niceGridStep(extent: number): number {
-  const rough = extent / 10;
-  const power = 10 ** Math.floor(Math.log10(Math.max(rough, 1e-6)));
-  const normalized = rough / power;
-  const multiplier = normalized <= 1 ? 1 : normalized <= 2 ? 2 : 5;
-  return multiplier * power;
+  return sceneBoundsFromPointArrays(
+    layers.flatMap((layer) =>
+      layer.trajectories.map((trajectory) => trajectory.points),
+    ),
+  );
 }
 
 function EpisodeTrajectoryLine({
   trajectory,
-  layerLabel,
+  layer,
   highlighted,
   onHover,
   onSelect,
 }: {
   trajectory: SpatialTrajectoryLayer["trajectories"][number];
-  layerLabel: string;
+  layer: SpatialTrajectoryLayer;
   highlighted: boolean;
-  onHover: (episodeIndex: number | null, layerLabel?: string) => void;
+  onHover: (
+    episodeIndex: number | null,
+    layer?: SpatialTrajectoryLayer,
+  ) => void;
   onSelect: (episodeIndex: number) => void;
 }) {
   const points = useMemo(() => {
@@ -117,7 +90,7 @@ function EpisodeTrajectoryLine({
 
   if (points.length < 2) return null;
 
-  const color = episodeColor(trajectory.episodeIndex, layerLabel);
+  const color = episodeColor(trajectory.episodeIndex, layer.label);
   // A focused Episode is brighter, while every other Episode keeps its normal
   // opacity. Previously dimming the other paths made the prior selection look
   // as if it had disappeared after clicking a different Episode.
@@ -134,7 +107,7 @@ function EpisodeTrajectoryLine({
       depthWrite={false}
       onPointerOver={(event) => {
         event.stopPropagation();
-        onHover(trajectory.episodeIndex, layerLabel);
+        onHover(trajectory.episodeIndex, layer);
       }}
       onPointerOut={(event) => {
         event.stopPropagation();
@@ -158,7 +131,10 @@ function TrajectoryLines({
   layer: SpatialTrajectoryLayer;
   focusedEpisode: number | null;
   hoveredEpisode: HoveredEpisode | null;
-  onHover: (episodeIndex: number | null, layerLabel?: string) => void;
+  onHover: (
+    episodeIndex: number | null,
+    layer?: SpatialTrajectoryLayer,
+  ) => void;
   onSelect: (episodeIndex: number) => void;
 }) {
   // Hovering temporarily takes precedence over the selected episode. This
@@ -175,85 +151,13 @@ function TrajectoryLines({
           <EpisodeTrajectoryLine
             key={`${layer.id}:${trajectory.episodeIndex}`}
             trajectory={trajectory}
-            layerLabel={layer.label}
+            layer={layer}
             highlighted={isEpisodeEmphasized}
             onHover={onHover}
             onSelect={onSelect}
           />
         );
       })}
-    </group>
-  );
-}
-
-type ControlsHandle = React.ElementRef<typeof OrbitControls>;
-
-function CameraFit({
-  bounds,
-  controlsRef,
-}: {
-  bounds: SceneBounds;
-  controlsRef: React.RefObject<ControlsHandle | null>;
-}) {
-  const { camera } = useThree();
-
-  useEffect(() => {
-    const perspective = camera as THREE.PerspectiveCamera;
-    const distance =
-      (bounds.extent / (2 * Math.tan((perspective.fov * Math.PI) / 360))) *
-      1.45;
-    perspective.position.set(
-      bounds.center.x + distance * 0.75,
-      bounds.center.y + distance * 0.55,
-      bounds.center.z + distance * 0.75,
-    );
-    perspective.near = Math.max(distance / 1000, 0.001);
-    perspective.far = Math.max(distance * 20, 100);
-    perspective.updateProjectionMatrix();
-
-    controlsRef.current?.target.copy(bounds.center);
-    controlsRef.current?.update();
-  }, [bounds, camera, controlsRef]);
-
-  return null;
-}
-
-function AxisGuide({ bounds }: { bounds: SceneBounds }) {
-  const length = bounds.extent * 0.18;
-  const origin = new THREE.Vector3(
-    bounds.min.x,
-    bounds.min.y - bounds.extent * 0.04,
-    bounds.max.z,
-  );
-  const labelClass =
-    "rounded bg-slate-950/80 px-1.5 py-0.5 text-[10px] font-semibold pointer-events-none";
-
-  return (
-    <group>
-      <Line
-        points={[origin, origin.clone().add(new THREE.Vector3(length, 0, 0))]}
-        color="#f87171"
-        lineWidth={1.5}
-      />
-      <Line
-        points={[origin, origin.clone().add(new THREE.Vector3(0, 0, -length))]}
-        color="#4ade80"
-        lineWidth={1.5}
-      />
-      <Line
-        points={[origin, origin.clone().add(new THREE.Vector3(0, length, 0))]}
-        color="#60a5fa"
-        lineWidth={1.5}
-      />
-      <Html position={[origin.x + length, origin.y, origin.z]} center>
-        <span className={`${labelClass} text-red-300`}>X</span>
-      </Html>
-      <Html position={[origin.x, origin.y, origin.z - length]} center>
-        <span className={`${labelClass} text-green-300`}>Y</span>
-      </Html>
-      <Html position={[origin.x, origin.y + length, origin.z]} center>
-        <span className={`${labelClass} text-blue-300`}>Z</span>
-      </Html>
     </group>
   );
 }
@@ -268,7 +172,10 @@ function TrajectoryScene({
   layers: SpatialTrajectoryLayer[];
   focusedEpisode: number | null;
   hoveredEpisode: HoveredEpisode | null;
-  onHover: (episodeIndex: number | null, layerLabel?: string) => void;
+  onHover: (
+    episodeIndex: number | null,
+    layer?: SpatialTrajectoryLayer,
+  ) => void;
   onSelect: (episodeIndex: number) => void;
 }) {
   const controlsRef = useRef<ControlsHandle | null>(null);
@@ -382,12 +289,25 @@ export default function SpatialTrajectoryViewer({
     });
   };
 
-  const handleHover = (episodeIndex: number | null, layerLabel?: string) => {
-    if (episodeIndex === null || !layerLabel) {
+  // The legend lists Episodes, not layers, so its swatches follow the first
+  // visible layer — the one `handleHover` also reports. `episodeColor` varies
+  // lightness per layer, so passing nothing here would paint a swatch that
+  // does not match the line it selects.
+  const legendLayerLabel = visibleLayers[0]?.label;
+
+  const handleHover = (
+    episodeIndex: number | null,
+    layer?: SpatialTrajectoryLayer,
+  ) => {
+    if (episodeIndex === null || !layer) {
       setHoveredEpisode(null);
       return;
     }
-    setHoveredEpisode({ episodeIndex, layerLabel });
+    setHoveredEpisode({
+      episodeIndex,
+      layerLabel: layer.label,
+      featureKey: spatialLayerFeatureKey(layer.id),
+    });
   };
 
   const toggleEpisodeFocus = (episodeIndex: number) => {
@@ -440,7 +360,7 @@ export default function SpatialTrajectoryViewer({
                         opacity: active ? 1 : 0.3,
                       }}
                     />
-                    action · {layer.label}
+                    {spatialLayerFeatureKey(layer.id)} · {layer.label}
                   </button>
                 );
               })}
@@ -474,6 +394,7 @@ export default function SpatialTrajectoryViewer({
                 <span className="font-medium text-slate-100">
                   {t("insights.trajHoveredStatus", {
                     episode: hoveredEpisode.episodeIndex,
+                    feature: hoveredEpisode.featureKey,
                     layer: hoveredEpisode.layerLabel,
                   })}
                 </span>
@@ -482,7 +403,12 @@ export default function SpatialTrajectoryViewer({
               <>
                 <span
                   className="h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{ backgroundColor: episodeColor(focusedEpisode) }}
+                  style={{
+                    backgroundColor: episodeColor(
+                      focusedEpisode,
+                      legendLayerLabel,
+                    ),
+                  }}
                 />
                 <span className="font-medium text-slate-200">
                   {t("insights.trajFocusedStatus", {
@@ -576,10 +502,7 @@ export default function SpatialTrajectoryViewer({
                             aria-pressed={active}
                             onClick={() => toggleEpisodeFocus(episodeIndex)}
                             onPointerEnter={() =>
-                              setHoveredEpisode({
-                                episodeIndex,
-                                layerLabel: visibleLayers[0]?.label ?? "action",
-                              })
+                              handleHover(episodeIndex, visibleLayers[0])
                             }
                             onPointerLeave={() => setHoveredEpisode(null)}
                             className={`flex items-center gap-1.5 rounded px-1.5 py-1 text-left text-[10px] tabular-nums transition-colors ${
@@ -596,7 +519,10 @@ export default function SpatialTrajectoryViewer({
                             <span
                               className="h-2 w-2 shrink-0 rounded-full"
                               style={{
-                                backgroundColor: episodeColor(episodeIndex),
+                                backgroundColor: episodeColor(
+                                  episodeIndex,
+                                  legendLayerLabel,
+                                ),
                               }}
                             />
                             ep {episodeIndex}

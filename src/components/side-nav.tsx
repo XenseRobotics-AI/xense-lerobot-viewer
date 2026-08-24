@@ -98,21 +98,36 @@ const Sidebar: React.FC<SidebarProps> = ({
             return (
               <li key={episode}>
                 <div className={itemClass}>
-                  {onEpisodeSelect ? (
-                    <button
-                      onClick={() => onEpisodeSelect(episode)}
-                      className="flex-1 text-left"
-                    >
-                      {t("nav.episodeItem", { index: episode })}
-                    </button>
-                  ) : (
-                    <Link
-                      href={routePathFromRepoId(datasetInfo.repoId, episode)}
-                      className="flex-1 text-left"
-                    >
-                      {t("nav.episodeItem", { index: episode })}
-                    </Link>
-                  )}
+                  {/*
+                    Always a real link. Tabs that select in-page pass
+                    `onEpisodeSelect` and intercept the plain left-click, but
+                    the href has to stay so Cmd/middle-click still opens a new
+                    tab and "copy link address" still works.
+                  */}
+                  <Link
+                    href={routePathFromRepoId(datasetInfo.repoId, episode)}
+                    onClick={
+                      onEpisodeSelect
+                        ? (event) => {
+                            if (
+                              event.defaultPrevented ||
+                              event.button !== 0 ||
+                              event.metaKey ||
+                              event.ctrlKey ||
+                              event.shiftKey ||
+                              event.altKey
+                            ) {
+                              return;
+                            }
+                            event.preventDefault();
+                            onEpisodeSelect(episode);
+                          }
+                        : undefined
+                    }
+                    className="flex-1 text-left"
+                  >
+                    {t("nav.episodeItem", { index: episode })}
+                  </Link>
                   <button
                     onClick={() => toggle(episode)}
                     className={`text-xs leading-none transition-colors ${

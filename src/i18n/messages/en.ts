@@ -432,7 +432,7 @@ export const en = {
     "Focus the trajectory for Episode {episode}",
   "insights.trajHoverPrompt":
     "Hover a trajectory to identify it; focused lines are brighter.",
-  "insights.trajHoveredStatus": "Episode {episode} · action · {layer}",
+  "insights.trajHoveredStatus": "Episode {episode} · {feature} · {layer}",
   "insights.trajFocusedStatus": "Focused: Episode {episode}",
   "insights.trajControls":
     "Drag to rotate · Scroll to zoom · Right-drag to pan",

@@ -30,11 +30,13 @@ export function classifyUrdfReplayVideo(
   return firstSide ?? null;
 }
 
+/**
+ * Multiple head cameras sit left-to-right by their own side word, so
+ * `head_left` lands left of a plain `head` and `head_right` to its right.
+ */
 function centerOrder(filename: string): number {
-  const tokens = videoNameTokens(filename);
-  const headIndex = tokens.indexOf("head");
-  const side = tokens.find((token, index) =>
-    token === "left" || token === "right" ? index !== headIndex : false,
+  const side = videoNameTokens(filename).find(
+    (token): token is "left" | "right" => token === "left" || token === "right",
   );
   if (side === "left") return 0;
   if (side === "right") return 2;

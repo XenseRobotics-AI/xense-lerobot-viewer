@@ -8,10 +8,21 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Canvas, useThree } from "@react-three/fiber";
+import { Canvas } from "@react-three/fiber";
 import { Grid, Html, Line, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import { useT } from "@/context/locale-context";
+import {
+  AxisGuide,
+  CameraFit,
+  type ControlsHandle,
+} from "@/components/scene3d-guides";
+import {
+  niceGridStep,
+  sceneBoundsFromPointArrays,
+  toScenePoint,
+  type SceneBounds,
+} from "@/utils/scene3d";
 import { useTime } from "@/context/time-context";
 import {
   extractEpisodePoseTrajectories,
@@ -21,24 +32,6 @@ import {
   type EpisodePoseTrajectoryLocation,
   type RotationMatrix3,
 } from "@/utils/poseTrajectory3d";
-
-type Bounds = {
-  min: THREE.Vector3;
-  max: THREE.Vector3;
-  center: THREE.Vector3;
-  extent: number;
-};
-
-type ControlsHandle = React.ElementRef<typeof OrbitControls>;
-
-function toScenePoint(
-  x: number,
-  y: number,
-  z: number,
-): [number, number, number] {
-  // Dataset coordinates are x/y/z with z up. Three.js uses y up.
-  return [x, z, -y];
-}
 
 function trajectoryColor(trajectory: EpisodePoseTrajectory): string {
   const source = trajectory.source.toLowerCase();
@@ -132,6 +125,15 @@ function useFramePlaybackTime(fps: number | undefined): number {
       setFrameTime((previous) => (previous === next ? previous : next));
       return;
     }
+
+    // Re-anchor on resume: while paused the video emits no `timeupdate`, so
+    // `sourceRef.wallTime` is still the moment playback stopped. Extrapolating
+    // from it would count the whole pause as elapsed playback and jump the
+    // marker to the end of the episode until the next tick re-anchors it.
+    sourceRef.current = {
+      time: currentTimeRef.current,
+      wallTime: performance.now(),
+    };
 
     let animationFrame = 0;
     const tick = (now: number) => {
@@ -363,53 +365,10 @@ function ActiveTrajectoryLine({
   return <primitive object={resources.group} />;
 }
 
-function computeBounds(trajectories: EpisodePoseTrajectory[]): Bounds {
-  const min = new THREE.Vector3(Infinity, Infinity, Infinity);
-  const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
-
-  for (const trajectory of trajectories) {
-    for (let index = 0; index + 2 < trajectory.points.length; index += 3) {
-      min.min(
-        new THREE.Vector3(
-          ...toScenePoint(
-            trajectory.points[index],
-            trajectory.points[index + 1],
-            trajectory.points[index + 2],
-          ),
-        ),
-      );
-      max.max(
-        new THREE.Vector3(
-          ...toScenePoint(
-            trajectory.points[index],
-            trajectory.points[index + 1],
-            trajectory.points[index + 2],
-          ),
-        ),
-      );
-    }
-  }
-
-  if (!Number.isFinite(min.x)) {
-    min.set(-0.5, -0.5, -0.5);
-    max.set(0.5, 0.5, 0.5);
-  }
-
-  const center = min.clone().add(max).multiplyScalar(0.5);
-  const size = max.clone().sub(min);
-  return {
-    min,
-    max,
-    center,
-    extent: Math.max(size.x, size.y, size.z, 0.1),
-  };
-}
-
-function gridStep(extent: number): number {
-  const rough = extent / 10;
-  const power = 10 ** Math.floor(Math.log10(Math.max(rough, 1e-6)));
-  const normalized = rough / power;
-  return (normalized <= 1 ? 1 : normalized <= 2 ? 2 : 5) * power;
+function computeBounds(trajectories: EpisodePoseTrajectory[]): SceneBounds {
+  return sceneBoundsFromPointArrays(
+    trajectories.map((trajectory) => trajectory.points),
+  );
 }
 
 function PoseLine({
@@ -514,81 +473,6 @@ function PoseLine({
   );
 }
 
-function AxisGuide({ bounds }: { bounds: Bounds }) {
-  const length = bounds.extent * 0.18;
-  const origin = new THREE.Vector3(
-    bounds.min.x,
-    bounds.min.y - bounds.extent * 0.04,
-    bounds.max.z,
-  );
-  const labelClass =
-    "pointer-events-none rounded bg-slate-950/80 px-1.5 py-0.5 text-[10px] font-semibold";
-
-  return (
-    <group>
-      <Line
-        points={[origin, origin.clone().add(new THREE.Vector3(length, 0, 0))]}
-        color="#f87171"
-        lineWidth={1.5}
-      />
-      <Line
-        points={[origin, origin.clone().add(new THREE.Vector3(0, 0, -length))]}
-        color="#4ade80"
-        lineWidth={1.5}
-      />
-      <Line
-        points={[origin, origin.clone().add(new THREE.Vector3(0, length, 0))]}
-        color="#60a5fa"
-        lineWidth={1.5}
-      />
-      <Html position={[origin.x + length, origin.y, origin.z]} center>
-        <span className={`${labelClass} text-red-300`}>X</span>
-      </Html>
-      <Html position={[origin.x, origin.y, origin.z - length]} center>
-        <span className={`${labelClass} text-green-300`}>Y</span>
-      </Html>
-      <Html position={[origin.x, origin.y + length, origin.z]} center>
-        <span className={`${labelClass} text-blue-300`}>Z</span>
-      </Html>
-    </group>
-  );
-}
-
-function CameraFit({
-  bounds,
-  controlsRef,
-}: {
-  bounds: Bounds;
-  controlsRef: React.RefObject<ControlsHandle | null>;
-}) {
-  const { camera } = useThree();
-
-  useEffect(() => {
-    const perspective = camera as THREE.PerspectiveCamera;
-    const distance =
-      (bounds.extent / (2 * Math.tan((perspective.fov * Math.PI) / 360))) *
-      1.45;
-
-    // Robot/world convention for the initial view: +X points forward and +Z
-    // points up. In scene coordinates dataset Z maps to Three.js Y, so place
-    // the camera mainly behind -X, then add a small side/elevation offset to
-    // keep depth visible instead of looking exactly down the X axis.
-    perspective.up.set(0, 1, 0);
-    perspective.position.set(
-      bounds.center.x - distance * 0.9,
-      bounds.center.y + distance * 0.55,
-      bounds.center.z + distance * 0.35,
-    );
-    perspective.near = Math.max(distance / 1000, 0.001);
-    perspective.far = Math.max(distance * 20, 100);
-    perspective.updateProjectionMatrix();
-    controlsRef.current?.target.copy(bounds.center);
-    controlsRef.current?.update();
-  }, [bounds, camera, controlsRef]);
-
-  return null;
-}
-
 function PoseScene({
   trajectories,
   boundsTrajectories,
@@ -637,10 +521,10 @@ function PoseScene({
           bounds.min.y - bounds.extent * 0.05,
           bounds.center.z,
         ]}
-        cellSize={gridStep(bounds.extent)}
+        cellSize={niceGridStep(bounds.extent)}
         cellThickness={0.45}
         cellColor="#334155"
-        sectionSize={gridStep(bounds.extent) * 5}
+        sectionSize={niceGridStep(bounds.extent) * 5}
         sectionThickness={0.8}
         sectionColor="#475569"
         fadeDistance={size * 1.5}
@@ -653,7 +537,11 @@ function PoseScene({
         enableDamping
         dampingFactor={0.08}
       />
-      <CameraFit bounds={bounds} controlsRef={controlsRef} />
+      <CameraFit
+        bounds={bounds}
+        controlsRef={controlsRef}
+        offset={[-0.9, 0.55, 0.35]}
+      />
     </Canvas>
   );
 }
