@@ -115,6 +115,8 @@ describe("zh translation coverage", () => {
     "stats.bins_other",
     "subtask.frame",
     "subtask.frameOf",
+    // Coordinate-frame names are identifiers and must stay unambiguous.
+    "urdf.tacCapPoseModeTrackerShort",
   ].sort();
 
   it("keeps exactly the intended terms in English", () => {

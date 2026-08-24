@@ -21,6 +21,7 @@ import type {
   AggAlignment,
 } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import { useLocale, useT } from "@/context/locale-context";
+import SpatialTrajectoryViewer from "@/components/spatial-trajectory-viewer";
 
 const FullscreenCtx = React.createContext(false);
 const useIsFullscreen = () => React.useContext(FullscreenCtx);
@@ -1685,19 +1686,45 @@ function StateActionAlignmentSection({
 interface ActionInsightsPanelProps {
   flatChartData: Record<string, number>[];
   fps: number;
+  totalEpisodes: number;
   crossEpisodeData: CrossEpisodeVarianceData | null;
   crossEpisodeLoading: boolean;
+}
+
+function SpatialTrajectorySection({
+  data,
+  loading,
+}: {
+  data: CrossEpisodeVarianceData["spatialTrajectories"] | undefined;
+  loading: boolean;
+}) {
+  const fullscreen = useIsFullscreen();
+  return (
+    <SpatialTrajectoryViewer
+      data={data}
+      loading={loading}
+      fullscreen={fullscreen}
+    />
+  );
 }
 
 function ActionInsightsPanel({
   flatChartData,
   fps,
+  totalEpisodes,
   crossEpisodeData,
   crossEpisodeLoading,
 }: ActionInsightsPanelProps) {
   const t = useT();
   const [mode, setMode] = useState<"episode" | "dataset">("dataset");
   const showAgg = mode === "dataset" && !!crossEpisodeData;
+  // `meta/info.json` is the canonical dataset count. The statistical loader
+  // may read a smaller sample, and episode metadata can independently be
+  // incomplete; neither should change the user-facing dataset total.
+  const datasetEpisodeCount = totalEpisodes;
+  const sampledEpisodeCount = crossEpisodeData?.numEpisodes ?? 0;
+  const showSamplingNote =
+    sampledEpisodeCount > 0 && sampledEpisodeCount < datasetEpisodeCount;
 
   return (
     <div className="max-w-5xl mx-auto py-6 space-y-8">
@@ -1708,31 +1735,47 @@ function ActionInsightsPanel({
           </h2>
           <p className="text-sm text-slate-400 mt-1">{t("insights.desc")}</p>
         </div>
-        <div className="flex items-center gap-3 shrink-0">
-          <span
-            className={`text-sm ${mode === "episode" ? "text-slate-100 font-medium" : "text-slate-500"}`}
-          >
-            {t("insights.scopeEpisodeToggle")}
-          </span>
-          <button
-            onClick={() =>
-              setMode((m) => (m === "episode" ? "dataset" : "episode"))
-            }
-            className={`relative inline-flex items-center w-9 h-5 rounded-full transition-colors shrink-0 ${mode === "dataset" ? "bg-cyan-500" : "bg-white/10"}`}
-            aria-label={t("insights.scopeToggleAria")}
-          >
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <div className="flex items-center gap-3">
             <span
-              className={`inline-block w-3.5 h-3.5 bg-white rounded-full transition-transform ${mode === "dataset" ? "translate-x-[18px]" : "translate-x-[3px]"}`}
-            />
-          </button>
-          <span
-            className={`text-sm ${mode === "dataset" ? "text-slate-100 font-medium" : "text-slate-500"}`}
-          >
-            {t("insights.scopeAllToggle")}
-            {crossEpisodeData ? ` (${crossEpisodeData.numEpisodes})` : ""}
-          </span>
+              className={`text-sm ${mode === "episode" ? "text-slate-100 font-medium" : "text-slate-500"}`}
+            >
+              {t("insights.scopeEpisodeToggle")}
+            </span>
+            <button
+              onClick={() =>
+                setMode((m) => (m === "episode" ? "dataset" : "episode"))
+              }
+              className={`relative inline-flex items-center w-9 h-5 rounded-full transition-colors shrink-0 ${mode === "dataset" ? "bg-cyan-500" : "bg-white/10"}`}
+              aria-label={t("insights.scopeToggleAria")}
+            >
+              <span
+                className={`inline-block w-3.5 h-3.5 bg-white rounded-full transition-transform ${mode === "dataset" ? "translate-x-[18px]" : "translate-x-[3px]"}`}
+              />
+            </button>
+            <span
+              className={`text-sm ${mode === "dataset" ? "text-slate-100 font-medium" : "text-slate-500"}`}
+            >
+              {t("insights.scopeAllToggle")} ({datasetEpisodeCount})
+            </span>
+          </div>
+          {showSamplingNote && (
+            <span className="text-[10px] text-slate-500 tabular-nums">
+              {t("insights.scopeSamplingNote", {
+                sampled: sampledEpisodeCount,
+                total: datasetEpisodeCount,
+              })}
+            </span>
+          )}
         </div>
       </div>
+
+      <FullscreenWrapper>
+        <SpatialTrajectorySection
+          data={crossEpisodeData?.spatialTrajectories}
+          loading={crossEpisodeLoading}
+        />
+      </FullscreenWrapper>
 
       <FullscreenWrapper>
         <AutocorrelationSection

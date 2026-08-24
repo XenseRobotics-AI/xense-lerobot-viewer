@@ -13,7 +13,7 @@ This fork removes the Hugging Face Hub remote-loading path; everything reads fro
 - **Language annotations editor** (lerobot v3.1 schema): an **Annotations** tab for authoring per-episode language atoms — subtasks, plans, memory, task rephrasings, interjections, robot speech, and VQA. Draw a bounding box or click a keypoint directly on any video for grounded VQA, arrange events on a multi-track timeline, and edit each atom in an inspector. Saves to `meta/lerobot_annotations.json` inside the dataset. See [Annotating episodes](#annotating-episodes) below.
 - **Statistics, Frames, Action Insights, Filtering** panels for dataset quality inspection — flagged episodes can be exported as a ready-to-run LeRobot CLI command.
 - **Doctor**: read-only, dataset-wide diagnostics immediately after Action Insights. Its native TypeScript engine provides 13 checks over metadata, timing, actions, dimension-level continuity, optional configurable TCP linear/angular speed limits, video containers, statistics, episode consistency, training readiness, anomalies, and portability; the speed check is enabled explicitly in the Doctor panel, it needs no Python runtime, and it can send affected episode IDs into the existing flagged-episode workflow.
-- **3D URDF replay** for SO-100, SO-101, and OpenArm bimanual robots, with auto-matched joint mapping that tolerates `.pos` / `.position` / `.q` column suffixes. URDF assets load from the public Hugging Face `lerobot/robot-urdfs` bucket.
+- **3D URDF replay** for SO-100, SO-101, OpenArm, G1, and bimanual TacCap data-collection grippers. TacCap replay treats recorded poses as canonical TCP by default; the `Tracker → TCP` button applies the measured or dataset-provided extrinsic only when selected manually. It animates both finger joints, conditionally replays complete `head.xyz+r1-r6` trajectories with a self-contained schematic HMD, and labels the world axes (+X forward, +Y left, +Z up); its URDF/STL assets are bundled under `public/urdf/taccap-grippers`. Other robot assets load from the public Hugging Face `lerobot/robot-urdfs` bucket.
 - **Per-card "Open episode N" shortcut**: jump straight to a specific episode from the homepage card.
 - Supports dataset codebase versions **v2.0 / v2.1 / v3.0** (autodetected from `meta/info.json`).
 
@@ -233,7 +233,7 @@ and a token for private repos (`huggingface-cli login`).
 - Dataset-level sidecars are read/written through dedicated routes: `…/[encodedPath]/tags` (`xense_tags.json`) and `…/[encodedPath]/annotations` (`lerobot_annotations.json`).
 - The homepage discovers datasets via `src/lib/local-datasets-discovery.ts`.
 - All cloud/HF Hub loading code (OAuth, proxy, search) has been removed.
-- URDF/mesh assets for the 3D replay still load from `https://huggingface.co/buckets/lerobot/robot-urdfs/` (override with `NEXT_PUBLIC_URDF_BASE_URL`).
+- SO/OpenArm/G1 URDF assets load from `https://huggingface.co/buckets/lerobot/robot-urdfs/` (override with `NEXT_PUBLIC_URDF_BASE_URL`). TacCap gripper assets are bundled in this repository under `public/urdf/taccap-grippers`.
 
 ## Docker
 

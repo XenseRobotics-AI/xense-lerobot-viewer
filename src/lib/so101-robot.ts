@@ -19,8 +19,16 @@ export function isG1Robot(robotType: string | null): boolean {
   return lower.includes("g1") || lower.includes("unitree");
 }
 
+export function isTacCapRobot(robotType: string | null): boolean {
+  if (!robotType) return false;
+  return robotType.toLowerCase().includes("bi_taccap_gripper");
+}
+
 export function hasURDFSupport(robotType: string | null): boolean {
   return (
-    isSO101Robot(robotType) || isOpenArmRobot(robotType) || isG1Robot(robotType)
+    isSO101Robot(robotType) ||
+    isOpenArmRobot(robotType) ||
+    isG1Robot(robotType) ||
+    isTacCapRobot(robotType)
   );
 }

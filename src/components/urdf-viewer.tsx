@@ -3,12 +3,13 @@
 import React, {
   useState,
   useEffect,
+  useLayoutEffect,
   useRef,
   useMemo,
   useCallback,
 } from "react";
 import { Canvas, useThree, useFrame } from "@react-three/fiber";
-import { OrbitControls, Grid, Html, Environment } from "@react-three/drei";
+import { OrbitControls, Grid, Html, RoundedBox } from "@react-three/drei";
 import * as THREE from "three";
 import URDFLoader from "urdf-loader";
 import type { URDFRobot } from "urdf-loader";
@@ -18,12 +19,38 @@ import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import type { EpisodeData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
-import { loadEpisodeFlatChartData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import UrdfPlaybackBar from "@/components/urdf-playback-bar";
+import UrdfVideoOverlay from "@/components/urdf-video-overlay";
 import { useT } from "@/context/locale-context";
+import { isTacCapRobot } from "@/lib/so101-robot";
 import { CHART_CONFIG } from "@/utils/constants";
-import { getDatasetVersionAndInfo } from "@/utils/versionUtils";
-import type { DatasetMetadata } from "@/utils/parquetUtils";
+import {
+  extractTacCapGripperTracks,
+  extractTacCapHeadTrack,
+  sampleTacCapGripperFrame,
+  sampleTacCapHeadFrame,
+  tacCapGripperSources,
+  type TacCapGripperFrame,
+  type TacCapGripperTrack,
+  type TacCapHeadFrame,
+  type TacCapHeadTrack,
+  type TacCapSide,
+} from "@/utils/taccapGripperReplay";
+import {
+  locateEpisodePoseTrajectory,
+  type EpisodePoseTrajectory,
+} from "@/utils/poseTrajectory3d";
+import {
+  tacCapDatasetPointToScene,
+  tacCapRecordedTcpSceneMatrix,
+  tacCapRecordedTcpToRootMatrix,
+} from "@/utils/taccapGripperTransforms";
+import {
+  loadTacCapExtrinsicsMetadata,
+  resolveTacCapPoseProfile,
+  type TacCapPoseProfile,
+  type TacCapPoseSelection,
+} from "@/utils/taccapPoseSemantics";
 
 const SERIES_DELIM = CHART_CONFIG.SERIES_NAME_DELIMITER;
 const DEG2RAD = Math.PI / 180;
@@ -33,6 +60,59 @@ const DEG2RAD = Math.PI / 180;
 const stlGeometryCache = new Map<string, THREE.BufferGeometry>();
 // In-flight promise cache — prevents duplicate simultaneous fetches
 const stlGeometryLoading = new Map<string, Promise<THREE.BufferGeometry>>();
+
+function loadCachedStlGeometry(
+  url: string,
+  manager: THREE.LoadingManager,
+): Promise<THREE.BufferGeometry> {
+  // A cache hit still has to be announced to the LoadingManager. Without it,
+  // a remount with a warm cache leaves the manager tracking only the .urdf
+  // file, so `manager.onLoad` fires — and the caller clears its loading
+  // overlay — while these meshes are still pending callbacks. itemEnd is
+  // deferred a macrotask so the caller's `then` attaches the mesh first; same
+  // ordering hazard STLLoader itself has (see CLAUDE.md).
+  const releaseManagerAfterAttach = () => {
+    setTimeout(() => manager.itemEnd(url), 0);
+  };
+
+  const cached = stlGeometryCache.get(url);
+  if (cached) {
+    manager.itemStart(url);
+    releaseManagerAfterAttach();
+    return Promise.resolve(cached);
+  }
+
+  const inFlight = stlGeometryLoading.get(url);
+  if (inFlight) {
+    manager.itemStart(url);
+    return inFlight.then(
+      (geometry) => {
+        releaseManagerAfterAttach();
+        return geometry;
+      },
+      (error) => {
+        releaseManagerAfterAttach();
+        throw error;
+      },
+    );
+  }
+
+  const loading = new Promise<THREE.BufferGeometry>((resolve, reject) => {
+    new STLLoader(manager).load(url, resolve, undefined, reject);
+  }).then(
+    (geometry) => {
+      stlGeometryCache.set(url, geometry);
+      stlGeometryLoading.delete(url);
+      return geometry;
+    },
+    (error) => {
+      stlGeometryLoading.delete(url);
+      throw error;
+    },
+  );
+  stlGeometryLoading.set(url, loading);
+  return loading;
+}
 
 // URDFs + meshes are hosted in the Hub bucket at
 // https://huggingface.co/buckets/lerobot/robot-urdfs. URDFLoader resolves
@@ -45,6 +125,13 @@ const URDF_BASE_URL =
 
 function getRobotConfig(robotType: string | null) {
   const lower = (robotType ?? "").toLowerCase();
+  // Must be the *same* predicate `hasURDFSupport` uses. A looser match here
+  // hands back an empty urdfUrl for robot types whose 3D tab is hidden — or,
+  // worse, for one that is mounted through another branch, which then calls
+  // URDFLoader.load("").
+  if (isTacCapRobot(robotType)) {
+    return { urdfUrl: "", scale: 1 };
+  }
   if (lower.includes("g1") || lower.includes("unitree")) {
     return { urdfUrl: `${URDF_BASE_URL}/g1/g1_body29_hand14.urdf`, scale: 1 };
   }
@@ -209,8 +296,803 @@ const SINGLE_ARM_TIP_NAMES = [
 const DUAL_ARM_TIP_NAMES = ["openarm_left_hand_tcp", "openarm_right_hand_tcp"];
 const G1_TIP_NAMES = ["left_hand_palm_link", "right_hand_palm_link"];
 const TRAIL_DURATION = 1.0;
+const TACCAP_TRAIL_DURATION = 3.0;
+const TACCAP_TRAIL_SOLID_COLOR_DURATION = 1.0;
+const TACCAP_TRAIL_MIN_COLOR_INTENSITY = 0.35;
 const TRAIL_COLORS = [new THREE.Color("#ff6600"), new THREE.Color("#00aaff")];
 const MAX_TRAIL_POINTS = 300;
+
+const TACCAP_GRIPPER_URDF: Record<TacCapSide, string> = {
+  left: "/urdf/taccap-grippers/left/gripper.urdf",
+  right: "/urdf/taccap-grippers/right/gripper.urdf",
+};
+const TACCAP_TRAIL_COLOR: Record<TacCapSide, string> = {
+  left: "#22d3ee",
+  right: "#f472b6",
+};
+const TACCAP_HEAD_COLOR = "#facc15";
+const TACCAP_HEADSET = {
+  // Approximate physical dimensions in metres. The recorded head pose remains
+  // the model origin; no unmeasured tracker -> headset offset is introduced.
+  bodyDepth: 0.072,
+  bodyWidth: 0.19,
+  bodyHeight: 0.095,
+  rearX: -0.145,
+} as const;
+const TACCAP_LOCAL_POSE_AXES = [
+  { label: "X", direction: [1, 0, 0] as const, color: "#ef4444" },
+  { label: "Y", direction: [0, 1, 0] as const, color: "#22c55e" },
+  { label: "Z", direction: [0, 0, 1] as const, color: "#3b82f6" },
+] as const;
+const TACCAP_WORLD_AXES = [
+  {
+    label: "+X",
+    // Dataset +X is forward and remains Three.js +X.
+    direction: [1, 0, 0] as const,
+    color: "#ef4444",
+  },
+  {
+    label: "+Y",
+    // Dataset +Y is left. The Z-up → Y-up scene conversion maps it to -Z.
+    direction: [0, 0, -1] as const,
+    color: "#22c55e",
+  },
+  {
+    label: "+Z",
+    // Dataset +Z is up and therefore maps to Three.js +Y.
+    direction: [0, 1, 0] as const,
+    color: "#3b82f6",
+  },
+] as const;
+
+type SceneBounds = {
+  min: THREE.Vector3;
+  max: THREE.Vector3;
+  center: THREE.Vector3;
+  extent: number;
+};
+
+/**
+ * Build the Three.js transform whose local frame is the recorded link4 frame.
+ * Dataset coordinates use Z-up; the scene uses Y-up.
+ */
+function tacCapLink4SceneMatrix(frame: TacCapGripperFrame): THREE.Matrix4 {
+  return new THREE.Matrix4().set(
+    ...tacCapRecordedTcpSceneMatrix(frame.position, frame.rotation),
+  );
+}
+
+function applyTacCapGripperFrame(
+  robot: URDFRobot,
+  recordedTcpToRoot: THREE.Matrix4,
+  frame: TacCapGripperFrame,
+) {
+  // joint1 mimics joint2 with multiplier -1 in both supplied URDFs.
+  robot.setJointValue("joint2", -frame.opening);
+  robot.matrix.copy(tacCapLink4SceneMatrix(frame)).multiply(recordedTcpToRoot);
+  robot.matrixWorldNeedsUpdate = true;
+  robot.updateMatrixWorld(true);
+}
+
+function TacCapAxisArrow({
+  alwaysVisible = false,
+  color,
+  direction,
+  label,
+  length,
+  showLabel = true,
+}: {
+  alwaysVisible?: boolean;
+  color: string;
+  direction: readonly [number, number, number];
+  label: string;
+  length: number;
+  showLabel?: boolean;
+}) {
+  const arrow = useMemo(() => {
+    const helper = new THREE.ArrowHelper(
+      new THREE.Vector3(...direction),
+      new THREE.Vector3(),
+      length,
+      color,
+      length * 0.2,
+      length * 0.1,
+    );
+    if (alwaysVisible) {
+      helper.traverse((child) => {
+        child.renderOrder = 21;
+        if (!(child instanceof THREE.Line || child instanceof THREE.Mesh)) {
+          return;
+        }
+        const materials = Array.isArray(child.material)
+          ? child.material
+          : [child.material];
+        materials.forEach((material) => {
+          material.depthTest = false;
+          material.depthWrite = false;
+        });
+      });
+    }
+    return helper;
+  }, [alwaysVisible, color, direction, length]);
+  const labelPosition = useMemo(
+    () =>
+      new THREE.Vector3(...direction)
+        .multiplyScalar(length * 1.16)
+        .toArray() as [number, number, number],
+    [direction, length],
+  );
+
+  useEffect(
+    () => () => {
+      arrow.line.geometry.dispose();
+      arrow.cone.geometry.dispose();
+      if (Array.isArray(arrow.line.material)) {
+        arrow.line.material.forEach((material) => material.dispose());
+      } else {
+        arrow.line.material.dispose();
+      }
+      if (Array.isArray(arrow.cone.material)) {
+        arrow.cone.material.forEach((material) => material.dispose());
+      } else {
+        arrow.cone.material.dispose();
+      }
+    },
+    [arrow],
+  );
+
+  return (
+    <>
+      <primitive object={arrow} />
+      {showLabel && (
+        <Html
+          center
+          position={labelPosition}
+          style={{ pointerEvents: "none" }}
+          zIndexRange={[10, 0]}
+        >
+          <span
+            className="rounded border border-white/15 bg-slate-950/85 px-1 py-0.5 font-mono text-[9px] font-semibold leading-none shadow"
+            style={{ color }}
+          >
+            {label}
+          </span>
+        </Html>
+      )}
+    </>
+  );
+}
+
+function TacCapWorldAxes({
+  bounds,
+  groundY,
+}: {
+  bounds: SceneBounds;
+  groundY: number;
+}) {
+  const length = Math.min(0.16, Math.max(0.08, bounds.extent * 0.18));
+  // Put the reference in a stable grid corner. +X, +Y and +Z all point into
+  // the framed scene, so it stays visible without covering either gripper.
+  const origin = useMemo(
+    () =>
+      [
+        bounds.min.x + length * 0.45,
+        groundY + 0.004,
+        bounds.max.z - length * 0.45,
+      ] as [number, number, number],
+    [bounds, groundY, length],
+  );
+
+  return (
+    <group position={origin}>
+      <mesh>
+        <sphereGeometry args={[length * 0.045, 12, 8]} />
+        <meshBasicMaterial color="#e2e8f0" toneMapped={false} />
+      </mesh>
+      {TACCAP_WORLD_AXES.map((axis) => (
+        <TacCapAxisArrow key={axis.label} length={length} {...axis} />
+      ))}
+    </group>
+  );
+}
+
+function tacCapSceneBounds(
+  tracks: TacCapGripperTrack[],
+  headTrack: TacCapHeadTrack | null,
+): SceneBounds {
+  const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+  const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+  const poses = [
+    ...tracks.map((track) => track.pose),
+    ...(headTrack ? [headTrack.pose] : []),
+  ];
+  for (const pose of poses) {
+    for (let index = 0; index + 2 < pose.points.length; index += 3) {
+      const point = tacCapDatasetPointToScene([
+        pose.points[index],
+        pose.points[index + 1],
+        pose.points[index + 2],
+      ]);
+      min.min(new THREE.Vector3(...point));
+      max.max(new THREE.Vector3(...point));
+    }
+  }
+  if (!Number.isFinite(min.x)) {
+    min.set(-0.5, -0.5, -0.5);
+    max.set(0.5, 0.5, 0.5);
+  }
+  // The link4 origin sits about 16.5 cm ahead of base_link. Leave enough
+  // framing room for the model around each recorded endpoint.
+  min.addScalar(-0.2);
+  max.addScalar(0.2);
+  const center = min.clone().add(max).multiplyScalar(0.5);
+  const size = max.clone().sub(min);
+  return {
+    min,
+    max,
+    center,
+    extent: Math.max(size.x, size.y, size.z, 0.4),
+  };
+}
+
+function TacCapCameraFit({ bounds }: { bounds: SceneBounds }) {
+  const { camera, controls } = useThree();
+
+  useEffect(() => {
+    const perspective = camera as THREE.PerspectiveCamera;
+    const distance =
+      (bounds.extent / (2 * Math.tan((perspective.fov * Math.PI) / 360))) *
+      1.35;
+    // Initial robot/world convention: +X forward, +Z up. Dataset +Z is the
+    // scene's +Y, so keep camera.up on +Y and look mostly from behind -X.
+    perspective.up.set(0, 1, 0);
+    perspective.position.set(
+      bounds.center.x - distance * 0.9,
+      bounds.center.y + distance * 0.55,
+      bounds.center.z + distance * 0.35,
+    );
+    perspective.near = Math.max(distance / 1000, 0.001);
+    perspective.far = Math.max(distance * 20, 100);
+    perspective.lookAt(bounds.center);
+    perspective.updateProjectionMatrix();
+    const orbit = controls as unknown as {
+      target?: THREE.Vector3;
+      update?: () => void;
+    };
+    orbit?.target?.copy(bounds.center);
+    orbit?.update?.();
+  }, [bounds, camera, controls]);
+
+  return null;
+}
+
+function TacCapGripperModel({
+  frame,
+  side,
+  onReady,
+}: {
+  frame: TacCapGripperFrame | null;
+  side: TacCapSide;
+  onReady: (side: TacCapSide) => void;
+}) {
+  const { scene } = useThree();
+  const robotRef = useRef<URDFRobot | null>(null);
+  const recordedTcpToRootRef = useRef<THREE.Matrix4 | null>(null);
+  const frameRef = useRef<TacCapGripperFrame | null>(frame);
+  if (frame) frameRef.current = frame;
+
+  useEffect(() => {
+    let cancelled = false;
+    let mountedRobot: URDFRobot | null = null;
+    let robotLoaded = false;
+    let assetsLoaded = false;
+    let readyReported = false;
+    const manager = new THREE.LoadingManager();
+    const loader = new URDFLoader(manager);
+
+    const reportReady = () => {
+      if (cancelled || readyReported || !robotLoaded || !assetsLoaded) {
+        return;
+      }
+      readyReported = true;
+      onReady(side);
+    };
+
+    manager.onLoad = () => {
+      assetsLoaded = true;
+      reportReady();
+    };
+
+    loader.loadMeshCb = (url, meshManager, onLoad) => {
+      loadCachedStlGeometry(url, meshManager)
+        .then((geometry) => {
+          const mesh = new THREE.Mesh(geometry);
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          onLoad(mesh);
+        })
+        .catch((error) => onLoad(new THREE.Object3D(), error as Error));
+    };
+
+    loader.load(
+      TACCAP_GRIPPER_URDF[side],
+      (robot) => {
+        if (cancelled) return;
+        mountedRobot = robot;
+        robotRef.current = robot;
+        robot.matrixAutoUpdate = false;
+        robot.updateMatrixWorld(true);
+
+        const link4 = robot.links.link4;
+        if (!link4) {
+          console.error(`TacCap ${side} URDF has no link4 frame`);
+          return;
+        }
+        // Incoming frames use the canonical TCP convention. Both bundled
+        // URDFs now give link4 the same X/Y orientation, so only the measured
+        // root -> TCP translation is needed here.
+        recordedTcpToRootRef.current = new THREE.Matrix4().set(
+          ...tacCapRecordedTcpToRootMatrix(side),
+        );
+        robot.traverse((child) => {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        });
+        scene.add(robot);
+        if (frameRef.current) {
+          applyTacCapGripperFrame(
+            robot,
+            recordedTcpToRootRef.current,
+            frameRef.current,
+          );
+        } else {
+          robot.visible = false;
+        }
+        robotLoaded = true;
+        reportReady();
+      },
+      undefined,
+      (error) => {
+        if (!cancelled) {
+          console.error(`Failed to load TacCap ${side} gripper:`, error);
+        }
+      },
+    );
+
+    return () => {
+      cancelled = true;
+      const robot = mountedRobot ?? robotRef.current;
+      if (robot) scene.remove(robot);
+      if (robotRef.current === mountedRobot) robotRef.current = null;
+      recordedTcpToRootRef.current = null;
+    };
+  }, [onReady, scene, side]);
+
+  useLayoutEffect(() => {
+    const robot = robotRef.current;
+    const recordedTcpToRoot = recordedTcpToRootRef.current;
+    if (!robot || !recordedTcpToRoot) return;
+
+    robot.visible = frame !== null;
+    if (!frame) return;
+
+    applyTacCapGripperFrame(robot, recordedTcpToRoot, frame);
+  }, [frame]);
+
+  return null;
+}
+
+/**
+ * TacCap playback trail matching the original 3D Replay treatment: a 2 px
+ * Line2 whose older section brightens within the track's own colour instead
+ * of fading to black. The newest section then stays at the full track colour
+ * for a short period. TacCap keeps three seconds of history so the trail
+ * remains useful during slow motions.
+ */
+function TacCapPoseTrail({
+  alwaysVisible = false,
+  color,
+  enabled,
+  pose,
+  timeSeconds,
+}: {
+  alwaysVisible?: boolean;
+  color: string;
+  enabled: boolean;
+  pose: EpisodePoseTrajectory;
+  timeSeconds: number;
+}) {
+  const viewportSize = useThree((state) => state.size);
+  const trailColor = useMemo(() => new THREE.Color(color), [color]);
+  const scenePositions = useMemo(() => {
+    const positions = new Float32Array(pose.points.length);
+    for (let index = 0; index + 2 < pose.points.length; index += 3) {
+      const point = tacCapDatasetPointToScene([
+        pose.points[index],
+        pose.points[index + 1],
+        pose.points[index + 2],
+      ]);
+      positions[index] = point[0];
+      positions[index + 1] = point[1];
+      positions[index + 2] = point[2];
+    }
+    return positions;
+  }, [pose]);
+  const resources = useMemo(() => {
+    const material = new LineMaterial({
+      color: 0xffffff,
+      depthTest: !alwaysVisible,
+      depthWrite: false,
+      linewidth: 2,
+      transparent: true,
+      vertexColors: true,
+      worldUnits: false,
+    });
+    const line = new Line2(new LineGeometry(), material);
+    line.frustumCulled = false;
+    line.raycast = () => undefined;
+    line.renderOrder = alwaysVisible ? 20 : 2;
+    line.visible = false;
+    return { line, material };
+  }, [alwaysVisible]);
+  // This effect runs once per rendered frame per track. Scratch buffers sized
+  // to the whole trajectory are reused across frames so the hot path only
+  // writes into them — allocating a pair of Float32Arrays here (plus the
+  // Array.from copies the geometry does not need) is what made the trail the
+  // GC-heaviest thing in the scene.
+  const scratch = useRef<{ positions: Float32Array; colors: Float32Array }>({
+    positions: new Float32Array(0),
+    colors: new Float32Array(0),
+  });
+
+  useLayoutEffect(() => {
+    resources.material.resolution.set(viewportSize.width, viewportSize.height);
+  }, [resources, viewportSize.height, viewportSize.width]);
+
+  useLayoutEffect(() => {
+    if (!enabled) {
+      resources.line.visible = false;
+      return;
+    }
+    const start = locateEpisodePoseTrajectory(
+      pose,
+      Math.max(0, timeSeconds - TACCAP_TRAIL_DURATION),
+    );
+    const end = locateEpisodePoseTrajectory(pose, timeSeconds);
+    if (!start || !end) {
+      resources.line.visible = false;
+      return;
+    }
+    const startIndex = start.lowerIndex;
+    const endIndex = Math.max(startIndex, end.completedPointCount - 1);
+    const completedPointCount = endIndex - startIndex + 1;
+    const includeInterpolatedPoint =
+      end.lowerIndex !== end.upperIndex && end.alpha > 0;
+    const visiblePointCount =
+      completedPointCount + Number(includeInterpolatedPoint);
+    if (visiblePointCount < 2) {
+      resources.line.visible = false;
+      return;
+    }
+
+    const required = visiblePointCount * 3;
+    if (scratch.current.positions.length < required) {
+      scratch.current = {
+        positions: new Float32Array(required),
+        colors: new Float32Array(required),
+      };
+    }
+    const positions = scratch.current.positions.subarray(0, required);
+    const colors = scratch.current.colors.subarray(0, required);
+    for (
+      let pointIndex = 0;
+      pointIndex < completedPointCount;
+      pointIndex += 1
+    ) {
+      const sourceIndex = startIndex + pointIndex;
+      const sourceOffset = sourceIndex * 3;
+      const targetOffset = pointIndex * 3;
+      positions[targetOffset] = scenePositions[sourceOffset];
+      positions[targetOffset + 1] = scenePositions[sourceOffset + 1];
+      positions[targetOffset + 2] = scenePositions[sourceOffset + 2];
+
+      // Keep the tail in the trajectory's own hue: the older two seconds
+      // brighten from a visible same-colour tint, then the newest second
+      // remains at full colour instead of immediately entering a fade.
+      const sampleTime = pose.timestamps[sourceIndex] ?? timeSeconds;
+      const age = Math.max(0, timeSeconds - sampleTime);
+      const gradientDuration = Math.max(
+        Number.EPSILON,
+        TACCAP_TRAIL_DURATION - TACCAP_TRAIL_SOLID_COLOR_DURATION,
+      );
+      const gradientProgress = Math.max(
+        0,
+        Math.min(1, (TACCAP_TRAIL_DURATION - age) / gradientDuration),
+      );
+      const intensity =
+        TACCAP_TRAIL_MIN_COLOR_INTENSITY +
+        (1 - TACCAP_TRAIL_MIN_COLOR_INTENSITY) * gradientProgress;
+      colors[targetOffset] = trailColor.r * intensity;
+      colors[targetOffset + 1] = trailColor.g * intensity;
+      colors[targetOffset + 2] = trailColor.b * intensity;
+    }
+    if (includeInterpolatedPoint) {
+      const offset = completedPointCount * 3;
+      const point = tacCapDatasetPointToScene(end.point);
+      positions[offset] = point[0];
+      positions[offset + 1] = point[1];
+      positions[offset + 2] = point[2];
+      colors[offset] = trailColor.r;
+      colors[offset + 1] = trailColor.g;
+      colors[offset + 2] = trailColor.b;
+    }
+
+    // The *first* build has to replace the geometry: Line2's vertex-colour
+    // shader is compiled from the attributes present at that moment, so the
+    // colour attribute must exist before the material is first used. Once it
+    // does, updating the same geometry in place is enough — and avoids
+    // building and disposing a LineGeometry on every frame.
+    const current = resources.line.geometry as LineGeometry;
+    if (current.getAttribute("instanceColorStart")) {
+      current.setPositions(positions);
+      current.setColors(colors);
+    } else {
+      const geometry = new LineGeometry();
+      geometry.setPositions(positions);
+      geometry.setColors(colors);
+      current.dispose();
+      resources.line.geometry = geometry;
+    }
+    resources.line.computeLineDistances();
+    resources.line.visible = true;
+  }, [enabled, pose, resources, scenePositions, timeSeconds, trailColor]);
+
+  useEffect(
+    () => () => {
+      resources.line.geometry.dispose();
+      resources.material.dispose();
+    },
+    [resources],
+  );
+
+  return <primitive object={resources.line} />;
+}
+
+/**
+ * Lightweight, project-local HMD representation. It intentionally uses only
+ * Three.js primitives so 3D Replay never depends on another downloadable
+ * model. Local +X is the visor/front direction, +Y is left, and +Z is up.
+ */
+function TacCapHeadsetModel({ originRadius }: { originRadius: number }) {
+  const { bodyDepth, bodyHeight, bodyWidth, rearX } = TACCAP_HEADSET;
+
+  return (
+    <group>
+      {/* Main headset shell and dark front visor. */}
+      <RoundedBox
+        args={[bodyDepth, bodyWidth, bodyHeight]}
+        radius={0.016}
+        smoothness={4}
+        castShadow
+        receiveShadow
+      >
+        <meshStandardMaterial
+          color="#cbd5e1"
+          metalness={0.12}
+          roughness={0.38}
+        />
+      </RoundedBox>
+      <RoundedBox
+        args={[0.012, bodyWidth - 0.016, bodyHeight - 0.016]}
+        position={[bodyDepth / 2 + 0.004, 0, 0]}
+        radius={0.004}
+        smoothness={4}
+        castShadow
+      >
+        <meshStandardMaterial
+          color="#0f172a"
+          metalness={0.55}
+          roughness={0.2}
+        />
+      </RoundedBox>
+
+      {/* Two front tracking cameras make the forward direction unambiguous. */}
+      {([-1, 1] as const).map((side) => (
+        <group
+          key={`camera:${side}`}
+          position={[bodyDepth / 2 + 0.012, side * 0.046, -0.002]}
+          rotation={[0, 0, -Math.PI / 2]}
+        >
+          <mesh castShadow>
+            <cylinderGeometry args={[0.014, 0.014, 0.01, 24]} />
+            <meshStandardMaterial
+              color="#1e293b"
+              metalness={0.6}
+              roughness={0.2}
+            />
+          </mesh>
+          <mesh position={[0, 0.0055, 0]}>
+            <cylinderGeometry args={[0.008, 0.008, 0.002, 24]} />
+            <meshStandardMaterial
+              color="#38bdf8"
+              emissive="#075985"
+              emissiveIntensity={0.45}
+              metalness={0.25}
+              roughness={0.12}
+            />
+          </mesh>
+        </group>
+      ))}
+
+      {/* Side and rear bands indicate how the display is worn. */}
+      {([-1, 1] as const).map((side) => (
+        <RoundedBox
+          key={`side-strap:${side}`}
+          args={[0.17, 0.012, 0.022]}
+          position={[-0.065, side * (bodyWidth / 2 + 0.002), 0.004]}
+          radius={0.005}
+          smoothness={3}
+          castShadow
+        >
+          <meshStandardMaterial color="#64748b" roughness={0.72} />
+        </RoundedBox>
+      ))}
+      <RoundedBox
+        args={[0.025, bodyWidth + 0.004, 0.028]}
+        position={[rearX, 0, 0.004]}
+        radius={0.007}
+        smoothness={3}
+        castShadow
+      >
+        <meshStandardMaterial color="#475569" roughness={0.75} />
+      </RoundedBox>
+
+      {/* Preserve the exact sampled pose origin inside the schematic model. */}
+      <mesh>
+        <sphereGeometry args={[originRadius, 16, 12]} />
+        <meshBasicMaterial color={TACCAP_HEAD_COLOR} toneMapped={false} />
+      </mesh>
+    </group>
+  );
+}
+
+function TacCapHeadMarker({
+  frame,
+  size,
+}: {
+  frame: TacCapHeadFrame | null;
+  size: number;
+}) {
+  const transform = useMemo(
+    () =>
+      frame
+        ? new THREE.Matrix4().set(
+            ...tacCapRecordedTcpSceneMatrix(frame.position, frame.rotation),
+          )
+        : null,
+    [frame],
+  );
+  if (!transform) return null;
+
+  const axisLength = Math.max(size, 0.04);
+  return (
+    <group matrix={transform} matrixAutoUpdate={false}>
+      <TacCapHeadsetModel originRadius={size} />
+      {TACCAP_LOCAL_POSE_AXES.map((axis) => (
+        <TacCapAxisArrow
+          key={axis.label}
+          alwaysVisible
+          length={axisLength}
+          showLabel={false}
+          {...axis}
+        />
+      ))}
+    </group>
+  );
+}
+
+function TacCapGripperScene({
+  frames,
+  headFrame,
+  headTrack,
+  onReadyChange,
+  timeSeconds,
+  tracks,
+  trailEnabled,
+}: {
+  frames: TacCapGripperFrame[];
+  headFrame: TacCapHeadFrame | null;
+  headTrack: TacCapHeadTrack | null;
+  onReadyChange: (ready: boolean) => void;
+  timeSeconds: number;
+  tracks: TacCapGripperTrack[];
+  trailEnabled: boolean;
+}) {
+  const [readySides, setReadySides] = useState<Set<TacCapSide>>(new Set());
+  const bounds = useMemo(
+    () => tacCapSceneBounds(tracks, headTrack),
+    [headTrack, tracks],
+  );
+  const frameBySide = useMemo(
+    () => new Map(frames.map((frame) => [frame.side, frame])),
+    [frames],
+  );
+  const handleReady = useCallback((side: TacCapSide) => {
+    setReadySides((current) => {
+      if (current.has(side)) return current;
+      const next = new Set(current);
+      next.add(side);
+      return next;
+    });
+  }, []);
+  const modelSides = useMemo(
+    () => ["left", "right"] as const satisfies readonly TacCapSide[],
+    [],
+  );
+
+  useEffect(() => {
+    onReadyChange(modelSides.every((side) => readySides.has(side)));
+  }, [modelSides, onReadyChange, readySides]);
+
+  const gridSize = bounds.extent * 1.5;
+  const gridY = bounds.min.y - bounds.extent * 0.04;
+
+  return (
+    <>
+      {modelSides.map((side) => (
+        <TacCapGripperModel
+          key={side}
+          frame={frameBySide.get(side) ?? null}
+          side={side}
+          onReady={handleReady}
+        />
+      ))}
+      {tracks.map((track) => (
+        <TacCapPoseTrail
+          key={`trail:${track.side}`}
+          color={TACCAP_TRAIL_COLOR[track.side]}
+          enabled={trailEnabled}
+          pose={track.pose}
+          timeSeconds={timeSeconds}
+        />
+      ))}
+      {headTrack && (
+        <TacCapPoseTrail
+          alwaysVisible
+          color={TACCAP_HEAD_COLOR}
+          enabled={trailEnabled}
+          pose={headTrack.pose}
+          timeSeconds={timeSeconds}
+        />
+      )}
+      <TacCapHeadMarker
+        frame={headFrame}
+        size={Math.max(0.006, Math.min(0.014, bounds.extent * 0.012))}
+      />
+      <Grid
+        args={[gridSize, gridSize]}
+        position={[bounds.center.x, gridY, bounds.center.z]}
+        cellSize={Math.max(bounds.extent / 12, 0.02)}
+        cellThickness={0.5}
+        cellColor="#334155"
+        sectionSize={Math.max(bounds.extent / 3, 0.1)}
+        sectionThickness={1}
+        sectionColor="#475569"
+        fadeDistance={gridSize * 1.5}
+      />
+      <TacCapWorldAxes bounds={bounds} groundY={gridY} />
+      <mesh
+        rotation={[-Math.PI / 2, 0, 0]}
+        position={[bounds.center.x, gridY + 0.001, bounds.center.z]}
+        receiveShadow
+      >
+        <planeGeometry args={[gridSize, gridSize]} />
+        <shadowMaterial opacity={0.28} />
+      </mesh>
+      <TacCapCameraFit bounds={bounds} />
+    </>
+  );
+}
 
 // ─── Robot scene (imperative, inside Canvas) ───
 function RobotScene({
@@ -225,7 +1107,7 @@ function RobotScene({
   jointValues: Record<string, number>;
   onJointsLoaded: (names: string[]) => void;
   trailEnabled: boolean;
-  trailResetKey: number;
+  trailResetKey: string;
   scale: number;
 }) {
   const { scene, camera, controls, size } = useThree();
@@ -678,13 +1560,16 @@ function RobotScene({
 // ─── Playback ticker ───
 function PlaybackDriver({
   playing,
-  fps,
+  rowsPerSecond,
+  replayRevision,
   totalFrames,
   frameRef,
   setFrame,
 }: {
   playing: boolean;
-  fps: number;
+  /** Chart rows to advance per second — see `rowsPerSecond` in URDFViewer. */
+  rowsPerSecond: number;
+  replayRevision: number;
   totalFrames: number;
   frameRef: React.MutableRefObject<number>;
   setFrame: React.Dispatch<React.SetStateAction<number>>;
@@ -701,9 +1586,9 @@ function PlaybackDriver({
       last.current = now;
       if (dt > 0 && dt < 0.5) {
         elapsed.current += dt;
-        const fd = Math.floor(elapsed.current * fps);
+        const fd = Math.floor(elapsed.current * rowsPerSecond);
         if (fd > 0) {
-          elapsed.current -= fd / fps;
+          elapsed.current -= fd / rowsPerSecond;
           frameRef.current = (frameRef.current + fd) % totalFrames;
           setFrame(frameRef.current);
         }
@@ -713,7 +1598,7 @@ function PlaybackDriver({
     elapsed.current = 0;
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing, fps, totalFrames, frameRef, setFrame]);
+  }, [playing, rowsPerSecond, replayRevision, totalFrames, frameRef, setFrame]);
   return null;
 }
 
@@ -722,18 +1607,19 @@ function PlaybackDriver({
 // ═══════════════════════════════════════
 export default function URDFViewer({
   data,
-  repoId,
-  episodeChangerRef,
+  active,
   playToggleRef,
+  seekByRef,
 }: {
   data: EpisodeData;
-  repoId?: string | null;
-  episodeChangerRef?: React.RefObject<((ep: number) => void) | undefined>;
+  active: boolean;
   playToggleRef?: React.RefObject<(() => void) | undefined>;
+  seekByRef?: React.RefObject<((seconds: number) => void) | undefined>;
 }) {
   const t = useT();
   const { datasetInfo } = data;
   const fps = datasetInfo.fps || 30;
+  const isTacCap = isTacCapRobot(datasetInfo.robot_type);
   const robotConfig = useMemo(
     () => getRobotConfig(datasetInfo.robot_type),
     [datasetInfo.robot_type],
@@ -741,68 +1627,97 @@ export default function URDFViewer({
   const { urdfUrl, scale } = robotConfig;
   const isG1 = urdfUrl.includes("g1");
   const isOpenArm = urdfUrl.includes("openarm");
-  const datasetInfoRef = useRef<{
-    version: string;
-    info: DatasetMetadata;
+  const selectedEpisode = data.episodeId;
+  const chartData = data.flatChartData;
+
+  const [tacCapPoseSelection, setTacCapPoseSelection] =
+    useState<TacCapPoseSelection>("canonical-tcp");
+  const [tacCapMetadataState, setTacCapMetadataState] = useState<{
+    repoId: string;
+    metadata: Parameters<typeof resolveTacCapPoseProfile>[0];
   } | null>(null);
-
-  const ensureDatasetInfo = useCallback(async () => {
-    if (!repoId) return null;
-    if (datasetInfoRef.current) return datasetInfoRef.current;
-    const { version, info } = await getDatasetVersionAndInfo(repoId);
-    const payload = { version, info: info as unknown as DatasetMetadata };
-    datasetInfoRef.current = payload;
-    return payload;
-  }, [repoId]);
-
-  // Episode selection & chart data
-  const [selectedEpisode, setSelectedEpisode] = useState(data.episodeId);
-  const [chartData, setChartData] = useState(data.flatChartData);
-  const [episodeLoading, setEpisodeLoading] = useState(false);
-  const chartDataCache = useRef<Record<number, Record<string, number>[]>>({
-    [data.episodeId]: data.flatChartData,
-  });
-
-  const handleEpisodeChange = useCallback(
-    (epId: number) => {
-      setSelectedEpisode(epId);
-      setFrame(0);
-      frameRef.current = 0;
-      setPlaying(false);
-
-      if (chartDataCache.current[epId]) {
-        setChartData(chartDataCache.current[epId]);
-        return;
-      }
-
-      if (!repoId) return;
-      setEpisodeLoading(true);
-      ensureDatasetInfo()
-        .then((payload) => {
-          if (!payload) return null;
-          return loadEpisodeFlatChartData(
-            repoId,
-            payload.version,
-            payload.info,
-            epId,
-          );
-        })
-        .then((result) => {
-          if (!result) return;
-          chartDataCache.current[epId] = result;
-          setChartData(result);
-        })
-        .catch((err) => console.error("Failed to load episode:", err))
-        .finally(() => setEpisodeLoading(false));
-    },
-    [ensureDatasetInfo, repoId],
-  );
-
   useEffect(() => {
-    if (episodeChangerRef) episodeChangerRef.current = handleEpisodeChange;
-  }, [episodeChangerRef, handleEpisodeChange]);
+    if (!isTacCap) {
+      setTacCapMetadataState(null);
+      return;
+    }
+    if (tacCapPoseSelection !== "tracker-to-tcp") {
+      return;
+    }
+
+    let cancelled = false;
+    loadTacCapExtrinsicsMetadata(datasetInfo.repoId)
+      .then((metadata) => {
+        if (cancelled) return;
+        setTacCapMetadataState({
+          repoId: datasetInfo.repoId,
+          metadata,
+        });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        // Retain the recorded pose when optional metadata is malformed or
+        // temporarily unreadable. The viewport exposes a manual override.
+        console.warn(
+          "Failed to load TacCap extrinsics; measured defaults will be used if Tracker → TCP is selected",
+          error,
+        );
+        setTacCapMetadataState({
+          repoId: datasetInfo.repoId,
+          metadata: null,
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [datasetInfo.repoId, isTacCap, tacCapPoseSelection]);
+  const tacCapMetadataReady =
+    tacCapMetadataState?.repoId === datasetInfo.repoId;
+  const tacCapProfileReady =
+    !isTacCap || tacCapPoseSelection === "canonical-tcp" || tacCapMetadataReady;
+  const tacCapPoseProfile = useMemo<TacCapPoseProfile | null>(() => {
+    if (!isTacCap) return null;
+    if (tacCapPoseSelection === "canonical-tcp") {
+      return resolveTacCapPoseProfile(null, selectedEpisode, "canonical-tcp");
+    }
+    if (!tacCapMetadataReady) return null;
+    return resolveTacCapPoseProfile(
+      tacCapMetadataState.metadata,
+      selectedEpisode,
+      "tracker-to-tcp",
+    );
+  }, [
+    isTacCap,
+    selectedEpisode,
+    tacCapMetadataReady,
+    tacCapMetadataState,
+    tacCapPoseSelection,
+  ]);
+  const tacCapPoseStatus = tacCapPoseProfile
+    ? t(
+        tacCapPoseProfile.mode === "tracker-to-tcp"
+          ? "urdf.tacCapPoseCorrected"
+          : "urdf.tacCapPoseCanonical",
+      )
+    : "";
 
   const totalFrames = chartData.length;
+
+  // `chartData` is the *downsampled* row set (MAX_EPISODE_POINTS), so one row
+  // is not one 1/fps frame: a 6000-frame 30fps episode arrives as 4000 rows
+  // spanning the same 200s. Advancing rows at `fps` would run playback ~1.5x
+  // fast against the timestamps `replayTimeSeconds` reads — and the video
+  // overlay, which seeks from that value, would be dragged along. Derive the
+  // rate from the timestamps instead so driver, clock and videos share it.
+  const rowsPerSecond = useMemo(() => {
+    if (totalFrames < 2) return fps;
+    const first = chartData[0]?.timestamp;
+    const last = chartData[totalFrames - 1]?.timestamp;
+    if (typeof first !== "number" || typeof last !== "number") return fps;
+    const span = last - first;
+    if (!Number.isFinite(span) || span <= 0) return fps;
+    return (totalFrames - 1) / span;
+  }, [chartData, totalFrames, fps]);
 
   // URDF joint names
   const [urdfJointNames, setUrdfJointNames] = useState<string[]>([]);
@@ -820,11 +1735,13 @@ export default function URDFViewer({
   const groupNames = useMemo(() => Object.keys(columnGroups), [columnGroups]);
   const defaultGroup = useMemo(
     () =>
-      groupNames.find((g) => g.toLowerCase().includes("state")) ??
+      (isTacCap
+        ? groupNames.find((g) => g.toLowerCase().includes("action"))
+        : groupNames.find((g) => g.toLowerCase().includes("state"))) ??
       groupNames.find((g) => g.toLowerCase().includes("action")) ??
       groupNames[0] ??
       "",
-    [groupNames],
+    [groupNames, isTacCap],
   );
 
   const [selectedGroup, setSelectedGroup] = useState(defaultGroup);
@@ -832,6 +1749,25 @@ export default function URDFViewer({
   const selectedColumns = useMemo(
     () => columnGroups[selectedGroup] ?? [],
     [columnGroups, selectedGroup],
+  );
+  const tacCapSources = useMemo(
+    () => (isTacCap ? tacCapGripperSources(chartData) : []),
+    [chartData, isTacCap],
+  );
+  const tacCapTracks = useMemo(
+    () =>
+      isTacCap && tacCapPoseProfile
+        ? extractTacCapGripperTracks(
+            chartData,
+            selectedGroup,
+            tacCapPoseProfile,
+          )
+        : [],
+    [chartData, isTacCap, selectedGroup, tacCapPoseProfile],
+  );
+  const tacCapHeadTrack = useMemo(
+    () => (isTacCap ? extractTacCapHeadTrack(chartData, selectedGroup) : null),
+    [chartData, isTacCap, selectedGroup],
   );
 
   // Joint mapping
@@ -849,7 +1785,20 @@ export default function URDFViewer({
   // Playback
   const [frame, setFrame] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [replayRevision, setReplayRevision] = useState(0);
+  const [tacCapModelsReady, setTacCapModelsReady] = useState(false);
   const frameRef = useRef(0);
+
+  useEffect(() => {
+    setFrame(0);
+    frameRef.current = 0;
+    setPlaying(false);
+    setReplayRevision(0);
+  }, [selectedEpisode]);
+
+  useEffect(() => {
+    if (!active) setPlaying(false);
+  }, [active]);
 
   const handleFrameChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -860,26 +1809,111 @@ export default function URDFViewer({
     [],
   );
 
-  // URDF meshes download async from the Hub bucket. Until joints are reported
-  // back from URDFLoader, playback/scrub inputs would drive an empty scene, so
-  // we gate interactions (and pause if already playing).
-  const urdfLoading = urdfJointNames.length === 0;
+  const replayTimeSeconds =
+    chartData[Math.min(frame, Math.max(totalFrames - 1, 0))]?.timestamp ??
+    frame / rowsPerSecond;
+  const tacCapFrames = useMemo(
+    () =>
+      tacCapTracks.flatMap((track) => {
+        const sampled = sampleTacCapGripperFrame(track, replayTimeSeconds);
+        return sampled ? [sampled] : [];
+      }),
+    [replayTimeSeconds, tacCapTracks],
+  );
+  const tacCapHeadFrame = useMemo(
+    () =>
+      tacCapHeadTrack
+        ? sampleTacCapHeadFrame(tacCapHeadTrack, replayTimeSeconds)
+        : null,
+    [replayTimeSeconds, tacCapHeadTrack],
+  );
+  const tacCapDataUnavailable =
+    isTacCap && tacCapProfileReady && tacCapTracks.length === 0;
+  const trajectoryUnavailable = totalFrames === 0 || tacCapDataUnavailable;
+
+  // URDF meshes load asynchronously. Generic robots report their joints when
+  // ready; the TacCap scene reports once every required left/right model and
+  // mesh has loaded from the project-local public assets.
+  const urdfLoading = isTacCap
+    ? !tacCapProfileReady || (!tacCapDataUnavailable && !tacCapModelsReady)
+    : urdfJointNames.length === 0;
+  const playbackDisabled = !active || urdfLoading || trajectoryUnavailable;
 
   useEffect(() => {
-    if (urdfLoading) setPlaying(false);
-  }, [urdfLoading]);
+    if (playbackDisabled) setPlaying(false);
+  }, [playbackDisabled]);
 
   const handlePlayPause = useCallback(() => {
-    if (urdfLoading) return;
+    if (playbackDisabled) return;
     setPlaying((prev) => {
       if (!prev) frameRef.current = frame;
       return !prev;
     });
-  }, [frame, urdfLoading]);
+  }, [frame, playbackDisabled]);
+
+  const handleReplay = useCallback(() => {
+    if (playbackDisabled) return;
+    frameRef.current = 0;
+    setFrame(0);
+    setReplayRevision((revision) => revision + 1);
+  }, [playbackDisabled]);
+
+  const handleSeekBy = useCallback(
+    (seconds: number) => {
+      if (playbackDisabled || totalFrames === 0) return;
+      const targetTime = Math.max(0, replayTimeSeconds + seconds);
+      let targetFrame: number;
+      if (chartData.length > 0) {
+        // Locate the closest sampled dataset frame so 3D poses and videos
+        // remain on the same episode timestamp after a keyboard seek.
+        let low = 0;
+        let high = chartData.length - 1;
+        while (low < high) {
+          const middle = Math.floor((low + high) / 2);
+          if (
+            (chartData[middle]?.timestamp ?? middle / rowsPerSecond) <
+            targetTime
+          ) {
+            low = middle + 1;
+          } else {
+            high = middle;
+          }
+        }
+        const upper = low;
+        const lower = Math.max(0, upper - 1);
+        const upperTime = chartData[upper]?.timestamp ?? upper / rowsPerSecond;
+        const lowerTime = chartData[lower]?.timestamp ?? lower / rowsPerSecond;
+        targetFrame =
+          Math.abs(targetTime - lowerTime) <= Math.abs(upperTime - targetTime)
+            ? lower
+            : upper;
+      } else {
+        targetFrame = Math.round(targetTime * rowsPerSecond);
+      }
+      targetFrame = Math.max(0, Math.min(totalFrames - 1, targetFrame));
+      frameRef.current = targetFrame;
+      setFrame(targetFrame);
+      // Treat keyboard/button jumps like Episodes external seeks: force each
+      // video to the exact target and clear trails that would otherwise draw
+      // a false line across the skipped five-second interval.
+      setReplayRevision((revision) => revision + 1);
+    },
+    [
+      chartData,
+      playbackDisabled,
+      replayTimeSeconds,
+      rowsPerSecond,
+      totalFrames,
+    ],
+  );
 
   useEffect(() => {
     if (playToggleRef) playToggleRef.current = handlePlayPause;
   }, [playToggleRef, handlePlayPause]);
+
+  useEffect(() => {
+    if (seekByRef) seekByRef.current = handleSeekBy;
+  }, [handleSeekBy, seekByRef]);
 
   // Filter out mimic joints (finger_joint2) from the UI list
   const displayJointNames = useMemo(
@@ -953,29 +1987,66 @@ export default function URDFViewer({
     return values;
   }, [chartData, frame, gripperRanges, mapping, totalFrames, urdfJointNames]);
 
-  if (data.flatChartData.length === 0) {
-    return (
-      <div className="text-slate-400 p-8 text-center">
-        {t("urdf.noTrajectory")}
-      </div>
-    );
-  }
-
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* 3D Viewport */}
       <div className="flex-1 min-h-0 bg-[var(--surface-0)] rounded-lg overflow-hidden border border-white/10 relative">
-        {(episodeLoading || urdfLoading) && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--bg)]/80">
+        {isTacCap && !tacCapDataUnavailable && (
+          <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded border border-white/10 bg-slate-950/75 px-2 py-1 font-mono text-[10px] shadow backdrop-blur-sm">
+            <span className="text-red-400">X · {t("urdf.axisForward")}</span>
+            <span className="text-green-400">Y · {t("urdf.axisLeft")}</span>
+            <span className="text-blue-400">Z · {t("urdf.axisUp")}</span>
+          </div>
+        )}
+        {isTacCap && (
+          <div className="absolute bottom-3 right-3 z-20 rounded border border-white/10 bg-slate-950/85 px-2 py-1.5 font-mono text-[10px] shadow backdrop-blur-sm">
+            <div className="flex items-center gap-2 text-slate-300">
+              <span>{t("urdf.tacCapPoseMode")}</span>
+              <div
+                className="flex overflow-hidden rounded border border-white/10 bg-slate-900"
+                role="group"
+                aria-label={t("urdf.tacCapPoseMode")}
+                title={t("urdf.tacCapPoseModeHelp")}
+              >
+                {(
+                  [
+                    ["canonical-tcp", "urdf.tacCapPoseModeTcpShort"],
+                    ["tracker-to-tcp", "urdf.tacCapPoseModeTrackerShort"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={tacCapPoseSelection === value}
+                    onClick={() => setTacCapPoseSelection(value)}
+                    className={`border-l border-white/10 px-2 py-1 first:border-l-0 transition-colors ${
+                      tacCapPoseSelection === value
+                        ? "bg-cyan-500 text-white"
+                        : "text-slate-300 hover:bg-white/10"
+                    }`}
+                  >
+                    {t(label)}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {tacCapPoseStatus && (
+              <div className="mt-1 text-right text-slate-400">
+                {tacCapPoseStatus}
+              </div>
+            )}
+          </div>
+        )}
+        {urdfLoading && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center bg-[var(--bg)]/80">
             <span className="text-white text-lg animate-pulse">
-              {urdfLoading
-                ? t("urdf.loadingModel")
-                : t("urdf.loadingEpisode", { index: selectedEpisode })}
+              {t("urdf.loadingModel")}
             </span>
           </div>
         )}
         <Canvas
           shadows
+          frameloop={active ? "always" : "never"}
           camera={{
             position: isG1
               ? [1.5, 1.0, 1.5]
@@ -992,8 +2063,12 @@ export default function URDFViewer({
           }}
         >
           <color attach="background" args={["#1a2433"]} />
-          {/* IBL: PMREM studio env gives mesh highlights somewhere to bounce */}
-          <Environment preset="studio" background={false} />
+          {/*
+           * Keep the lighting self-contained. Drei's `Environment preset`
+           * presets download an external HDRI at runtime, which is not
+           * reachable in many localhost/intranet deployments and would make
+           * the whole Canvas throw before the replay can render.
+           */}
           {/* 3-point studio rig — key is the only shadow caster */}
           <ambientLight intensity={0.12} />
           <directionalLight
@@ -1021,46 +2096,77 @@ export default function URDFViewer({
             position={[0, 3, -4]}
             intensity={0.4}
           />
-          {/* Ground-shadow catcher — invisible plane receives key-light shadow */}
-          <mesh
-            rotation={[-Math.PI / 2, 0, 0]}
-            position={[0, 0.001, 0]}
-            receiveShadow
-          >
-            <planeGeometry args={[10, 10]} />
-            <shadowMaterial opacity={0.35} />
-          </mesh>
-          <RobotScene
-            urdfUrl={urdfUrl}
-            jointValues={jointValues}
-            onJointsLoaded={onJointsLoaded}
-            trailEnabled={trailEnabled}
-            trailResetKey={selectedEpisode}
-            scale={scale}
-          />
-          <Grid
-            args={[10, 10]}
-            cellSize={isG1 ? 0.5 : 0.2}
-            cellThickness={0.5}
-            cellColor="#334155"
-            sectionSize={isG1 ? 2 : 1}
-            sectionThickness={1}
-            sectionColor="#475569"
-            fadeDistance={isG1 ? 20 : 10}
-            position={[0, 0, 0]}
-          />
+          {isTacCap && tacCapProfileReady ? (
+            <TacCapGripperScene
+              frames={tacCapFrames}
+              headFrame={tacCapHeadFrame}
+              headTrack={tacCapHeadTrack}
+              onReadyChange={setTacCapModelsReady}
+              timeSeconds={replayTimeSeconds}
+              tracks={tacCapTracks}
+              trailEnabled={trailEnabled}
+            />
+          ) : !isTacCap ? (
+            <>
+              {/* Ground-shadow catcher — invisible plane receives key-light shadow */}
+              <mesh
+                rotation={[-Math.PI / 2, 0, 0]}
+                position={[0, 0.001, 0]}
+                receiveShadow
+              >
+                <planeGeometry args={[10, 10]} />
+                <shadowMaterial opacity={0.35} />
+              </mesh>
+              <RobotScene
+                urdfUrl={urdfUrl}
+                jointValues={jointValues}
+                onJointsLoaded={onJointsLoaded}
+                trailEnabled={trailEnabled}
+                trailResetKey={`${selectedEpisode}:${replayRevision}`}
+                scale={scale}
+              />
+              <Grid
+                args={[10, 10]}
+                cellSize={isG1 ? 0.5 : 0.2}
+                cellThickness={0.5}
+                cellColor="#334155"
+                sectionSize={isG1 ? 2 : 1}
+                sectionThickness={1}
+                sectionColor="#475569"
+                fadeDistance={isG1 ? 20 : 10}
+                position={[0, 0, 0]}
+              />
+            </>
+          ) : null}
           <OrbitControls
             makeDefault
-            target={isG1 ? [0, 0.5, 0] : [0, 0.8, 0]}
+            target={isTacCap ? [0, 0, 0] : isG1 ? [0, 0.5, 0] : [0, 0.8, 0]}
           />
           <PlaybackDriver
             playing={playing}
-            fps={fps}
+            rowsPerSecond={rowsPerSecond}
+            replayRevision={replayRevision}
             totalFrames={totalFrames}
             frameRef={frameRef}
             setFrame={setFrame}
           />
         </Canvas>
+        <UrdfVideoOverlay
+          active={active}
+          episodeTimeSeconds={replayTimeSeconds}
+          playing={playing}
+          replayRevision={replayRevision}
+          videos={data.videosInfo}
+        />
+        {trajectoryUnavailable && (
+          <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg)]/75 px-6 text-center text-sm text-amber-300">
+            {t(
+              isTacCap && tacCapDataUnavailable
+                ? "urdf.tacCapNoPose"
+                : "urdf.noTrajectory",
+            )}
+          </div>
+        )}
       </div>
 
       {/* Controls */}
@@ -1068,17 +2174,21 @@ export default function URDFViewer({
         <UrdfPlaybackBar
           frame={frame}
           totalFrames={totalFrames}
-          fps={fps}
+          rowsPerSecond={rowsPerSecond}
           playing={playing}
+          onBackward={() => handleSeekBy(-5)}
+          onForward={() => handleSeekBy(5)}
           onPlayPause={handlePlayPause}
+          onReplay={handleReplay}
           trailEnabled={trailEnabled}
           onTrailToggle={() => setTrailEnabled((v) => !v)}
           onFrameChange={handleFrameChange}
-          disabled={urdfLoading}
+          disabled={playbackDisabled}
         />
 
         {/* Collapsible joint mapping */}
         <button
+          type="button"
           onClick={() => setShowMapping((v) => !v)}
           className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors"
         >
@@ -1087,12 +2197,17 @@ export default function URDFViewer({
           >
             ▶
           </span>
-          {t("urdf.jointMapping")}
+          {isTacCap ? t("urdf.tacCapMapping") : t("urdf.jointMapping")}
           <span className="text-slate-600">
-            {t("urdf.mapped", {
-              mapped: Object.keys(mapping).filter((k) => mapping[k]).length,
-              total: displayJointNames.length,
-            })}
+            {isTacCap
+              ? t("urdf.tacCapMapped", {
+                  mapped: tacCapTracks.length,
+                  total: 2,
+                })
+              : t("urdf.mapped", {
+                  mapped: Object.keys(mapping).filter((k) => mapping[k]).length,
+                  total: displayJointNames.length,
+                })}
           </span>
         </button>
 
@@ -1103,9 +2218,10 @@ export default function URDFViewer({
                 {t("urdf.dataSource")}
               </label>
               <div className="flex gap-1 flex-wrap">
-                {groupNames.map((name) => (
+                {(isTacCap ? tacCapSources : groupNames).map((name) => (
                   <button
                     key={name}
+                    type="button"
                     onClick={() => setSelectedGroup(name)}
                     className={`px-2 py-1 text-xs rounded transition-colors ${
                       selectedGroup === name
@@ -1119,61 +2235,132 @@ export default function URDFViewer({
               </div>
             </div>
 
-            <div className="flex-1 overflow-x-auto max-h-48 overflow-y-auto">
-              <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-[var(--surface-1)]">
-                  <tr className="text-slate-500">
-                    <th className="text-left font-normal px-1">
-                      {t("urdf.thJoint")}
-                    </th>
-                    <th className="text-left font-normal px-1">→</th>
-                    <th className="text-left font-normal px-1">
-                      {t("urdf.thColumn")}
-                    </th>
-                    <th className="text-right font-normal px-1">
-                      {t("urdf.thValue")}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayJointNames.map((jointName) => (
-                    <tr key={jointName} className="border-t border-white/10/50">
-                      <td className="px-1 py-0.5 text-slate-300 font-mono">
-                        {jointName}
-                      </td>
-                      <td className="px-1 text-slate-600">→</td>
-                      <td className="px-1 py-0.5">
-                        <select
-                          value={mapping[jointName] ?? ""}
-                          onChange={(e) =>
-                            setMapping((m) => ({
-                              ...m,
-                              [jointName]: e.target.value,
-                            }))
-                          }
-                          className="bg-[var(--surface-0)] text-slate-200 text-xs rounded px-1 py-0.5 border border-white/10 w-full max-w-[200px]"
-                        >
-                          <option value="">{t("urdf.unmapped")}</option>
-                          {selectedColumns.map((col) => {
-                            const label = col.split(SERIES_DELIM).pop() ?? col;
-                            return (
-                              <option key={col} value={col}>
-                                {label}
-                              </option>
-                            );
-                          })}
-                        </select>
-                      </td>
-                      <td className="px-1 py-0.5 text-right tabular-nums text-slate-400 font-mono">
-                        {jointValues[jointName] !== undefined
-                          ? jointValues[jointName].toFixed(3)
-                          : "—"}
-                      </td>
+            {isTacCap ? (
+              <div className="flex-1 overflow-x-auto max-h-48 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-[var(--surface-1)]">
+                    <tr className="text-slate-500">
+                      <th className="px-1 text-left font-normal">
+                        {t("urdf.tacCapSide")}
+                      </th>
+                      <th className="px-1 text-left font-normal">
+                        {t("urdf.tacCapPose")}
+                      </th>
+                      <th className="px-1 text-left font-normal">
+                        {t("urdf.tacCapGripper")}
+                      </th>
+                      <th className="px-1 text-right font-normal">
+                        {t("urdf.tacCapOpening")}
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {tacCapTracks.map((track) => {
+                      const current = tacCapFrames.find(
+                        (value) => value.side === track.side,
+                      );
+                      return (
+                        <tr
+                          key={track.side}
+                          className="border-t border-white/10/50"
+                        >
+                          <td className="px-1 py-0.5 text-slate-300">
+                            {track.side}
+                          </td>
+                          <td className="px-1 py-0.5 font-mono text-slate-400">
+                            {track.source} · {track.pose.label} → TCP
+                          </td>
+                          <td className="px-1 py-0.5 font-mono text-slate-400">
+                            {track.gripperKey ?? "—"}
+                          </td>
+                          <td className="px-1 py-0.5 text-right font-mono tabular-nums text-slate-400">
+                            {current ? current.opening.toFixed(3) : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {tacCapHeadTrack && (
+                      <tr className="border-t border-white/10/50">
+                        <td className="px-1 py-0.5 text-yellow-300">head</td>
+                        <td className="px-1 py-0.5 font-mono text-slate-400">
+                          {tacCapHeadTrack.source} ·{" "}
+                          {tacCapHeadTrack.pose.label}
+                        </td>
+                        <td className="px-1 py-0.5 font-mono text-slate-600">
+                          —
+                        </td>
+                        <td className="px-1 py-0.5 text-right font-mono text-slate-600">
+                          —
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+                <p className="mt-2 text-[11px] text-slate-500">
+                  {t("urdf.tacCapLink4Note")}
+                </p>
+              </div>
+            ) : (
+              <div className="flex-1 overflow-x-auto max-h-48 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-[var(--surface-1)]">
+                    <tr className="text-slate-500">
+                      <th className="text-left font-normal px-1">
+                        {t("urdf.thJoint")}
+                      </th>
+                      <th className="text-left font-normal px-1">→</th>
+                      <th className="text-left font-normal px-1">
+                        {t("urdf.thColumn")}
+                      </th>
+                      <th className="text-right font-normal px-1">
+                        {t("urdf.thValue")}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayJointNames.map((jointName) => (
+                      <tr
+                        key={jointName}
+                        className="border-t border-white/10/50"
+                      >
+                        <td className="px-1 py-0.5 text-slate-300 font-mono">
+                          {jointName}
+                        </td>
+                        <td className="px-1 text-slate-600">→</td>
+                        <td className="px-1 py-0.5">
+                          <select
+                            value={mapping[jointName] ?? ""}
+                            onChange={(e) =>
+                              setMapping((m) => ({
+                                ...m,
+                                [jointName]: e.target.value,
+                              }))
+                            }
+                            className="bg-[var(--surface-0)] text-slate-200 text-xs rounded px-1 py-0.5 border border-white/10 w-full max-w-[200px]"
+                          >
+                            <option value="">{t("urdf.unmapped")}</option>
+                            {selectedColumns.map((col) => {
+                              const label =
+                                col.split(SERIES_DELIM).pop() ?? col;
+                              return (
+                                <option key={col} value={col}>
+                                  {label}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </td>
+                        <td className="px-1 py-0.5 text-right tabular-nums text-slate-400 font-mono">
+                          {jointValues[jointName] !== undefined
+                            ? jointValues[jointName].toFixed(3)
+                            : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
       </div>

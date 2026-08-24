@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildEpisodeChartTimestamps,
   computeColumnMinMax,
   isChartableNumericFeature,
 } from "@/app/[org]/[dataset]/[episode]/fetch-data";
@@ -32,6 +33,32 @@ describe("isChartableNumericFeature", () => {
         shape: [1, 72],
       }),
     ).toBe(false);
+  });
+});
+
+describe("buildEpisodeChartTimestamps", () => {
+  test("preserves authoritative parquet frame times as episode-local time", () => {
+    const timestamps = buildEpisodeChartTimestamps(
+      [
+        { timestamp: 528.8666666666667 },
+        { timestamp: 528.9 },
+        { timestamp: 528.9333333333334 },
+      ],
+      30,
+    );
+
+    expect(timestamps[0]).toBe(0);
+    expect(timestamps[1]).toBeCloseTo(1 / 30, 8);
+    expect(timestamps[2]).toBeCloseTo(2 / 30, 8);
+  });
+
+  test("falls back to FPS when parquet timestamps cannot identify frames", () => {
+    expect(
+      buildEpisodeChartTimestamps(
+        [{ timestamp: 0 }, { timestamp: 0 }, { timestamp: 0 }],
+        30,
+      ),
+    ).toEqual([0, 1 / 30, 2 / 30]);
   });
 });
 

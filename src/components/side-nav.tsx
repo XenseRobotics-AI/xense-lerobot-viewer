@@ -97,51 +97,51 @@ const Sidebar: React.FC<SidebarProps> = ({
             }`;
             return (
               <li key={episode}>
-                {onEpisodeSelect ? (
-                  <div className={itemClass}>
-                    <button
-                      onClick={() => onEpisodeSelect(episode)}
-                      className="flex-1 text-left"
-                    >
-                      {t("nav.episodeItem", { index: episode })}
-                    </button>
-                    <button
-                      onClick={() => toggle(episode)}
-                      className={`text-xs leading-none transition-colors ${
-                        flagged.has(episode)
-                          ? "text-orange-400 hover:text-orange-300"
-                          : "text-slate-600 hover:text-slate-400 opacity-0 group-hover:opacity-100"
-                      }`}
-                      title={
-                        flagged.has(episode) ? t("nav.unflag") : t("nav.flag")
-                      }
-                    >
-                      ⚑
-                    </button>
-                  </div>
-                ) : (
-                  <div className={itemClass}>
-                    <Link
-                      href={routePathFromRepoId(datasetInfo.repoId, episode)}
-                      className="flex-1 text-left"
-                    >
-                      {t("nav.episodeItem", { index: episode })}
-                    </Link>
-                    <button
-                      onClick={() => toggle(episode)}
-                      className={`text-xs leading-none transition-colors ${
-                        flagged.has(episode)
-                          ? "text-orange-400 hover:text-orange-300"
-                          : "text-slate-600 hover:text-slate-400 opacity-0 group-hover:opacity-100"
-                      }`}
-                      title={
-                        flagged.has(episode) ? t("nav.unflag") : t("nav.flag")
-                      }
-                    >
-                      ⚑
-                    </button>
-                  </div>
-                )}
+                <div className={itemClass}>
+                  {/*
+                    Always a real link. Tabs that select in-page pass
+                    `onEpisodeSelect` and intercept the plain left-click, but
+                    the href has to stay so Cmd/middle-click still opens a new
+                    tab and "copy link address" still works.
+                  */}
+                  <Link
+                    href={routePathFromRepoId(datasetInfo.repoId, episode)}
+                    onClick={
+                      onEpisodeSelect
+                        ? (event) => {
+                            if (
+                              event.defaultPrevented ||
+                              event.button !== 0 ||
+                              event.metaKey ||
+                              event.ctrlKey ||
+                              event.shiftKey ||
+                              event.altKey
+                            ) {
+                              return;
+                            }
+                            event.preventDefault();
+                            onEpisodeSelect(episode);
+                          }
+                        : undefined
+                    }
+                    className="flex-1 text-left"
+                  >
+                    {t("nav.episodeItem", { index: episode })}
+                  </Link>
+                  <button
+                    onClick={() => toggle(episode)}
+                    className={`text-xs leading-none transition-colors ${
+                      flagged.has(episode)
+                        ? "text-orange-400 hover:text-orange-300"
+                        : "text-slate-600 hover:text-slate-400 opacity-0 group-hover:opacity-100"
+                    }`}
+                    title={
+                      flagged.has(episode) ? t("nav.unflag") : t("nav.flag")
+                    }
+                  >
+                    ⚑
+                  </button>
+                </div>
               </li>
             );
           })}

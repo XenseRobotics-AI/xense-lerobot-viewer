@@ -19,18 +19,28 @@ import {
   ReferenceLine,
 } from "recharts";
 import { useT } from "@/context/locale-context";
+import { hasEpisodePoseTrajectories } from "@/utils/poseTrajectory3d";
+import { CHART_CONFIG } from "@/utils/constants";
+
+const EpisodePose3DViewer = React.lazy(
+  () => import("@/components/episode-pose-3d-viewer"),
+);
 
 type ChartRow = Record<string, number | Record<string, number>>;
 
 type DataGraphProps = {
   data: ChartRow[][];
   velocityData?: ChartRow[][];
+  /** Flat sampled rows retain the original `source | pose.axis` keys. */
+  flatData?: Record<string, number>[];
+  /** Dataset capture rate used to advance the 3D playback marker by frame. */
+  fps?: number;
   onChartsReady?: () => void;
 };
 
-type EpisodeGraphMode = "position" | "velocity";
+type EpisodeGraphMode = "position" | "velocity" | "threeD";
 
-const SERIES_NAME_DELIMITER = " | ";
+const SERIES_NAME_DELIMITER = CHART_CONFIG.SERIES_NAME_DELIMITER;
 
 const CHART_COLORS = [
   "#f97316",
@@ -98,12 +108,22 @@ function mergeGroups(data: ChartRow[][]): ChartRow[] {
 }
 
 export const DataRecharts = React.memo(
-  ({ data, velocityData = [], onChartsReady }: DataGraphProps) => {
+  ({
+    data,
+    velocityData = [],
+    flatData = [],
+    fps,
+    onChartsReady,
+  }: DataGraphProps) => {
     const t = useT();
     const [hoveredTime, setHoveredTime] = useState<number | null>(null);
     const [expanded, setExpanded] = useState(false);
     const [mode, setMode] = useState<EpisodeGraphMode>("position");
     const hasVelocityData = velocityData.length > 0;
+    const hasThreeDData = useMemo(
+      () => flatData.length > 0 && hasEpisodePoseTrajectories(flatData),
+      [flatData],
+    );
     const activeData = mode === "velocity" ? velocityData : data;
 
     useEffect(() => {
@@ -112,7 +132,8 @@ export const DataRecharts = React.memo(
 
     useEffect(() => {
       if (mode === "velocity" && !hasVelocityData) setMode("position");
-    }, [hasVelocityData, mode]);
+      if (mode === "threeD" && !hasThreeDData) setMode("position");
+    }, [hasThreeDData, hasVelocityData, mode]);
 
     const combinedData = useMemo(
       () => (expanded ? mergeGroups(activeData) : []),
@@ -123,6 +144,7 @@ export const DataRecharts = React.memo(
 
     const selectMode = (nextMode: EpisodeGraphMode) => {
       if (nextMode === "velocity" && !hasVelocityData) return;
+      if (nextMode === "threeD" && !hasThreeDData) return;
       setMode(nextMode);
       setExpanded(false);
       setHoveredTime(null);
@@ -136,9 +158,11 @@ export const DataRecharts = React.memo(
             role="tablist"
             aria-label={t("chart.aria")}
           >
-            {(["position", "velocity"] as const).map((option) => {
+            {(["position", "velocity", "threeD"] as const).map((option) => {
               const active = mode === option;
-              const disabled = option === "velocity" && !hasVelocityData;
+              const disabled =
+                (option === "velocity" && !hasVelocityData) ||
+                (option === "threeD" && !hasThreeDData);
               return (
                 <button
                   key={option}
@@ -156,13 +180,15 @@ export const DataRecharts = React.memo(
                 >
                   {option === "position"
                     ? t("chart.position")
-                    : t("chart.velocity")}
+                    : option === "velocity"
+                      ? t("chart.velocity")
+                      : t("chart.threeD")}
                 </button>
               );
             })}
           </div>
 
-          {activeData.length > 1 && (
+          {mode !== "threeD" && activeData.length > 1 && (
             <button
               type="button"
               onClick={() => setExpanded((v) => !v)}
@@ -204,7 +230,17 @@ export const DataRecharts = React.memo(
           )}
         </div>
 
-        {expanded ? (
+        {mode === "threeD" ? (
+          <React.Suspense
+            fallback={
+              <div className="flex h-40 items-center justify-center rounded-lg border border-white/10 bg-[var(--surface-1)]/40 text-sm text-slate-500">
+                {t("chart.threeDLoading")}
+              </div>
+            }
+          >
+            <EpisodePose3DViewer rows={flatData} fps={fps} />
+          </React.Suspense>
+        ) : expanded ? (
           <SingleDataGraph
             data={combinedData}
             hoveredTime={hoveredTime}

@@ -1,8 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useEffect, useRef, lazy, Suspense } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  lazy,
+  Suspense,
+} from "react";
+import { useSearchParams } from "next/navigation";
 import { SimpleVideosPlayer } from "@/components/simple-videos-player";
 import PlaybackBar from "@/components/playback-bar";
 import { TimeProvider, useTime } from "@/context/time-context";
@@ -40,6 +47,7 @@ import {
   getDisplayNameForRepoId,
   getLocalDatasetPath,
   repoIdFromRouteParams,
+  routePathFromRepoId,
 } from "@/utils/datasetRoute";
 import { type DatasetTags, EMPTY_TAGS } from "@/lib/dataset-tags";
 import DatasetTagsEditor from "@/components/dataset-tags-editor";
@@ -58,20 +66,32 @@ const ParquetTablePanel = lazy(
 // videos start downloading in parallel with the chart bundle.
 const DataRecharts = lazy(() => import("@/components/data-recharts"));
 
-/** Skip global playback / navigation shortcuts while typing in a field. */
+/** Skip every global shortcut while typing in a field. */
 function isKeyboardFocusInsideTextEntry(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable || target.closest('[contenteditable="true"]')) {
     return true;
   }
   const tag = target.tagName;
-  return (
-    tag === "TEXTAREA" ||
-    tag === "SELECT" ||
-    tag === "INPUT" ||
-    tag === "BUTTON" ||
-    (tag === "A" && target.hasAttribute("href"))
-  );
+  // The playback slider is an <input>, but it is *the* thing the shortcuts
+  // drive — keep them global while it has focus so clicking the scrubber
+  // doesn't disable Space/arrows.
+  if (tag === "INPUT") {
+    return (target as HTMLInputElement).type !== "range";
+  }
+  return tag === "TEXTAREA" || tag === "SELECT";
+}
+
+/**
+ * Space *activates* a focused button or link. Stealing it for play/pause
+ * would leave every button in the viewer un-activatable by keyboard, so the
+ * Space shortcut yields here — the arrow shortcuts, which these elements
+ * don't consume, deliberately do not.
+ */
+function isKeyboardFocusOnActivatable(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === "BUTTON" || (tag === "A" && target.hasAttribute("href"));
 }
 
 type ActiveTab =
@@ -162,36 +182,79 @@ export default function EpisodeViewer({
   const t = useT();
   const [data, setData] = useState<EpisodeData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [episodeLoading, setEpisodeLoading] = useState(false);
+  const [selectedEpisodeId, setSelectedEpisodeId] = useState(episodeId);
   const requestIdRef = useRef(0);
+  const loadedDatasetRef = useRef<string | null>(null);
+  const datasetKey = `${org}/${dataset}`;
 
   useEffect(() => {
-    if (Number.isNaN(episodeId)) {
+    setSelectedEpisodeId(episodeId);
+  }, [datasetKey, episodeId]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const match = window.location.pathname.match(/\/episode_(\d+)\/?$/);
+      if (!match) return;
+      const nextEpisode = Number(match[1]);
+      if (Number.isSafeInteger(nextEpisode)) {
+        setSelectedEpisodeId(nextEpisode);
+      }
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [datasetKey]);
+
+  const selectEpisode = useCallback(
+    (nextEpisode: number) => {
+      if (nextEpisode === selectedEpisodeId) return;
+      setSelectedEpisodeId(nextEpisode);
+      const repoId = repoIdFromRouteParams(org, dataset);
+      window.history.pushState(
+        { episodeId: nextEpisode },
+        "",
+        routePathFromRepoId(repoId, nextEpisode),
+      );
+    },
+    [dataset, org, selectedEpisodeId],
+  );
+
+  useEffect(() => {
+    if (Number.isNaN(selectedEpisodeId)) {
       setError(t("err.invalidEpisode"));
       setData(null);
       return;
     }
     const requestId = ++requestIdRef.current;
     setError(null);
-    setData(null);
-    getEpisodeDataSafe(org, dataset, episodeId)
+    const changingDataset = loadedDatasetRef.current !== datasetKey;
+    if (changingDataset) {
+      setData(null);
+    }
+    setEpisodeLoading(!changingDataset && loadedDatasetRef.current !== null);
+    getEpisodeDataSafe(org, dataset, selectedEpisodeId)
       .then(({ data: loaded, error: loadError }) => {
         if (requestIdRef.current !== requestId) return;
         if (loadError) {
           setError(loadError);
-          setData(null);
+          if (changingDataset) setData(null);
           return;
         }
+        loadedDatasetRef.current = datasetKey;
         setData(loaded ?? null);
       })
       .catch((err) => {
         if (requestIdRef.current !== requestId) return;
         const message = err instanceof Error ? err.message : String(err);
         setError(message || t("err.unknown"));
-        setData(null);
+        if (changingDataset) setData(null);
+      })
+      .finally(() => {
+        if (requestIdRef.current === requestId) setEpisodeLoading(false);
       });
-  }, [org, dataset, episodeId, t]);
+  }, [datasetKey, org, dataset, selectedEpisodeId, t]);
 
-  if (error) {
+  if (error && !data) {
     return (
       <div className="flex h-screen items-center justify-center bg-[var(--bg)] text-red-300">
         <div className="panel-raised max-w-xl p-6 border-red-500/40">
@@ -213,11 +276,19 @@ export default function EpisodeViewer({
   }
 
   return (
-    <TimeProvider duration={data!.duration}>
+    <TimeProvider duration={data!.duration} resetKey={data!.episodeId}>
       <FlaggedEpisodesProvider>
         <AnnotationsProvider>
           <EpisodeBootstrap data={data!} />
-          <EpisodeViewerInner data={data!} org={org} dataset={dataset} />
+          <EpisodeViewerInner
+            data={data!}
+            org={org}
+            dataset={dataset}
+            episodeLoading={episodeLoading}
+            episodeError={error}
+            selectedEpisodeId={selectedEpisodeId}
+            onEpisodeSelect={selectEpisode}
+          />
         </AnnotationsProvider>
       </FlaggedEpisodesProvider>
     </TimeProvider>
@@ -248,10 +319,18 @@ function EpisodeViewerInner({
   data,
   org,
   dataset,
+  episodeLoading,
+  episodeError,
+  selectedEpisodeId,
+  onEpisodeSelect,
 }: {
   data: EpisodeData;
   org?: string;
   dataset?: string;
+  episodeLoading: boolean;
+  episodeError: string | null;
+  selectedEpisodeId: number;
+  onEpisodeSelect: (episodeId: number) => void;
 }) {
   const { t, tRich } = useLocale();
   const {
@@ -295,7 +374,6 @@ function EpisodeViewerInner({
 
   const loadStartRef = useRef(performance.now());
 
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   // Tab state & lazy stats — read sessionStorage in the initializer so the
@@ -323,7 +401,14 @@ function EpisodeViewerInner({
     }
     return "episodes";
   });
-  const isLoading = activeTab === "episodes" && (!videosReady || !chartsReady);
+  const isLoading =
+    episodeLoading ||
+    (activeTab === "episodes" && (!videosReady || !chartsReady));
+
+  useEffect(() => {
+    setVideosReady(!videosInfo.length);
+    setChartsReady(false);
+  }, [episodeId, videosInfo.length]);
 
   useEffect(() => {
     if (!isLoading) {
@@ -496,12 +581,26 @@ function EpisodeViewerInner({
   // `seek` and `setIsPlaying` are stable references from useCallback /
   // useState — they don't drive renders.
   const { seek, setIsPlaying } = useTime();
+  const handleEpisodeSelect = useCallback(
+    (nextEpisode: number) => {
+      if (nextEpisode === selectedEpisodeId) return;
+      setIsPlaying(false);
+      seek(0);
+      onEpisodeSelect(nextEpisode);
+    },
+    [onEpisodeSelect, seek, selectedEpisodeId, setIsPlaying],
+  );
 
-  // URDFViewer episode changer and play toggle — populated by URDFViewer on mount
-  const urdfChangerRef = useRef<((ep: number) => void) | undefined>(undefined);
+  // URDF playback toggle — populated by URDFViewer after its first mount.
   const urdfPlayToggleRef = useRef<(() => void) | undefined>(undefined);
-  const [urdfEpisode, setUrdfEpisode] = useState(episodeId);
-  useEffect(() => setUrdfEpisode(episodeId), [episodeId]);
+  const urdfSeekByRef = useRef<((seconds: number) => void) | undefined>(
+    undefined,
+  );
+  const [urdfMounted, setUrdfMounted] = useState(activeTab === "urdf");
+
+  useEffect(() => {
+    if (activeTab === "urdf") setUrdfMounted(true);
+  }, [activeTab]);
 
   // Pagination state
   const pageSize = 100;
@@ -526,20 +625,30 @@ function EpisodeViewerInner({
   // Initialize page based on the current episode. Splitting this out from
   // the keyboard listener effect lets the listener attach exactly once.
   useEffect(() => {
-    const episodeIndex = episodes.indexOf(episodeId);
+    const episodeIndex = episodes.indexOf(selectedEpisodeId);
     if (episodeIndex !== -1) {
       setCurrentPage(Math.floor(episodeIndex / pageSize) + 1);
     }
-  }, [episodes, episodeId, pageSize]);
+  }, [episodes, pageSize, selectedEpisodeId]);
 
   // Mirror the values the keydown handler needs into a ref. Without this,
   // `useCallback` would produce a new handler whenever `activeTab` /
-  // `episodeId` / `urdfEpisode` changed, and the keydown effect would
+  // `episodeId` changed, and the keydown effect would
   // detach + reattach the listener each time. Now the listener attaches
   // once and reads the latest state via the ref.
   // Vercel rule: advanced-event-handler-refs.
-  const keyStateRef = useRef({ activeTab, episodeId, episodes, urdfEpisode });
-  keyStateRef.current = { activeTab, episodeId, episodes, urdfEpisode };
+  const keyStateRef = useRef({
+    activeTab,
+    episodeId: selectedEpisodeId,
+    episodes,
+    onEpisodeSelect: handleEpisodeSelect,
+  });
+  keyStateRef.current = {
+    activeTab,
+    episodeId: selectedEpisodeId,
+    episodes,
+    onEpisodeSelect: handleEpisodeSelect,
+  };
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -548,7 +657,7 @@ function EpisodeViewerInner({
       const inTextEntry = isKeyboardFocusInsideTextEntry(e.target);
 
       if (key === " ") {
-        if (inTextEntry) return;
+        if (inTextEntry || isKeyboardFocusOnActivatable(e.target)) return;
         e.preventDefault();
         if (s.activeTab === "urdf") {
           urdfPlayToggleRef.current?.();
@@ -558,34 +667,30 @@ function EpisodeViewerInner({
       } else if (key === "ArrowDown" || key === "ArrowUp") {
         if (inTextEntry) return;
         e.preventDefault();
-        if (s.activeTab === "urdf") {
-          const nextEp =
-            key === "ArrowDown" ? s.urdfEpisode + 1 : s.urdfEpisode - 1;
-          const lowest = s.episodes[0];
-          const highest = s.episodes[s.episodes.length - 1];
-          if (nextEp >= lowest && nextEp <= highest) {
-            setUrdfEpisode(nextEp);
-            urdfChangerRef.current?.(nextEp);
-          }
-        } else {
-          const nextEpisodeId =
-            key === "ArrowDown" ? s.episodeId + 1 : s.episodeId - 1;
-          const lowestEpisodeId = s.episodes[0];
-          const highestEpisodeId = s.episodes[s.episodes.length - 1];
-          if (
-            nextEpisodeId >= lowestEpisodeId &&
-            nextEpisodeId <= highestEpisodeId
-          ) {
-            router.push(`./episode_${nextEpisodeId}`);
-          }
+        const nextEpisodeId =
+          key === "ArrowDown" ? s.episodeId + 1 : s.episodeId - 1;
+        const lowestEpisodeId = s.episodes[0];
+        const highestEpisodeId = s.episodes[s.episodes.length - 1];
+        if (
+          nextEpisodeId >= lowestEpisodeId &&
+          nextEpisodeId <= highestEpisodeId
+        ) {
+          s.onEpisodeSelect(nextEpisodeId);
         }
+      } else if (
+        s.activeTab === "urdf" &&
+        (key === "ArrowLeft" || key === "ArrowRight")
+      ) {
+        if (inTextEntry) return;
+        e.preventDefault();
+        urdfSeekByRef.current?.(key === "ArrowLeft" ? -5 : 5);
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-    // router / setIsPlaying are stable; the rest is read via keyStateRef.
-  }, [router, setIsPlaying]);
+    // setIsPlaying is stable; the rest is read via keyStateRef.
+  }, [setIsPlaying]);
 
   // Pagination functions
   const nextPage = () => {
@@ -667,7 +772,7 @@ function EpisodeViewerInner({
           <Sidebar
             datasetInfo={datasetInfo}
             paginatedEpisodes={paginatedEpisodes}
-            episodeId={activeTab === "urdf" ? urdfEpisode : episodeId}
+            episodeId={selectedEpisodeId}
             totalPages={totalPages}
             currentPage={currentPage}
             prevPage={prevPage}
@@ -675,14 +780,11 @@ function EpisodeViewerInner({
             showFlaggedOnly={sidebarFlaggedOnly}
             onShowFlaggedOnlyChange={setSidebarFlaggedOnly}
             onEpisodeSelect={
-              activeTab === "urdf"
-                ? (ep) => {
-                    setUrdfEpisode(ep);
-                    urdfChangerRef.current?.(ep);
-                  }
-                : activeTab === "annotations"
-                  ? (ep) => router.push(`./episode_${ep}`)
-                  : undefined
+              activeTab === "episodes" ||
+              activeTab === "urdf" ||
+              activeTab === "annotations"
+                ? handleEpisodeSelect
+                : undefined
             }
           />
         )}
@@ -692,6 +794,18 @@ function EpisodeViewerInner({
           className={`flex flex-col gap-4 p-4 flex-1 relative ${isLoading ? "overflow-hidden" : "overflow-y-auto"}`}
         >
           {isLoading && <Loading />}
+          {episodeError && (
+            <div className="absolute inset-0 z-20 flex items-center justify-center bg-[var(--bg)]/80 p-6 backdrop-blur-sm">
+              <div className="panel-raised max-w-xl border-red-500/40 p-6">
+                <h2 className="mb-3 text-xl font-medium text-red-300">
+                  {t("err.title")}
+                </h2>
+                <p className="whitespace-pre-wrap font-mono text-sm text-red-200/90">
+                  {episodeError}
+                </p>
+              </div>
+            </div>
+          )}
 
           {activeTab === "episodes" && (
             <>
@@ -796,6 +910,8 @@ function EpisodeViewerInner({
                   <DataRecharts
                     data={chartDataGroups}
                     velocityData={velocityChartDataGroups}
+                    flatData={data.flatChartData}
+                    fps={datasetInfo.fps}
                     onChartsReady={() => setChartsReady(true)}
                   />
                 </Suspense>
@@ -863,6 +979,7 @@ function EpisodeViewerInner({
               <ActionInsightsPanel
                 flatChartData={data.flatChartData}
                 fps={datasetInfo.fps}
+                totalEpisodes={datasetInfo.total_episodes}
                 crossEpisodeData={crossEpData}
                 crossEpisodeLoading={insightsLoading}
               />
@@ -896,15 +1013,23 @@ function EpisodeViewerInner({
             </Suspense>
           )}
 
-          {activeTab === "urdf" && (
-            <Suspense fallback={<Loading />}>
-              <URDFViewer
-                data={data}
-                repoId={repoId}
-                episodeChangerRef={urdfChangerRef}
-                playToggleRef={urdfPlayToggleRef}
-              />
-            </Suspense>
+          {urdfMounted && (
+            <div
+              className={activeTab === "urdf" ? "contents" : "hidden"}
+              aria-hidden={activeTab !== "urdf"}
+            >
+              <Suspense fallback={<Loading />}>
+                <URDFViewer
+                  key={datasetInfo.repoId}
+                  data={data}
+                  active={
+                    activeTab === "urdf" && !episodeLoading && !episodeError
+                  }
+                  playToggleRef={urdfPlayToggleRef}
+                  seekByRef={urdfSeekByRef}
+                />
+              </Suspense>
+            </div>
           )}
 
           {activeTab === "parquet" && (
