@@ -414,7 +414,7 @@ export const en = {
     "{sampled} / {total} episodes sampled for statistical analyses",
   "insights.trajTitle": "3D Action Trajectory Distribution",
   "insights.trajDesc":
-    "Shows the Cartesian action trajectories from every episode. Each trajectory is evenly downsampled only for rendering; no episode is intentionally omitted.",
+    "Shows the Cartesian action trajectories across the dataset. Episodes are sampled evenly and each trajectory is downsampled for rendering; the count above says how many are drawn.",
   "insights.trajLoading": "Loading all-episode 3D trajectories…",
   "insights.trajNoData":
     "No complete named action xyz groups were found (for example left_tcp.x/y/z).",

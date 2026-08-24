@@ -12,9 +12,13 @@ This fork removes the Hugging Face Hub remote-loading path; everything reads fro
 - **Synchronized video + telemetry**: episode pages play all cameras side-by-side, synced to interactive Recharts time series for `observation.state`, `action`, and other signals.
 - **Language annotations editor** (lerobot v3.1 schema): an **Annotations** tab for authoring per-episode language atoms — subtasks, plans, memory, task rephrasings, interjections, robot speech, and VQA. Draw a bounding box or click a keypoint directly on any video for grounded VQA, arrange events on a multi-track timeline, and edit each atom in an inspector. Saves to `meta/lerobot_annotations.json` inside the dataset. See [Annotating episodes](#annotating-episodes) below.
 - **Statistics, Frames, Action Insights, Filtering** panels for dataset quality inspection — flagged episodes can be exported as a ready-to-run LeRobot CLI command.
+- **3D pose trajectories**: the Episodes chart has a `3D` mode that draws the current episode's Cartesian path with a marker synced to video playback, and Action Insights adds a **cross-episode trajectory distribution** — one line per episode, hover to identify, click to isolate, with per-arm layers toggled independently. Both need complete named xyz feature groups (`left_tcp.x/y/z`); numeric-only feature names are skipped, since nothing identifies which three dimensions form a position.
+- **Subtask labeling** (Pi-style segmentation): an Episodes-tab panel for labeling contiguous subtask ranges that persist until the next one, saved to `meta/annotations.json`. An **Export** button compiles them into lerobot-native per-frame `subtask_index` + `meta/subtasks.parquet` — the layer that produces a trainable `sample["subtask"]`.
+- **Parquet browser**: a raw table view of any `.parquet` in the dataset — file picker, column picker, paged rows, cell expansion, CSV export. Parsing happens server-side, so a 100 MB v3 data file pages without shipping the whole row group to the browser.
 - **Doctor**: read-only, dataset-wide diagnostics immediately after Action Insights. Its native TypeScript engine provides 13 checks over metadata, timing, actions, dimension-level continuity, optional configurable TCP linear/angular speed limits, video containers, statistics, episode consistency, training readiness, anomalies, and portability; the speed check is enabled explicitly in the Doctor panel, it needs no Python runtime, and it can send affected episode IDs into the existing flagged-episode workflow.
-- **3D URDF replay** for SO-100, SO-101, OpenArm, G1, and bimanual TacCap data-collection grippers. TacCap replay treats recorded poses as canonical TCP by default; the `Tracker → TCP` button applies the measured or dataset-provided extrinsic only when selected manually. It animates both finger joints, conditionally replays complete `head.xyz+r1-r6` trajectories with a self-contained schematic HMD, and labels the world axes (+X forward, +Y left, +Z up); its URDF/STL assets are bundled under `public/urdf/taccap-grippers`. Other robot assets load from the public Hugging Face `lerobot/robot-urdfs` bucket.
+- **3D URDF replay** for SO-100, SO-101, OpenArm, G1, and bimanual TacCap data-collection grippers. TacCap replay treats recorded poses as canonical TCP by default; the `Tracker → TCP` button applies the measured or dataset-provided extrinsic only when selected manually. It animates both finger joints, conditionally replays complete `head.xyz+r1-r6` trajectories with a self-contained schematic HMD, and labels the world axes (+X forward, +Y left, +Z up); its URDF/STL assets are bundled under `public/urdf/taccap-grippers`. Other robot assets load from the public Hugging Face `lerobot/robot-urdfs` bucket. Recorded cameras replay alongside the model as synchronized overlays — grouped into left / top-center / right by `left`, `right` and `head` in the feature name — and each tile can be dragged to resize, clicked to bring to front, or double-clicked to reset.
 - **Per-card "Open episode N" shortcut**: jump straight to a specific episode from the homepage card.
+- **Keyboard playback control**: `Space` plays/pauses, `↑`/`↓` step between episodes, and `←`/`→` seek ±5 s in 3D replay. The shortcuts keep working after you click the sidebar or a replay control, and still yield to text fields and to buttons that need `Space` themselves.
 - Supports dataset codebase versions **v2.0 / v2.1 / v3.0** (autodetected from `meta/info.json`).
 
 ## Prerequisites
@@ -89,6 +93,29 @@ bun run validate     # type-check + lint + format:check + test
 ```
 
 After any code change: `bun run format && bun run validate`.
+
+## Tuning (optional)
+
+The episode viewer downsamples aggressively on purpose: a v3 dataset packs many
+episodes into one ~100 MB parquet, so the panels that read across episodes are
+bounded by how much they are allowed to fetch and draw, not by the dataset size.
+All of these are server-side env vars with sane defaults — set them only if a
+panel is too coarse (raise) or too slow on your hardware (lower).
+
+| Variable                                    | Default | Controls                                                                  |
+| ------------------------------------------- | ------- | ------------------------------------------------------------------------- |
+| `MAX_EPISODE_POINTS`                        | 4000    | Chart rows kept per episode after downsampling                            |
+| `MAX_FRAMES_OVERVIEW_EPISODES`              | 3000    | Episodes scanned for the Frames panel                                     |
+| `MAX_CROSS_EPISODE_SAMPLE`                  | 120     | Episodes sampled for the cross-episode statistics panels                  |
+| `MAX_CROSS_EPISODE_FRAMES_PER_EPISODE`      | 2500    | Rows read per episode in that pass                                        |
+| `MAX_SPATIAL_TRAJECTORY_EPISODES`           | 400     | Episodes sampled for the 3D trajectory distribution                       |
+| `MAX_SPATIAL_TRAJECTORY_POINTS`             | 120000  | Hard ceiling on rendered trajectory points across all episodes and layers |
+| `MAX_SPATIAL_TRAJECTORY_POINTS_PER_EPISODE` | 240     | Ceiling per single trajectory                                             |
+| `CROSS_EPISODE_FILE_CONCURRENCY`            | 8       | Parquet files read in parallel                                            |
+
+Values below each variable's minimum are ignored in favour of the default. The
+trajectory panel reports `{loaded} / {total} episodes shown`, so you can always
+see how much of the dataset the picture actually covers.
 
 ## Tagging datasets
 

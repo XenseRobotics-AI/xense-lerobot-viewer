@@ -408,7 +408,7 @@ export const zh: Record<MessageKey, string> = {
     "统计分析从 {total} episodes 中采样 {sampled} episodes",
   "insights.trajTitle": "三维 Action 轨迹分布",
   "insights.trajDesc":
-    "展示每个 episode 的笛卡尔空间 action 轨迹。每条轨迹只为渲染进行均匀降采样，不会主动省略任何 episode。",
+    "展示数据集在笛卡尔空间中的 action 轨迹。episodes 会被均匀采样，每条轨迹也会为渲染降采样；上方的数字即实际绘制的数量。",
   "insights.trajLoading": "正在加载全部 episodes 的三维轨迹…",
   "insights.trajNoData":
     "没有找到命名完整的 action xyz 维度组（例如 left_tcp.x/y/z）。",
