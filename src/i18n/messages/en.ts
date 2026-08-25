@@ -612,6 +612,7 @@ export const en = {
   "ann.ph.object": "object",
 
   "ann.title": "Language annotations",
+  "ann.editorTablistAria": "Annotation editor",
   "ann.unsaved": "unsaved",
   "ann.subtitle":
     "Select an atom from the timeline or list, then edit it in the inspector.",

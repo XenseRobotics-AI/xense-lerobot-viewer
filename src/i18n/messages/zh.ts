@@ -593,6 +593,7 @@ export const zh: Record<MessageKey, string> = {
   "ann.ph.object": "客体",
 
   "ann.title": "语言标注",
+  "ann.editorTablistAria": "标注编辑器",
   "ann.unsaved": "未保存",
   "ann.subtitle": "在时间轴或列表中选中一条原子标注，然后在右侧检查器中编辑。",
   "ann.save": "保存本 episode",

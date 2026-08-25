@@ -17,6 +17,11 @@ const VIDEO_READY_TIMEOUT_MS = 10_000;
 type VideoPlayerProps = {
   videosInfo: VideoInfo[];
   onVideosReady?: () => void;
+  /**
+   * Mount the VQA bbox/keypoint overlay over each video. Off by default: the
+   * overlay is annotation machinery and belongs only to the Annotations tab.
+   */
+  annotationOverlay?: boolean;
 };
 
 const videoEventCleanup = new WeakMap<HTMLVideoElement, () => void>();
@@ -24,6 +29,7 @@ const videoEventCleanup = new WeakMap<HTMLVideoElement, () => void>();
 export const SimpleVideosPlayer = ({
   videosInfo,
   onVideosReady,
+  annotationOverlay = false,
 }: VideoPlayerProps) => {
   const t = useT();
   const { currentTime, seek, externalSeekVersion, isPlaying, setIsPlaying } =
@@ -414,10 +420,12 @@ export const SimpleVideosPlayer = ({
                 {/* VQA bbox/keypoint overlay. Reads atoms + drawMode from
                     AnnotationsContext; pointer-events fall through when
                     not in draw mode so video controls remain usable. */}
-                <VideoOverlayCanvas
-                  videoEl={videoEls[idx] ?? null}
-                  cameraKey={info.filename}
-                />
+                {annotationOverlay && (
+                  <VideoOverlayCanvas
+                    videoEl={videoEls[idx] ?? null}
+                    cameraKey={info.filename}
+                  />
+                )}
               </div>
             </div>
           );

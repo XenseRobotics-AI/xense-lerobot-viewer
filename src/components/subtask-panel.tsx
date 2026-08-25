@@ -292,11 +292,10 @@ export const SubtaskPanel: React.FC<Props> = ({
   if (!encodedPath) return null;
 
   return (
-    <div className="mb-6 panel p-4">
+    <div className="panel p-4">
+      {/* No title row heading — the editor sub-tab above already says
+          `subtask.title`. Status and the frame counter stay. */}
       <div className="flex items-center gap-3 mb-3">
-        <p className="text-[10px] uppercase tracking-wide text-slate-500">
-          {t("subtask.title")}
-        </p>
         {dirty && (
           <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-medium text-amber-200">
             {t("subtask.unsaved")}
