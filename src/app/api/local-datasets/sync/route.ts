@@ -18,11 +18,12 @@ export const dynamic = "force-dynamic";
  * Browsing stays entirely local; this runs when someone presses Sync and
  * nowhere else. Transfers go through hf-mirror (see `scripts/sync_hf_dataset.py`).
  *
- * Two shapes:
- *   POST { source }                  → fast listing, transfers nothing
- *   POST { source, confirm: true }   → NDJSON stream of the actual download
- *                                      (add `force: true` to re-fetch repos
- *                                      already at the remote commit)
+ * Two targets, each in two steps:
+ *   POST { source }                → list a whole org, transfer nothing
+ *   POST { repo: "owner/name" }    → check one dataset, transfer nothing
+ *   POST { …, confirm: true }      → NDJSON stream of the actual download
+ *                                    (add `force: true` to re-fetch a repo
+ *                                    already at the remote commit)
  *
  * The listing step is not optional politeness. `lerobot` is a public HF org with
  * ~188 datasets against 5 held locally; syncing it unprompted would pull
@@ -31,11 +32,24 @@ export const dynamic = "force-dynamic";
  * The listing also reports `pending` — the repos that genuinely differ from the
  * local copy — so both the confirmation and the progress counter are scoped to
  * real work instead of restarting at 1-of-everything on each run.
+ *
+ * The single-repo target exists because the org form can only ever re-fetch
+ * sources already on disk: to pull a dataset the machine has never held, there
+ * is nothing to press Sync on. It also carries `details` — the repo's size and
+ * file count — so its confirmation says what the transfer costs rather than
+ * "1 dataset pending".
  */
 
 /** Org names become a path segment under the dataset root, so anything that
  *  could climb out of it is rejected outright. */
 const SOURCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** A full `owner/name` repo id. Both halves face the filesystem — the owner
+ *  becomes a directory and `repo_target` uses the name as the leaf — so each is
+ *  held to `SOURCE_PATTERN`, which a leading dot (and therefore `..`) fails. */
+const REPO_PATTERN = new RegExp(
+  `^${SOURCE_PATTERN.source.slice(1, -1)}/${SOURCE_PATTERN.source.slice(1, -1)}$`,
+);
 
 const HF_MIRROR = "https://hf-mirror.com";
 const LIST_TIMEOUT_MS = 120_000;
@@ -54,6 +68,16 @@ type SyncResult = {
   skipped: number;
   failed: { repo: string; error: string }[];
   listOnly: boolean;
+  /** Per-repo size/file count — only on the single-repo path. */
+  details?: SyncRepoDetail[];
+};
+
+type SyncRepoDetail = {
+  id: string;
+  sha: string | null;
+  sizeBytes: number | null;
+  files: number | null;
+  error: string | null;
 };
 
 function scriptPath(): string {
@@ -161,12 +185,7 @@ async function runToCompletion(
 }
 
 /** Pipe the script's NDJSON straight through to the client as it arrives. */
-function streamDownload(
-  source: string,
-  root: string,
-  force: boolean,
-  pythonBin: string,
-): Response {
+function streamDownload(args: string[], pythonBin: string): Response {
   const encoder = new TextEncoder();
   return new Response(
     new ReadableStream<Uint8Array>({
@@ -192,8 +211,6 @@ function streamDownload(
 
         let child: ChildProcessWithoutNullStreams;
         try {
-          const args = ["--org", source, "--root", root];
-          if (force) args.push("--force");
           child = spawnScript(pythonBin, args);
         } catch (err) {
           send({ type: "error", error: `Failed to launch Python: ${err}` });
@@ -267,20 +284,51 @@ function streamDownload(
   );
 }
 
+/**
+ * The requested target as script arguments.
+ *
+ * `label` is what the single-run lock and its 409 report, so a blocked caller
+ * is told which dataset is holding it rather than just which org.
+ */
+function resolveTarget(body: {
+  source?: unknown;
+  repo?: unknown;
+}): { label: string; args: string[] } | { error: string } {
+  const repo = typeof body.repo === "string" ? body.repo.trim() : "";
+  if (repo) {
+    if (!REPO_PATTERN.test(repo)) {
+      return {
+        error: "`repo` must be a Hugging Face id of the form owner/name.",
+      };
+    }
+    // --org is derived from the id by the script; passing it too would only
+    // create a second place for the two to disagree.
+    return { label: repo, args: ["--repo", repo] };
+  }
+
+  const source = typeof body.source === "string" ? body.source.trim() : "";
+  if (!source || !SOURCE_PATTERN.test(source)) {
+    return { error: "`source` must be a plain Hugging Face org name." };
+  }
+  return { label: source, args: ["--org", source] };
+}
+
 export async function POST(request: NextRequest): Promise<Response> {
-  let body: { source?: unknown; confirm?: unknown; force?: unknown };
+  let body: {
+    source?: unknown;
+    repo?: unknown;
+    confirm?: unknown;
+    force?: unknown;
+  };
   try {
     body = await request.json();
   } catch {
     return Response.json({ error: "Expected a JSON body." }, { status: 400 });
   }
 
-  const source = typeof body.source === "string" ? body.source.trim() : "";
-  if (!source || !SOURCE_PATTERN.test(source)) {
-    return Response.json(
-      { error: "`source` must be a plain Hugging Face org name." },
-      { status: 400 },
-    );
+  const target = resolveTarget(body);
+  if ("error" in target) {
+    return Response.json({ error: target.error }, { status: 400 });
   }
 
   let root: string;
@@ -297,10 +345,12 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
+  const baseArgs = [...target.args, "--root", root];
+
   // Listing pass — cheap, transfers nothing, and always runs first.
   if (body.confirm !== true) {
     const { result, error } = await runToCompletion(
-      ["--org", source, "--root", root, "--list-only"],
+      [...baseArgs, "--list-only"],
       LIST_TIMEOUT_MS,
     );
     if (!result) {
@@ -310,7 +360,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       );
     }
     return Response.json({
-      source,
+      source: result.org,
       endpoint: result.endpoint,
       repos: result.repos,
       count: result.repos.length,
@@ -318,6 +368,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       // "everything is work" keeps the old behaviour rather than claiming a
       // fully up-to-date corpus that was never checked.
       pending: result.pending ?? result.repos,
+      details: result.details ?? null,
       confirmRequired: true,
     });
   }
@@ -337,6 +388,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
-  activeSync = { source, startedAt: Date.now() };
-  return streamDownload(source, root, body.force === true, python.bin);
+  activeSync = { source: target.label, startedAt: Date.now() };
+  return streamDownload(
+    body.force === true ? [...baseArgs, "--force"] : baseArgs,
+    python.bin,
+  );
 }

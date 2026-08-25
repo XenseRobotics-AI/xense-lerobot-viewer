@@ -596,6 +596,11 @@ function EpisodeViewerInner({
   const urdfSeekByRef = useRef<((seconds: number) => void) | undefined>(
     undefined,
   );
+  // Which annotation system the Annotations tab's right pane is showing.
+  const [annotationEditor, setAnnotationEditor] = useState<
+    "atoms" | "subtasks"
+  >("atoms");
+
   const [urdfMounted, setUrdfMounted] = useState(activeTab === "urdf");
 
   useEffect(() => {
@@ -791,7 +796,11 @@ function EpisodeViewerInner({
 
         {/* Main content */}
         <div
-          className={`flex flex-col gap-4 p-4 flex-1 relative ${isLoading ? "overflow-hidden" : "overflow-y-auto"}`}
+          className={`flex flex-col gap-4 p-4 flex-1 relative ${
+            isLoading || activeTab === "annotations"
+              ? "overflow-hidden"
+              : "overflow-y-auto"
+          }`}
         >
           {isLoading && <Loading />}
           {episodeError && (
@@ -895,15 +904,6 @@ function EpisodeViewerInner({
                 </div>
               )}
 
-              {/* Subtasks — Pi-style segmentation → lerobot subtask_index */}
-              <SubtaskPanel
-                encodedPath={encodedDatasetPath}
-                episodeId={episodeId}
-                fps={datasetInfo.fps}
-                task={task}
-                frameTimestamps={data.frameTimestamps}
-              />
-
               {/* Graph */}
               <div className="mb-4">
                 <Suspense fallback={null}>
@@ -922,8 +922,8 @@ function EpisodeViewerInner({
           )}
 
           {activeTab === "annotations" && (
-            <div className="annotations-skin flex flex-col gap-4">
-              <div className="flex items-center gap-3">
+            <div className="annotations-skin flex flex-1 min-h-0 flex-col gap-4">
+              <div className="flex shrink-0 items-center gap-3">
                 <p className="text-base font-medium text-slate-200 truncate">
                   {datasetInfo.repoId}
                 </p>
@@ -931,29 +931,95 @@ function EpisodeViewerInner({
                   {t("ep.episodeLabel", { id: episodeId })}
                 </p>
               </div>
-              {videosInfo.length > 0 && (
-                <SimpleVideosPlayer
-                  videosInfo={videosInfo}
-                  onVideosReady={() => setVideosReady(true)}
-                />
-              )}
-              <div className="grounding-intro">
-                <span className="section-kicker">{t("ep.groundedVqa")}</span>
-                <ul>
-                  <li>{t("ep.vqaHint1")}</li>
-                  <li>
-                    {tRich("ep.vqaHint2", {
-                      enter: <kbd>↵</kbd>,
-                      esc: <kbd>Esc</kbd>,
-                    })}
-                  </li>
-                </ul>
+
+              {/* Footage and editor on screen together — annotating while the
+                  video is scrolled out of view is the whole problem this layout
+                  exists to fix.
+
+                  A grid, not nested flex columns, because the video has to be a
+                  direct child of the scroller: `position: sticky` is confined to
+                  its own parent's box, so a video nested inside the left column
+                  unsticks the moment that column scrolls past — which at narrow
+                  widths is exactly when the editor below it comes into view.
+                  Grid placement lets the DOM stay [video][rest][editor] while
+                  `lg` puts the first two in column 1 and the editor alongside. */}
+              <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_27rem] lg:grid-rows-[auto_minmax(0,1fr)] lg:overflow-hidden xl:grid-cols-[minmax(0,1fr)_30rem]">
+                {videosInfo.length > 0 && (
+                  <div className="sticky top-0 z-20 bg-[var(--bg)] pb-3 lg:static lg:col-start-1 lg:row-start-1 lg:max-h-[55vh] lg:overflow-y-auto lg:bg-transparent lg:pb-0">
+                    <SimpleVideosPlayer
+                      videosInfo={videosInfo}
+                      onVideosReady={() => setVideosReady(true)}
+                      annotationOverlay
+                    />
+                  </div>
+                )}
+
+                <div className="flex min-w-0 flex-col gap-4 lg:col-start-1 lg:row-start-2 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
+                  <div className="grounding-intro">
+                    <span className="section-kicker">
+                      {t("ep.groundedVqa")}
+                    </span>
+                    <ul>
+                      <li>{t("ep.vqaHint1")}</li>
+                      <li>
+                        {tRich("ep.vqaHint2", {
+                          enter: <kbd>↵</kbd>,
+                          esc: <kbd>Esc</kbd>,
+                        })}
+                      </li>
+                    </ul>
+                  </div>
+                  <PlaybackBar />
+                  <AnnotationsTimeline duration={data.duration} />
+                </div>
+
+                {/* Both annotation systems live here, one at a time: stacking
+                    them would put the lower one back off screen. */}
+                <div className="flex min-h-0 flex-col lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:overflow-hidden">
+                  <div
+                    role="tablist"
+                    aria-label={t("ann.editorTablistAria")}
+                    className="flex shrink-0 gap-1 border-b border-white/5"
+                  >
+                    {(
+                      [
+                        { id: "atoms", label: t("ann.title") },
+                        { id: "subtasks", label: t("subtask.title") },
+                      ] as const
+                    ).map((entry) => (
+                      <button
+                        key={entry.id}
+                        role="tab"
+                        type="button"
+                        aria-selected={annotationEditor === entry.id}
+                        onClick={() => setAnnotationEditor(entry.id)}
+                        className={`-mb-px rounded-t-md border-b-2 px-3 py-2 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] ${
+                          annotationEditor === entry.id
+                            ? "border-[var(--accent)] text-[var(--accent)]"
+                            : "border-transparent text-slate-400 hover:text-slate-200"
+                        }`}
+                      >
+                        {entry.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="min-h-0 flex-1 pt-3 lg:overflow-y-auto lg:pr-1">
+                    {annotationEditor === "atoms" ? (
+                      <AnnotationsPanel
+                        cameraKeys={videosInfo.map((v) => v.filename)}
+                      />
+                    ) : (
+                      <SubtaskPanel
+                        encodedPath={encodedDatasetPath}
+                        episodeId={episodeId}
+                        fps={datasetInfo.fps}
+                        task={task}
+                        frameTimestamps={data.frameTimestamps}
+                      />
+                    )}
+                  </div>
+                </div>
               </div>
-              <PlaybackBar />
-              <AnnotationsTimeline duration={data.duration} />
-              <AnnotationsPanel
-                cameraKeys={videosInfo.map((v) => v.filename)}
-              />
             </div>
           )}
 

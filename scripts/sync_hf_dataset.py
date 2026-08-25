@@ -25,7 +25,10 @@ overrides that and re-fetches everything.
 
 Usage:
     sync_hf_dataset.py --org TacVerse --root /path/to/lerobot [--list-only]
-                       [--limit N] [--repo A --repo B] [--force]
+                       [--limit N] [--force]
+
+    # one dataset, no org listing; the org is derived from the id
+    sync_hf_dataset.py --repo lerobot/svla_so101_pickplace --root /path/to/lerobot
 """
 
 from __future__ import annotations
@@ -104,17 +107,48 @@ def list_org_repos(org: str, limit: int | None) -> list[tuple[str, str | None]]:
     return repos[:limit] if limit else repos
 
 
-def fetch_shas(repo_ids: list[str]) -> list[tuple[str, str | None]]:
-    """Remote commit per repo, for the explicit `--repo` path that never lists."""
+def fetch_repo_details(repo_ids: list[str]) -> list[dict]:
+    """Per-repo commit and size, for the explicit `--repo` path that never lists.
+
+    `files_metadata=True` costs one extra round trip per repo but returns the
+    size of every file, which is the whole point of the single-dataset flow:
+    the confirmation step can say "12.4 GB across 340 files" instead of the
+    useless "1 dataset pending". Deliberately not used on the org path — that
+    would be ~188 metadata calls before anything is shown.
+
+    The resolution error is kept rather than swallowed. On the org path an
+    unresolvable repo is conservatively treated as work, but here the repo id
+    was typed by hand, so "no such dataset" is the answer the caller needs and
+    the caller (`main`) turns it into a failure instead of a download attempt.
+    """
     from huggingface_hub import HfApi
 
     api = HfApi()
-    out: list[tuple[str, str | None]] = []
+    out: list[dict] = []
     for repo_id in repo_ids:
         try:
-            out.append((repo_id, api.dataset_info(repo_id).sha))
-        except Exception:
-            out.append((repo_id, None))  # unknown → treat as work
+            info = api.dataset_info(repo_id, files_metadata=True)
+            siblings = list(getattr(info, "siblings", None) or [])
+            sizes = [getattr(s, "size", None) for s in siblings]
+            out.append({
+                "id": repo_id,
+                "sha": info.sha,
+                # None rather than 0 when the Hub reports no sizes: "unknown"
+                # and "empty" must not render as the same thing.
+                "sizeBytes": (
+                    sum(s for s in sizes if s) if any(s for s in sizes) else None
+                ),
+                "files": len(siblings) or None,
+                "error": None,
+            })
+        except Exception as exc:
+            out.append({
+                "id": repo_id,
+                "sha": None,
+                "sizeBytes": None,
+                "files": None,
+                "error": str(exc),
+            })
     return out
 
 
@@ -282,7 +316,11 @@ def preflight(repo_id: str) -> str | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--org", required=True, help="Hugging Face org / author")
+    parser.add_argument(
+        "--org",
+        default=None,
+        help="Hugging Face org / author; derived from --repo when omitted",
+    )
     parser.add_argument("--root", required=True, help="local dataset root")
     parser.add_argument(
         "--list-only",
@@ -307,17 +345,41 @@ def main() -> int:
     if blocker:
         return fail(blocker)
 
-    endpoint = os.environ.get("HF_ENDPOINT", "")
-    progress(phase="listing", endpoint=endpoint, org=args.org, percent=0)
+    # The org is a directory under the root (`repo_target`), so with explicit
+    # repos it comes from the repo ids rather than being asked for twice and
+    # allowed to disagree with them.
+    owners = {r.split("/")[0] for r in args.repo if "/" in r}
+    if args.repo:
+        if len(owners) != 1 or any("/" not in r for r in args.repo):
+            return fail("--repo takes `owner/name` ids sharing a single owner.")
+        derived = next(iter(owners))
+        if args.org and args.org != derived:
+            return fail(f"--org {args.org} does not match --repo owner {derived}.")
+        org = derived
+    elif args.org:
+        org = args.org
+    else:
+        return parser.error("one of --org or --repo is required") or 1
 
+    endpoint = os.environ.get("HF_ENDPOINT", "")
+    progress(phase="listing", endpoint=endpoint, org=org, percent=0)
+
+    details: list[dict] | None = None
     try:
-        listed = (
-            fetch_shas(args.repo)
-            if args.repo
-            else list_org_repos(args.org, args.limit)
-        )
+        if args.repo:
+            details = fetch_repo_details(args.repo)
+            listed = [(d["id"], d["sha"]) for d in details]
+        else:
+            listed = list_org_repos(org, args.limit)
     except Exception as exc:  # network down, bad token, unknown org
-        return fail(f"Could not list datasets for {args.org}: {exc}")
+        return fail(f"Could not list datasets for {org}: {exc}")
+
+    # A hand-typed id that does not resolve is the answer, not a download to
+    # attempt: report it now rather than after a pointless transfer attempt.
+    unresolved = [d for d in (details or []) if d["error"]]
+    if unresolved:
+        first = unresolved[0]
+        return fail(f"Could not read {first['id']} from the Hub: {first['error']}")
 
     repos = [repo_id for repo_id, _ in listed]
     # The work list is the diff, not the org. Without this every run walks all
@@ -326,14 +388,14 @@ def main() -> int:
     pending = [
         repo_id
         for repo_id, sha in listed
-        if not is_up_to_date(args.root, args.org, repo_id, sha)
+        if not is_up_to_date(args.root, org, repo_id, sha)
     ]
 
     def emit_result(downloaded: int, failed: list[dict], work: list[str]) -> int:
         emit({
             "type": "result",
             "result": {
-                "org": args.org,
+                "org": org,
                 "endpoint": endpoint,
                 "repos": repos,
                 "pending": pending,
@@ -341,6 +403,9 @@ def main() -> int:
                 "skipped": len(repos) - len(work),
                 "failed": failed,
                 "listOnly": args.list_only,
+                # Only populated on the explicit --repo path; the org path does
+                # not pay for per-repo metadata.
+                **({"details": details} if details is not None else {}),
             },
         })
         return 0
@@ -373,7 +438,7 @@ def main() -> int:
     failed: list[dict] = []
 
     for i, repo_id in enumerate(work):
-        target = repo_target(args.root, args.org, repo_id)
+        target = repo_target(args.root, org, repo_id)
         progress(
             phase="downloading",
             repo=repo_id,
