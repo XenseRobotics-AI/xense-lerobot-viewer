@@ -11,6 +11,7 @@ import {
   normalizeTags,
 } from "@/lib/dataset-tags";
 import { pickThumbnailVideoKey } from "@/lib/thumbnail-camera";
+import type { DatasetQualityTask } from "@/utils/datasetQualityChecks";
 
 export type { DatasetTags } from "@/lib/dataset-tags";
 
@@ -56,6 +57,8 @@ export type LocalDatasetSummary = {
   thumbnailVideoUrl: string | null;
   integrity: DatasetIntegrity;
   tags: DatasetTags;
+  /** Prompt rows loaded by the Workbench-only statistics route. */
+  tasks?: DatasetQualityTask[];
 };
 
 export type LocalDatasetsResponse = {

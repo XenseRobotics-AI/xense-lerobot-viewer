@@ -14,6 +14,7 @@ import {
 type HomepageDatasetStatisticsProps = {
   datasets: LocalDatasetSummary[];
   delta: DailyDelta;
+  preserveDatasetOrder?: boolean;
 };
 
 type Tone = "neutral" | "accent" | "ok" | "warn";
@@ -96,7 +97,7 @@ function checksTitle(row: HomepageDatasetStatisticsRow): string {
   );
   if (row.skippedChecks > 0) {
     details.push(
-      `${row.skippedChecks} check skipped on the homepage; open Workbench for full details.`,
+      `${row.skippedChecks} check skipped in the corpus summary; open the dataset checks view for full details.`,
     );
   }
   return details.join("\n");
@@ -119,13 +120,17 @@ function formatHours(hours: number): string {
 export default function HomepageDatasetStatistics({
   datasets,
   delta,
+  preserveDatasetOrder = false,
 }: HomepageDatasetStatisticsProps) {
   const [query, setQuery] = useState("");
   const [issuesOnly, setIssuesOnly] = useState(false);
   const [targetHours, setTargetHours] = useState(10);
   const statistics = useMemo(
-    () => buildHomepageDatasetStatistics(datasets),
-    [datasets],
+    () =>
+      buildHomepageDatasetStatistics(datasets, {
+        preserveOrder: preserveDatasetOrder,
+      }),
+    [datasets, preserveDatasetOrder],
   );
   const filteredRows = useMemo(
     () =>
@@ -141,7 +146,7 @@ export default function HomepageDatasetStatistics({
   return (
     <section
       aria-labelledby="dataset-statistics-title"
-      className="mb-8 rounded-lg border border-cyan-400/15 bg-[var(--surface-0)]/60 p-4 sm:p-5"
+      className="rounded-lg border border-cyan-400/15 bg-[var(--surface-0)]/60 p-4 sm:p-5"
     >
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
@@ -152,8 +157,8 @@ export default function HomepageDatasetStatistics({
             Dataset statistics
           </h2>
           <p className="mt-1 text-[11px] text-slate-500">
-            Workbench-style corpus totals and lightweight custom checks.
-            Existing source cards and browsing remain independent below.
+            Corpus totals and lightweight custom checks for locally discovered
+            datasets.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -327,8 +332,7 @@ export default function HomepageDatasetStatistics({
           {statistics.datasets.toLocaleString()} datasets
         </span>
         <span>
-          Prompt checks are loaded on demand in each dataset&apos;s Workbench
-          tab.
+          Prompt checks are loaded on demand in the current dataset checks view.
         </span>
       </div>
     </section>

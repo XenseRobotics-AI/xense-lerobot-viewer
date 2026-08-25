@@ -43,7 +43,11 @@ function formatRows(rows: WorkbenchRollupRow[]): string {
   return rows.length === 1 ? "1 group" : `${rows.length} groups`;
 }
 
-export default function WorkbenchGroupingPanel() {
+export default function WorkbenchGroupingPanel({
+  organization,
+}: {
+  organization: string;
+}) {
   const [dimension, setDimension] =
     useState<WorkbenchRollupDimension>("uploader");
   const [datasets, setDatasets] = useState<LocalDatasetSummary[]>([]);
@@ -76,7 +80,11 @@ export default function WorkbenchGroupingPanel() {
         return payload as LocalDatasetsPayload;
       })
       .then((payload) => {
-        setDatasets(payload.datasets ?? []);
+        setDatasets(
+          (payload.datasets ?? []).filter(
+            (dataset) => dataset.relativePath.split("/", 1)[0] === organization,
+          ),
+        );
         if ((payload.errors?.length ?? 0) > 0) {
           setError(
             `${payload.errors?.length} dataset path(s) could not be scanned. The visible rows are still grouped.`,
@@ -90,7 +98,7 @@ export default function WorkbenchGroupingPanel() {
       })
       .finally(() => setLoading(false));
     return () => controller.abort();
-  }, [refreshToken]);
+  }, [organization, refreshToken]);
 
   useEffect(() => {
     if (datasets.length === 0) return;

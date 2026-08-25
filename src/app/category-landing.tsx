@@ -6,6 +6,7 @@ import HoverPlayVideo from "@/components/hover-play-video";
 import LanguageSwitcher from "@/components/language-switcher";
 import HomepageDatasetStatistics from "@/components/homepage-dataset-statistics";
 import HfWorkbenchToolbar from "@/components/hf-workbench-toolbar";
+import CorpusDashboard from "@/components/corpus-dashboard";
 import { formatCompact } from "@/utils/corpusStats";
 import type { DailyDelta } from "@/utils/corpusHistory";
 import { useLocale } from "@/context/locale-context";
@@ -73,8 +74,6 @@ export default function CategoryLanding({
         <LanguageSwitcher className="mt-1.5" />
       </header>
 
-      <HfWorkbenchToolbar organizations={groups.map((group) => group.prefix)} />
-
       {/* Corpus dashboard. Replaces the old counts line + health pills: the same
           facts, plus where the recorded time comes from, per-source growth, and
           the Hugging Face sync. */}
@@ -83,11 +82,6 @@ export default function CategoryLanding({
         overall={overall}
         delta={delta}
         onSelect={onSelect}
-      />
-
-      <HomepageDatasetStatistics
-        datasets={groups.flatMap((group) => group.datasets)}
-        delta={delta}
       />
 
       {errors.length > 0 && (

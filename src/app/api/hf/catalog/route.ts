@@ -33,6 +33,88 @@ function cachePath(root: string, org: string): string {
   return path.join(root, ".xense-viewer", "hf-catalog", `${org}.json`);
 }
 
+type CatalogEntry = {
+  repoId?: string;
+  org?: string;
+  name?: string;
+  uploader?: string | null;
+  lastModified?: string | null;
+  [key: string]: unknown;
+};
+
+type CatalogDocument = {
+  datasets?: CatalogEntry[];
+  [key: string]: unknown;
+};
+
+async function readWorkbenchHistory(org: string): Promise<CatalogEntry[]> {
+  const configured = process.env.TACVERSE_WORKBENCH_DATASET_LOG?.trim();
+  const candidates = [
+    configured,
+    path.resolve(process.cwd(), "..", "tacverse-workbench", "dataset_log.json"),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  for (const file of candidates) {
+    try {
+      const parsed = JSON.parse(await fs.readFile(file, "utf8")) as {
+        datasets?: Record<
+          string,
+          { uploader?: unknown; last_modified?: unknown }
+        >;
+      };
+      return Object.entries(parsed.datasets ?? {})
+        .filter(([repoId]) => repoId.startsWith(`${org}/`))
+        .map(([repoId, metadata]) => ({
+          repoId,
+          org,
+          name: repoId.slice(org.length + 1),
+          uploader:
+            typeof metadata.uploader === "string" ? metadata.uploader : null,
+          lastModified:
+            typeof metadata.last_modified === "string"
+              ? metadata.last_modified
+              : null,
+        }));
+    } catch {
+      // Try the next configured/default Workbench history location.
+    }
+  }
+  return [];
+}
+
+function modifiedTime(entry: CatalogEntry): number {
+  const value = entry.lastModified;
+  if (typeof value !== "string") return Number.NEGATIVE_INFINITY;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+async function mergeWorkbenchHistory(
+  catalog: CatalogDocument,
+  org: string,
+): Promise<CatalogDocument> {
+  const current = Array.isArray(catalog.datasets) ? catalog.datasets : [];
+  const byRepo = new Map<string, CatalogEntry>();
+  for (const entry of await readWorkbenchHistory(org)) {
+    if (entry.repoId) byRepo.set(entry.repoId, entry);
+  }
+  // Live HF metadata is authoritative for repositories present in both data
+  // sources; the Workbench log only restores uploader/time for older entries
+  // omitted by the current Hub listing.
+  for (const entry of current) {
+    if (!entry.repoId) continue;
+    byRepo.set(entry.repoId, { ...byRepo.get(entry.repoId), ...entry });
+  }
+  return {
+    ...catalog,
+    datasets: [...byRepo.values()].sort(
+      (left, right) =>
+        modifiedTime(right) - modifiedTime(left) ||
+        String(left.repoId).localeCompare(String(right.repoId)),
+    ),
+  };
+}
+
 function scriptPath(): string {
   return path.join(process.cwd(), "scripts", "hf_catalog.py");
 }
@@ -62,9 +144,10 @@ export async function GET(request: NextRequest): Promise<Response> {
     const root = resolveLocalDatasetRoot();
     const file = cachePath(root, org);
     const raw = await fs.readFile(file, "utf8");
-    return new Response(raw, {
+    const parsed = JSON.parse(raw) as CatalogDocument;
+    const catalog = await mergeWorkbenchHistory(parsed, org);
+    return Response.json(catalog, {
       headers: {
-        "content-type": "application/json; charset=utf-8",
         "cache-control": "no-store",
       },
     });

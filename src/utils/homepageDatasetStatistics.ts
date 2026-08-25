@@ -49,6 +49,7 @@ function nonNegativeFinite(value: number): number {
  */
 export function buildHomepageDatasetStatistics(
   datasets: readonly LocalDatasetSummary[],
+  options: { preserveOrder?: boolean } = {},
 ): HomepageDatasetStatistics {
   const rows = datasets.map((dataset): HomepageDatasetStatisticsRow => {
     const episodes = nonNegativeFinite(dataset.total_episodes);
@@ -59,7 +60,7 @@ export function buildHomepageDatasetStatistics(
         dataset_name: dataset.relativePath,
         total_episodes: episodes,
         duration_hours: hours,
-        tasks: null,
+        tasks: dataset.tasks ?? null,
       },
       DEFAULT_DATASET_QUALITY_CONFIG,
     );
@@ -92,7 +93,9 @@ export function buildHomepageDatasetStatistics(
     };
   });
 
-  rows.sort((a, b) => a.name.localeCompare(b.name));
+  if (!options.preserveOrder) {
+    rows.sort((a, b) => a.name.localeCompare(b.name));
+  }
 
   const healthy = rows.filter((row) => !row.hasIssue).length;
   return {

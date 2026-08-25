@@ -332,7 +332,8 @@ function SyncBlock({
           {t("source.syncButton")}
         </button>
         <span className="text-[11px] text-[var(--text-faint)]">
-          {t("source.syncHint", { source })}
+          Downloads {source} through the configured HF endpoint. Mirror traffic
+          bypasses the local HTTP proxy; the file list is always shown first.
         </span>
         {state.kind === "error" && (
           <p className="w-full text-xs text-red-300">{state.message}</p>

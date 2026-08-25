@@ -251,8 +251,11 @@ credential; dataset transfer still starts from the source tab below.
 > is saving you nothing anyway, because the bytes then come from the origin.
 >
 > That usually means a transparent proxy is capturing `hf-mirror.com` itself, so
-> the mirror sees a foreign IP and bounces you to the origin. Add `hf-mirror.com`
-> to the proxy's direct/bypass rules and it should serve normally.
+> the mirror sees a foreign IP and bounces you to the origin. The Viewer adds
+> `hf-mirror.com` (including subdomains) to `NO_PROXY`/`no_proxy` for its native
+> download child only; it does not change the proxy used by the browser or other
+> server requests. If a system-level transparent proxy ignores those variables,
+> add `hf-mirror.com` to that proxy application's direct/bypass rules as well.
 >
 > To download in the meantime:
 >

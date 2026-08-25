@@ -6,6 +6,7 @@ import type {
   EpisodeLengthStats,
 } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import { EpisodeLengthHistogram } from "@/components/stats-panel";
+import WorkbenchDatasetStatistics from "@/components/workbench-dataset-statistics";
 import WorkbenchGroupingPanel from "@/components/workbench-grouping-panel";
 import { assignEpisodesToBins } from "@/utils/episodeLengthHistogram";
 
@@ -200,13 +201,14 @@ export default function DatasetReviewPanel({
   encodedPath,
   datasetName,
 }: DatasetReviewPanelProps) {
+  const organization = datasetName.split("/", 1)[0]?.trim() ?? "";
   const [quality, setQuality] = useState<QualityResponse | null>(null);
   const [qualityError, setQualityError] = useState<string | null>(null);
   const [qualityLoading, setQualityLoading] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
-  const [workbenchView, setWorkbenchView] = useState<"statistics" | "grouping">(
-    "statistics",
-  );
+  const [workbenchView, setWorkbenchView] = useState<
+    "dataset-statistics" | "checks" | "grouping"
+  >("dataset-statistics");
   const qualityRequestIdRef = useRef(0);
 
   useEffect(() => {
@@ -292,7 +294,7 @@ export default function DatasetReviewPanel({
             Parquet remain independent.
           </p>
         </div>
-        {encodedPath && (
+        {encodedPath && workbenchView === "checks" && (
           <button
             type="button"
             onClick={() => setRefreshToken((value) => value + 1)}
@@ -306,7 +308,8 @@ export default function DatasetReviewPanel({
       <div className="flex flex-wrap gap-1 border-b border-white/10 pb-1">
         {(
           [
-            ["statistics", "Dataset checks"],
+            ["dataset-statistics", "Dataset statistics"],
+            ["checks", "Current dataset checks"],
             ["grouping", "Grouped statistics"],
           ] as const
         ).map(([value, label]) => (
@@ -325,8 +328,10 @@ export default function DatasetReviewPanel({
         ))}
       </div>
 
-      {workbenchView === "grouping" ? (
-        <WorkbenchGroupingPanel />
+      {workbenchView === "dataset-statistics" ? (
+        <WorkbenchDatasetStatistics organization={organization} />
+      ) : workbenchView === "grouping" ? (
+        <WorkbenchGroupingPanel organization={organization} />
       ) : (
         <>
           <section className="rounded-xl border border-cyan-400/20 bg-[var(--surface-1)]/30 p-4 sm:p-5">

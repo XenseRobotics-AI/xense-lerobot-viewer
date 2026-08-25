@@ -10,6 +10,7 @@ import {
 } from "@/lib/python-runtime";
 import { resolveHfToken } from "@/lib/hf-token-store";
 import { redactHfSecrets } from "@/lib/hf-identity";
+import { addHfMirrorProxyBypass } from "@/lib/proxy-bypass";
 import { isSameOriginRequest } from "@/lib/request-security";
 import { normalizeHfSource } from "@/utils/hfValidation";
 
@@ -88,12 +89,19 @@ function spawnScript(
   args: string[],
   token: string | null = null,
 ): ChildProcessWithoutNullStreams {
+  const endpoint = process.env.HF_ENDPOINT || HF_MIRROR;
   const env = {
     ...pythonSpawnEnv(),
     // Belt and braces: the script also defaults this, but setting it here
     // means the mirror holds even if the script is run through a wrapper.
-    HF_ENDPOINT: process.env.HF_ENDPOINT || HF_MIRROR,
+    HF_ENDPOINT: endpoint,
   } as NodeJS.ProcessEnv;
+  // This workstation commonly runs a VPN/HTTP proxy for the official Hub.
+  // Sending hf-mirror through that proxy makes the mirror see the proxy's
+  // foreign exit and respond with a metadata-breaking 308 back to the origin.
+  // Bypass only the mirror host in this download child; do not change the
+  // browser, Next server, or any other outbound request.
+  addHfMirrorProxyBypass(env, endpoint);
   // Native SourcePanel sync accepts the same credential sources as the
   // original viewer (CLI cache / HF_TOKEN), plus an explicitly validated
   // viewer token when the optional account controls were used. Never put it in
