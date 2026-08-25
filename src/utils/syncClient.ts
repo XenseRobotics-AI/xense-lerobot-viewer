@@ -5,11 +5,28 @@
  * `runSync` streams the transfer. The listing step is deliberate — some orgs
  * hold far more on the Hub than locally, and nobody should trigger a
  * hundred-gigabyte download from a single click.
+ *
+ * Both steps take a `SyncTarget`: a whole org (`{ source }`) or one dataset
+ * (`{ repo: "owner/name" }`). They are the same request otherwise, so they stay
+ * one code path rather than two that drift.
  */
 
 import { tStandalone } from "@/i18n/standalone";
 
 const SYNC_URL = "/api/local-datasets/sync";
+
+/** A whole Hugging Face org, or a single `owner/name` dataset. */
+export type SyncTarget = { source: string } | { repo: string };
+
+/** Size and file count for one repo — only the `{ repo }` target reports it. */
+export type SyncRepoDetail = {
+  id: string;
+  sha: string | null;
+  /** Null when the Hub reported no file sizes — unknown, not empty. */
+  sizeBytes: number | null;
+  files: number | null;
+  error: string | null;
+};
 
 export type SyncListing = {
   source: string;
@@ -22,6 +39,8 @@ export type SyncListing = {
    * `repos`, is what a plain sync transfers.
    */
   pending: string[];
+  /** Present only for a `{ repo }` target; null for an org listing. */
+  details: SyncRepoDetail[] | null;
   confirmRequired: true;
 };
 
@@ -53,17 +72,18 @@ export type SyncResult = {
   skipped: number;
   failed: { repo: string; error: string }[];
   listOnly: boolean;
+  details?: SyncRepoDetail[];
 };
 
 /** What the sync would pull, without pulling it. */
 export async function listSyncCandidates(
-  source: string,
+  target: SyncTarget,
   signal?: AbortSignal,
 ): Promise<SyncListing> {
   const response = await fetch(SYNC_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source }),
+    body: JSON.stringify(target),
     signal,
   });
   const payload = await response.json().catch(() => null);
@@ -77,12 +97,12 @@ export async function listSyncCandidates(
  * Run the download, invoking `onProgress` for each event as it arrives.
  * Resolves with the final result; rejects on a stream-level error.
  *
- * By default only repos that differ are transferred. `force` re-fetches every
- * repo in the org — the escape hatch for a local copy the commit check cannot
- * see through.
+ * By default only repos that differ are transferred. `force` re-fetches the
+ * whole target regardless — the escape hatch for a local copy the commit check
+ * cannot see through.
  */
 export async function runSync(
-  source: string,
+  target: SyncTarget,
   onProgress: (progress: SyncProgress) => void,
   options: { signal?: AbortSignal; force?: boolean } = {},
 ): Promise<SyncResult> {
@@ -90,7 +110,7 @@ export async function runSync(
   const response = await fetch(SYNC_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source, confirm: true, force }),
+    body: JSON.stringify({ ...target, confirm: true, force }),
     signal,
   });
 

@@ -4,6 +4,7 @@ import React, { useMemo, useState } from "react";
 import type { DatasetGroup } from "@/utils/datasetGrouping";
 import HoverPlayVideo from "@/components/hover-play-video";
 import CorpusDashboard from "@/components/corpus-dashboard";
+import RepoFetchPanel from "@/components/repo-fetch-panel";
 import LanguageSwitcher from "@/components/language-switcher";
 import { formatCompact } from "@/utils/corpusStats";
 import type { DailyDelta } from "@/utils/corpusHistory";
@@ -81,6 +82,12 @@ export default function CategoryLanding({
         delta={delta}
         onSelect={onSelect}
       />
+
+      {/* Deliberately outside the dashboard: `CorpusDashboard` renders nothing
+          when no source exists yet, and an empty root is precisely when pulling
+          a dataset by id is the only thing left to do — so it opens by default
+          there and stays collapsed once there is a corpus to browse. */}
+      <RepoFetchPanel defaultOpen={groups.length === 0} />
 
       {errors.length > 0 && (
         <div className="mb-6 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">

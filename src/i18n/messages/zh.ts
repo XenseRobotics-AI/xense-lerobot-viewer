@@ -171,6 +171,26 @@ export const zh: Record<MessageKey, string> = {
   "source.failedCount": "· {count} 个失败",
   "source.reloadNote": "刷新页面即可看到新下载的数据集。",
 
+  // ── homepage: fetch one dataset by repo id ──
+  "repofetch.title": "按 Hugging Face id 下载单个数据集",
+  "repofetch.hint":
+    "各来源的同步按钮只能更新本地已有的来源。要拉取本机从未保存过的数据集，用这里。",
+  "repofetch.placeholder": "例：owner/dataset-name",
+  "repofetch.inputAria": "Hugging Face 数据集 id",
+  "repofetch.check": "查询",
+  "repofetch.checking": "正在向 Hub 查询 {repo}…",
+  "repofetch.invalid": "id 的形式为 owner/dataset-name —— 一个斜杠，不含空格。",
+  "repofetch.target": "将保存为数据集根目录下的 {path}。",
+  "repofetch.size": "{size}，共 {files} files。",
+  "repofetch.sizeUnknown": "Hub 没有返回该数据集的大小。",
+  "repofetch.pendingLine": "{repo} 可以下载了。",
+  "repofetch.alreadyLocal": "{repo} 本地已是最新提交。",
+  "repofetch.download": "下载",
+  "repofetch.downloadSized": "下载 {size}",
+  "repofetch.redownload": "重新下载",
+  "repofetch.redownloadTitle": "忽略本地提交检查，重新拉取该数据集",
+  "repofetch.another": "下载另一个",
+
   // ── homepage: trash ─────────────────────────────────────────────────────
   "trash.dialogTitle": "删除数据集",
   "trash.moveBody": "将整个目录移入 {path}。",
