@@ -814,13 +814,6 @@ export const en = {
     "TCP frame: +X forward, +Y left, +Z up (red/green/blue reference axes). Complete head.xyz+r1-r6 data adds a yellow trail, schematic HMD, and playback frame. The HMD is centered on the recorded head pose with its visor facing +X; no uncalibrated offset is added. Head video alone does not create a trajectory.",
   "urdf.tacCapNoPose":
     "No complete left_tcp/right_tcp xyz+r1-r6 trajectories were found for TacCap replay.",
-  "urdf.tacCapPoseMode": "Pose mode",
-  "urdf.tacCapPoseModeTcpShort": "Already TCP",
-  "urdf.tacCapPoseModeTrackerShort": "Tracker → TCP",
-  "urdf.tacCapPoseModeHelp":
-    "Recorded values are treated as TCP by default. The extrinsic transform is applied only after selecting Tracker → TCP.",
-  "urdf.tacCapPoseCorrected": "Pose: Tracker → TCP corrected",
-  "urdf.tacCapPoseCanonical": "Pose: canonical TCP",
   "urdf.axisForward": "forward",
   "urdf.axisLeft": "left",
   "urdf.axisUp": "up",
