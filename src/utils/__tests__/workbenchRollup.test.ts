@@ -5,6 +5,8 @@ import {
   computeWorkbenchTimeline,
   countHalfOpenDays,
   formatWorkbenchRewardCoins,
+  workbenchDatasetName,
+  workbenchGroupDatasetNames,
   getWorkbenchDefaultDateRange,
   getWorkbenchLeftSnWorkstation,
   getWorkbenchLeftSnTargetHours,
@@ -41,6 +43,14 @@ describe("workbenchTaskPrefix", () => {
 
   test("keeps a task without a date suffix", () => {
     expect(workbenchTaskPrefix("TacVerse/place-cup")).toBe("place-cup");
+  });
+});
+
+describe("workbenchDatasetName", () => {
+  test("returns the leaf dataset name without the organization prefix", () => {
+    expect(
+      workbenchDatasetName("TacVerse/taccap-g1-arrange-tabletop-items-0826"),
+    ).toBe("taccap-g1-arrange-tabletop-items-0826");
   });
 });
 
@@ -186,6 +196,32 @@ describe("computeWorkbenchRollup", () => {
     expect(rows).toEqual([
       expect.objectContaining({ hours: 3.25, pctHours: 100 }),
     ]);
+  });
+
+  test("returns dataset names for each Left SN group in the date range", () => {
+    const names = workbenchGroupDatasetNames(
+      [
+        dataset("TacVerse/taccap-g1-arrange-tabletop-items-0826", {
+          leftGripperSn: "TCGU01A28Z0033m",
+          lastModified: "2026-08-26T08:00:00Z",
+        }),
+        dataset("TacVerse/taccap-g1-place-cup-0825", {
+          leftGripperSn: "TCGU01A28Z0033m",
+          lastModified: "2026-08-25T08:00:00Z",
+        }),
+        dataset("TacVerse/taccap-g1-fold-cloth-0826", {
+          leftGripperSn: "TCGU01A28Z0069m",
+          lastModified: "2026-08-26T08:00:00Z",
+        }),
+      ],
+      "left_gripper_sn",
+      { startDate: "2026-08-26", endDate: "2026-08-27" },
+    );
+
+    expect(names.get("TCGU01A28Z0033m")).toEqual([
+      "taccap-g1-arrange-tabletop-items-0826",
+    ]);
+    expect(names.get("TCGU01A28Z0069m")).toEqual(["taccap-g1-fold-cloth-0826"]);
   });
 
   test("groups totals by left gripper serial", () => {

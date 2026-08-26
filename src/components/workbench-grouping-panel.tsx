@@ -19,6 +19,7 @@ import {
   computeWorkbenchRollup,
   computeWorkbenchTimeline,
   formatWorkbenchRewardCoins,
+  workbenchGroupDatasetNames,
   getWorkbenchDefaultDateRange,
   getWorkbenchLeftSnWorkstation,
   getWorkbenchLeftSnTargetHours,
@@ -86,6 +87,11 @@ function formatRows(rows: WorkbenchRollupRow[]): string {
 function yAxisWidth(rows: WorkbenchRollupRow[]): number {
   const longest = rows.reduce((max, row) => Math.max(max, row.group.length), 0);
   return Math.min(180, Math.max(72, longest * 7));
+}
+
+function datasetNamesTitle(names: string[] | undefined): string | undefined {
+  if (!names?.length) return undefined;
+  return `Datasets:\n${names.join("\n")}`;
 }
 
 function cleanStringRecord(input: unknown): Record<string, string> {
@@ -243,6 +249,14 @@ export default function WorkbenchGroupingPanel({
         endDate: range.endDate,
       }),
     [dimension, range.endDate, range.startDate, rollupDatasets],
+  );
+  const leftSnDatasetNames = useMemo(
+    () =>
+      workbenchGroupDatasetNames(rollupDatasets, "left_gripper_sn", {
+        startDate: range.startDate,
+        endDate: range.endDate,
+      }),
+    [range.endDate, range.startDate, rollupDatasets],
   );
   const timeline = useMemo(
     () =>
@@ -604,11 +618,14 @@ export default function WorkbenchGroupingPanel({
                           leftSnTargetHours,
                           leftSnRewardAmount,
                         );
+                  const groupTitle = showLeftSnOkr
+                    ? datasetNamesTitle(leftSnDatasetNames.get(row.group))
+                    : row.group;
                   return (
                     <tr key={row.group} className="text-slate-200">
                       <td
                         className="truncate px-3 py-2.5 font-medium"
-                        title={row.group}
+                        title={groupTitle}
                       >
                         {row.group}
                       </td>

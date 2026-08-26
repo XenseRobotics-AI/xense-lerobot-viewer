@@ -223,6 +223,10 @@ export function workbenchTaskPrefix(relativePath: string): string {
   return leaf.replace(/-\d{4}$/u, "") || leaf || "—";
 }
 
+export function workbenchDatasetName(relativePath: string): string {
+  return relativePath.split("/").filter(Boolean).at(-1) ?? relativePath;
+}
+
 export function workbenchRollupLabel(
   dataset: WorkbenchRollupDataset,
   dimension: WorkbenchRollupDimension,
@@ -240,6 +244,39 @@ export function workbenchRollupLabel(
   if (dimension === "robot_type") return dataset.robot_type || "—";
   if (dimension === "left_gripper_sn") return dataset.leftGripperSn || "—";
   return getDatasetPrefix(dataset.relativePath);
+}
+
+export function workbenchGroupDatasetNames(
+  datasets: readonly WorkbenchRollupDataset[],
+  dimension: WorkbenchRollupDimension,
+  options: {
+    startDate?: string | null;
+    endDate?: string | null;
+  } = {},
+): Map<string, string[]> {
+  const availableDays = datasets
+    .map((dataset) => workbenchDayKey(dataset.lastModified))
+    .filter((value): value is string => Boolean(value));
+  const range = normalizeWorkbenchDateRange(
+    options.startDate,
+    options.endDate,
+    availableDays,
+  );
+  const groups = new Map<string, Set<string>>();
+
+  for (const dataset of filterWorkbenchDatasetsByDate(datasets, range)) {
+    const group = workbenchRollupLabel(dataset, dimension);
+    const names = groups.get(group) ?? new Set<string>();
+    names.add(workbenchDatasetName(dataset.relativePath));
+    groups.set(group, names);
+  }
+
+  return new Map(
+    Array.from(groups.entries()).map(([group, names]) => [
+      group,
+      Array.from(names).sort((left, right) => left.localeCompare(right)),
+    ]),
+  );
 }
 
 export function normalizeWorkbenchDateRange(

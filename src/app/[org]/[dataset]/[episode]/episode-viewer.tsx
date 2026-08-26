@@ -119,6 +119,7 @@ type ActiveTab =
 function normalizeActiveTab(value: string | null): ActiveTab | null {
   if (!value) return null;
   const tab = value === "dataset-review" ? "workbench" : value;
+  if (tab === "workbench") return null;
   return [
     "episodes",
     "annotations",
@@ -129,10 +130,22 @@ function normalizeActiveTab(value: string | null): ActiveTab | null {
     "filtering",
     "urdf",
     "parquet",
-    "workbench",
   ].includes(tab)
     ? (tab as ActiveTab)
     : null;
+}
+
+function removeWorkbenchTabParam() {
+  const params = new URLSearchParams(window.location.search);
+  const tab = params.get("tab");
+  if (tab !== "workbench" && tab !== "dataset-review") return;
+  params.delete("tab");
+  const query = params.toString();
+  window.history.replaceState(
+    {},
+    "",
+    `${window.location.pathname}${query ? `?${query}` : ""}`,
+  );
 }
 
 // Subscribes to `currentTime` so its parent doesn't have to. Keeping this
@@ -495,10 +508,18 @@ function EpisodeViewerInner({
   // three near-identical writes — fewer commit hooks per render and the
   // intent (mirror three primitives to sessionStorage) reads as one unit.
   useEffect(() => {
-    sessionStorage.setItem("activeTab", activeTab);
+    if (activeTab === "workbench") {
+      sessionStorage.removeItem("activeTab");
+    } else {
+      sessionStorage.setItem("activeTab", activeTab);
+    }
     sessionStorage.setItem("sidebarFlaggedOnly", String(sidebarFlaggedOnly));
     sessionStorage.setItem("framesFlaggedOnly", String(framesFlaggedOnly));
   }, [activeTab, sidebarFlaggedOnly, framesFlaggedOnly]);
+
+  useEffect(() => {
+    removeWorkbenchTabParam();
+  }, []);
 
   useEffect(() => {
     const onPopState = () => {
@@ -506,6 +527,7 @@ function EpisodeViewerInner({
         new URLSearchParams(window.location.search).get("tab"),
       );
       setActiveTab(nextTab ?? "episodes");
+      removeWorkbenchTabParam();
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
@@ -626,7 +648,7 @@ function EpisodeViewerInner({
   const handleTabChange = (tab: ActiveTab) => {
     setActiveTab(tab);
     const params = new URLSearchParams(window.location.search);
-    if (tab === "episodes") {
+    if (tab === "episodes" || tab === "workbench") {
       params.delete("tab");
     } else {
       params.set("tab", tab);
