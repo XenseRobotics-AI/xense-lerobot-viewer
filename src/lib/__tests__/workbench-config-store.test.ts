@@ -35,6 +35,7 @@ describe("workbench workstation mapping store", () => {
     expect(config.source).toBe("defaults");
     expect(config.updatedAt).toBeNull();
     expect(config.mappings.TCGU01A28Z0033m).toBe("N0");
+    expect(config.mappings.TCGU01A28Z0041m).toBe("D5");
     expect(config.mappings.TCGU01A28Z0071m).toBe("E4");
   });
 

@@ -2,7 +2,10 @@ import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { directorySizeBytes } from "@/lib/local-datasets-discovery";
+import {
+  directorySizeBytes,
+  readDatasetHardwareValue,
+} from "@/lib/local-datasets-discovery";
 
 const roots: string[] = [];
 
@@ -16,6 +19,40 @@ afterAll(async () => {
   await Promise.all(
     roots.map((root) => fs.rm(root, { recursive: true, force: true })),
   );
+});
+
+describe("readDatasetHardwareValue", () => {
+  test("reads the legacy top-level units format", () => {
+    expect(
+      readDatasetHardwareValue({
+        robot_type: "bi_taccap_gripper",
+        units: [
+          { side: "right", gripper_sn: "TCGU01A28Z9999m" },
+          { side: "left", gripper_sn: "TCGU01A28Z0033m" },
+        ],
+      }),
+    ).toBe("TCGU01A28Z0033m");
+  });
+
+  test("falls back to the latest epoch units format", () => {
+    expect(
+      readDatasetHardwareValue({
+        robot_type: "bi_taccap_gripper",
+        epochs: [
+          {
+            from_episode: 0,
+            to_episode: 20,
+            units: [{ side: "left", gripper_sn: "TCGU01A28Z0061m" }],
+          },
+          {
+            from_episode: 20,
+            to_episode: 40,
+            units: [{ side: "left", gripper_sn: "TCGU01A28Z0041m" }],
+          },
+        ],
+      }),
+    ).toBe("TCGU01A28Z0041m");
+  });
 });
 
 describe("directorySizeBytes", () => {

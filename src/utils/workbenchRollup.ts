@@ -143,6 +143,20 @@ export function getWorkbenchOkrRewardAmount(
   return hours >= targetHours ? rewardAmount : 0;
 }
 
+export function getWorkbenchOkrAchievementRate(
+  hours: number,
+  targetHours: number,
+): number | null {
+  if (
+    !Number.isFinite(hours) ||
+    !Number.isFinite(targetHours) ||
+    targetHours <= 0
+  ) {
+    return null;
+  }
+  return (hours / targetHours) * 100;
+}
+
 export function formatWorkbenchRewardCoins(value: number): string {
   const coins = Math.trunc(value / 10);
   if (!Number.isFinite(coins) || coins <= 0) {

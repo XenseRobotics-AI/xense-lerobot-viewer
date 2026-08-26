@@ -21,6 +21,7 @@ import {
   formatWorkbenchRewardCoins,
   workbenchGroupDatasetNames,
   getWorkbenchDefaultDateRange,
+  getWorkbenchOkrAchievementRate,
   getWorkbenchLeftSnWorkstation,
   getWorkbenchLeftSnTargetHours,
   getWorkbenchOkrRewardAmount,
@@ -567,14 +568,15 @@ export default function WorkbenchGroupingPanel({
           <div className="overflow-x-auto rounded-lg border border-white/10">
             <table className="w-full table-fixed border-collapse text-left text-xs">
               <colgroup>
-                <col style={{ width: showLeftSnOkr ? "20%" : "40%" }} />
-                {showLeftSnOkr && <col style={{ width: "12%" }} />}
+                <col style={{ width: showLeftSnOkr ? "18%" : "40%" }} />
+                {showLeftSnOkr && <col style={{ width: "11%" }} />}
+                <col style={{ width: showLeftSnOkr ? "9%" : "15%" }} />
                 <col style={{ width: showLeftSnOkr ? "10%" : "15%" }} />
-                <col style={{ width: showLeftSnOkr ? "12%" : "15%" }} />
-                <col style={{ width: showLeftSnOkr ? "14%" : "15%" }} />
-                <col style={{ width: showLeftSnOkr ? "10%" : "15%" }} />
-                {showLeftSnOkr && <col style={{ width: "8%" }} />}
-                {showLeftSnOkr && <col style={{ width: "14%" }} />}
+                <col style={{ width: showLeftSnOkr ? "11%" : "15%" }} />
+                <col style={{ width: showLeftSnOkr ? "8%" : "15%" }} />
+                {showLeftSnOkr && <col style={{ width: "7%" }} />}
+                {showLeftSnOkr && <col style={{ width: "10%" }} />}
+                {showLeftSnOkr && <col style={{ width: "16%" }} />}
               </colgroup>
               <thead className="bg-[var(--surface-2)] text-slate-400">
                 <tr>
@@ -595,6 +597,11 @@ export default function WorkbenchGroupingPanel({
                   )}
                   {showLeftSnOkr && (
                     <th className="px-3 py-2.5 text-right font-medium">
+                      OKR达成率
+                    </th>
+                  )}
+                  {showLeftSnOkr && (
+                    <th className="px-3 py-2.5 text-right font-medium">
                       Reward
                     </th>
                   )}
@@ -610,6 +617,13 @@ export default function WorkbenchGroupingPanel({
                     leftSnTargetHours === null
                       ? "—"
                       : getWorkbenchOkrSymbol(row.hours, leftSnTargetHours);
+                  const achievementRate =
+                    leftSnTargetHours === null
+                      ? null
+                      : getWorkbenchOkrAchievementRate(
+                          row.hours,
+                          leftSnTargetHours,
+                        );
                   const rewardAmount =
                     leftSnTargetHours === null
                       ? null
@@ -652,6 +666,13 @@ export default function WorkbenchGroupingPanel({
                       {showLeftSnOkr && (
                         <td className="px-3 py-2.5 text-center text-base leading-none">
                           {okrSymbol}
+                        </td>
+                      )}
+                      {showLeftSnOkr && (
+                        <td className="px-3 py-2.5 text-right tabular-nums">
+                          {achievementRate === null
+                            ? "—"
+                            : `${achievementRate.toFixed(1)}%`}
                         </td>
                       )}
                       {showLeftSnOkr && (

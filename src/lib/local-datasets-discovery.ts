@@ -49,8 +49,14 @@ type LocalDatasetHardwareUnit = {
   [key: string]: unknown;
 };
 
+type LocalDatasetHardwareEpoch = {
+  units?: LocalDatasetHardwareUnit[];
+  [key: string]: unknown;
+};
+
 type LocalDatasetHardwareJson = {
   units?: LocalDatasetHardwareUnit[];
+  epochs?: LocalDatasetHardwareEpoch[];
   [key: string]: unknown;
 };
 
@@ -101,19 +107,42 @@ async function readDatasetTags(datasetDir: string): Promise<DatasetTags> {
   }
 }
 
+function extractLeftGripperSn(units: unknown): string | null {
+  if (!Array.isArray(units)) return null;
+  for (const unit of units) {
+    if (!unit || typeof unit !== "object") continue;
+    const record = unit as LocalDatasetHardwareUnit;
+    if (record.side !== "left") continue;
+    if (typeof record.gripper_sn !== "string") continue;
+    const value = record.gripper_sn.trim();
+    if (value) return value;
+  }
+  return null;
+}
+
+export function readDatasetHardwareValue(input: unknown): string | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const parsed = input as LocalDatasetHardwareJson;
+  const topLevel = extractLeftGripperSn(parsed.units);
+  if (topLevel) return topLevel;
+
+  const epochs = Array.isArray(parsed.epochs) ? parsed.epochs : [];
+  for (let index = epochs.length - 1; index >= 0; index -= 1) {
+    const epoch = epochs[index];
+    if (!epoch || typeof epoch !== "object") continue;
+    const value = extractLeftGripperSn(
+      (epoch as LocalDatasetHardwareEpoch).units,
+    );
+    if (value) return value;
+  }
+  return null;
+}
+
 async function readDatasetHardware(datasetDir: string): Promise<string | null> {
   const hardwarePath = path.join(datasetDir, "meta", "hardware.json");
   try {
     const raw = await fs.readFile(hardwarePath, "utf-8");
-    const parsed = JSON.parse(raw) as LocalDatasetHardwareJson;
-    const units = Array.isArray(parsed.units) ? parsed.units : [];
-    for (const unit of units) {
-      if (unit?.side !== "left") continue;
-      return typeof unit.gripper_sn === "string" && unit.gripper_sn.trim()
-        ? unit.gripper_sn.trim()
-        : null;
-    }
-    return null;
+    return readDatasetHardwareValue(JSON.parse(raw));
   } catch {
     return null;
   }

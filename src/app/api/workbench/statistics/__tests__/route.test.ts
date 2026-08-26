@@ -69,9 +69,23 @@ describe("Workbench statistics route", () => {
         fps: 10,
       },
       {
-        units: [
-          { side: "right", gripper_sn: "TCGU-right" },
-          { side: "left", gripper_sn: "TCGU01A28Z0069m" },
+        epochs: [
+          {
+            from_episode: 0,
+            to_episode: 20,
+            units: [
+              { side: "right", gripper_sn: "TCGU-right" },
+              { side: "left", gripper_sn: "TCGU01A28Z0041m" },
+            ],
+          },
+          {
+            from_episode: 20,
+            to_episode: 40,
+            units: [
+              { side: "right", gripper_sn: "TCGU-right" },
+              { side: "left", gripper_sn: "TCGU01A28Z0069m" },
+            ],
+          },
         ],
       },
     );

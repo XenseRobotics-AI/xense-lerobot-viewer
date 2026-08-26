@@ -5,6 +5,7 @@ import {
   computeWorkbenchTimeline,
   countHalfOpenDays,
   formatWorkbenchRewardCoins,
+  getWorkbenchOkrAchievementRate,
   workbenchDatasetName,
   workbenchGroupDatasetNames,
   getWorkbenchDefaultDateRange,
@@ -110,6 +111,13 @@ describe("Left SN OKR helpers", () => {
     expect(getWorkbenchOkrRewardAmount(12, 12, 300)).toBe(300);
     expect(getWorkbenchOkrRewardAmount(9.6, 12, 300)).toBe(0);
     expect(getWorkbenchOkrRewardAmount(12, 12, 0)).toBe(0);
+  });
+
+  test("turns hours and target hours into a percent achievement rate", () => {
+    expect(getWorkbenchOkrAchievementRate(12, 12)).toBe(100);
+    expect(getWorkbenchOkrAchievementRate(10.8, 12)).toBe(90);
+    expect(getWorkbenchOkrAchievementRate(0, 12)).toBe(0);
+    expect(getWorkbenchOkrAchievementRate(12, 0)).toBeNull();
   });
 
   test("formats one coin per 10 reward units", () => {
