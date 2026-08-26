@@ -28,6 +28,10 @@ export const dynamic = "force-dynamic";
  *   POST { source, confirm: true }   → NDJSON stream of the actual download
  *                                      (add `force: true` to re-fetch repos
  *                                      already at the remote commit)
+ *   POST { source, confirm: true, metadataOnly: true }
+ *                                    → stream only lightweight metadata files so
+ *                                      Workbench statistics can be hydrated
+ *                                      without pulling dataset payloads
  *
  * The listing step is not optional politeness. `lerobot` is a public HF org with
  * ~188 datasets against 5 held locally; syncing it unprompted would pull
@@ -78,16 +82,22 @@ type SyncRequestBody = {
   source?: unknown;
   confirm?: unknown;
   force?: unknown;
+  metadataOnly?: unknown;
 };
 
-function scriptPath(): string {
-  return path.join(process.cwd(), "scripts", "sync_hf_dataset.py");
+function scriptPath(metadataOnly: boolean): string {
+  return path.join(
+    process.cwd(),
+    "scripts",
+    metadataOnly ? "sync_hf_dataset_stats.py" : "sync_hf_dataset.py",
+  );
 }
 
 function spawnScript(
   pythonBin: string,
   args: string[],
   token: string | null = null,
+  metadataOnly = false,
 ): ChildProcessWithoutNullStreams {
   const endpoint = process.env.HF_ENDPOINT || HF_MIRROR;
   const env = {
@@ -107,7 +117,7 @@ function spawnScript(
   // viewer token when the optional account controls were used. Never put it in
   // argv or the progress stream.
   if (token) env.HF_TOKEN = token;
-  return spawn(pythonBin, [scriptPath(), ...args], {
+  return spawn(pythonBin, [scriptPath(metadataOnly), ...args], {
     cwd: process.cwd(),
     env,
   });
@@ -127,6 +137,7 @@ async function runToCompletion(
   args: string[],
   timeoutMs: number,
   token: string | null = null,
+  metadataOnly = false,
 ): Promise<{ result: SyncResult | null; error: string | null }> {
   let python: ResolvedPython;
   try {
@@ -144,7 +155,7 @@ async function runToCompletion(
   return new Promise((resolve) => {
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = spawnScript(python.bin, args, token);
+      child = spawnScript(python.bin, args, token, metadataOnly);
     } catch (err) {
       resolve({
         result: null,
@@ -217,6 +228,7 @@ function streamDownload(
   force: boolean,
   pythonBin: string,
   token: string | null = null,
+  metadataOnly = false,
 ): Response {
   const encoder = new TextEncoder();
   let activeChild: ChildProcessWithoutNullStreams | null = null;
@@ -253,7 +265,7 @@ function streamDownload(
         try {
           const args = ["--org", source, "--root", root];
           if (force) args.push("--force");
-          activeChild = spawnScript(pythonBin, args, token);
+          activeChild = spawnScript(pythonBin, args, token, metadataOnly);
         } catch (err) {
           send({
             type: "error",
@@ -426,6 +438,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       ["--org", source, "--root", root, "--list-only"],
       LIST_TIMEOUT_MS,
       token,
+      body.metadataOnly === true,
     );
     if (!result) {
       return Response.json(
@@ -462,5 +475,12 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   activeSync = { source, startedAt: Date.now() };
-  return streamDownload(source, root, body.force === true, python.bin, token);
+  return streamDownload(
+    source,
+    root,
+    body.force === true,
+    python.bin,
+    token,
+    body.metadataOnly === true,
+  );
 }

@@ -15,6 +15,7 @@ type HomepageDatasetStatisticsProps = {
   datasets: LocalDatasetSummary[];
   delta: DailyDelta;
   preserveDatasetOrder?: boolean;
+  rowLinkTarget?: "local-dataset" | "organization-workbench";
 };
 
 type Tone = "neutral" | "accent" | "ok" | "warn";
@@ -103,6 +104,31 @@ function checksTitle(row: HomepageDatasetStatisticsRow): string {
   return details.join("\n");
 }
 
+function rowOrganization(row: HomepageDatasetStatisticsRow): string | null {
+  return row.name.split("/", 1)[0]?.trim() || null;
+}
+
+function rowHref(
+  row: HomepageDatasetStatisticsRow,
+  target: NonNullable<HomepageDatasetStatisticsProps["rowLinkTarget"]>,
+): string {
+  if (target === "organization-workbench") {
+    const org = rowOrganization(row);
+    if (org) return "/?org=" + encodeURIComponent(org) + "&tab=workbench";
+  }
+  return "/_local/" + row.encodedPath + "/episode_0";
+}
+
+function rowTitle(
+  row: HomepageDatasetStatisticsRow,
+  target: NonNullable<HomepageDatasetStatisticsProps["rowLinkTarget"]>,
+): string {
+  if (target === "organization-workbench") {
+    return "Open " + (rowOrganization(row) ?? row.name) + " Workbench";
+  }
+  return "Open " + row.name;
+}
+
 function deltaDetail(delta: DailyDelta): string {
   if (!delta.since) return "No earlier snapshot";
   if (delta.spanDays === 1) return `Since ${delta.since} (1 day)`;
@@ -121,6 +147,7 @@ export default function HomepageDatasetStatistics({
   datasets,
   delta,
   preserveDatasetOrder = false,
+  rowLinkTarget = "local-dataset",
 }: HomepageDatasetStatisticsProps) {
   const [query, setQuery] = useState("");
   const [issuesOnly, setIssuesOnly] = useState(false);
@@ -273,9 +300,9 @@ export default function HomepageDatasetStatistics({
                 <tr key={row.encodedPath} className="hover:bg-white/[0.025]">
                   <td className="max-w-[24rem] px-3 py-2.5">
                     <Link
-                      href={`/_local/${row.encodedPath}/episode_0`}
+                      href={rowHref(row, rowLinkTarget)}
                       className="block truncate font-medium text-slate-200 hover:text-cyan-200"
-                      title={`Open ${row.name}`}
+                      title={rowTitle(row, rowLinkTarget)}
                     >
                       {row.name}
                     </Link>

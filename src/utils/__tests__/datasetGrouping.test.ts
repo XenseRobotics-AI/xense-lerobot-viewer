@@ -35,6 +35,7 @@ function makeDataset(
     relativePath,
     encodedPath: `enc(${relativePath})`,
     codebase_version: "v3.0",
+    leftGripperSn: null,
     robot_type: "so101_follower",
     total_episodes: 1,
     total_frames: 100,

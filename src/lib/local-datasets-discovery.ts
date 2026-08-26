@@ -43,11 +43,23 @@ type LocalDatasetInfoJson = {
   features?: Record<string, FeatureInfo>;
 };
 
+type LocalDatasetHardwareUnit = {
+  side?: unknown;
+  gripper_sn?: unknown;
+  [key: string]: unknown;
+};
+
+type LocalDatasetHardwareJson = {
+  units?: LocalDatasetHardwareUnit[];
+  [key: string]: unknown;
+};
+
 export type LocalDatasetSummary = {
   relativePath: string;
   encodedPath: string;
   codebase_version: string;
   robot_type: string | null;
+  leftGripperSn: string | null;
   total_episodes: number;
   total_frames: number;
   total_tasks?: number;
@@ -86,6 +98,24 @@ async function readDatasetTags(datasetDir: string): Promise<DatasetTags> {
     return normalizeTags(JSON.parse(raw));
   } catch {
     return { ...EMPTY_TAGS };
+  }
+}
+
+async function readDatasetHardware(datasetDir: string): Promise<string | null> {
+  const hardwarePath = path.join(datasetDir, "meta", "hardware.json");
+  try {
+    const raw = await fs.readFile(hardwarePath, "utf-8");
+    const parsed = JSON.parse(raw) as LocalDatasetHardwareJson;
+    const units = Array.isArray(parsed.units) ? parsed.units : [];
+    for (const unit of units) {
+      if (unit?.side !== "left") continue;
+      return typeof unit.gripper_sn === "string" && unit.gripper_sn.trim()
+        ? unit.gripper_sn.trim()
+        : null;
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 
@@ -210,9 +240,10 @@ async function walkForDatasets(
       .join("/");
     if (relativePath) {
       const encodedPath = encodeLocalDatasetPath(relativePath);
-      const [integrity, tags, sizeBytes] = await Promise.all([
+      const [integrity, tags, leftGripperSn, sizeBytes] = await Promise.all([
         probeIntegrity(currentDir, info),
         readDatasetTags(currentDir),
+        readDatasetHardware(currentDir),
         directorySizeBytes(currentDir),
       ]);
       const thumbnailPath =
@@ -226,6 +257,7 @@ async function walkForDatasets(
         encodedPath,
         codebase_version: info.codebase_version,
         robot_type: info.robot_type ?? null,
+        leftGripperSn,
         total_episodes: info.total_episodes ?? 0,
         total_frames: info.total_frames ?? 0,
         total_tasks: info.total_tasks ?? 0,

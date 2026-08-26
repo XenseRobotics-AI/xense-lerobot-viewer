@@ -116,13 +116,31 @@ type ActiveTab =
   | "parquet"
   | "workbench";
 
+function normalizeActiveTab(value: string | null): ActiveTab | null {
+  if (!value) return null;
+  const tab = value === "dataset-review" ? "workbench" : value;
+  return [
+    "episodes",
+    "annotations",
+    "statistics",
+    "frames",
+    "insights",
+    "doctor",
+    "filtering",
+    "urdf",
+    "parquet",
+    "workbench",
+  ].includes(tab)
+    ? (tab as ActiveTab)
+    : null;
+}
+
 // Subscribes to `currentTime` so its parent doesn't have to. Keeping this
 // in a leaf component means the throttled time ticks (~12.5/s during
 // playback) only re-render this no-op sub-tree, not the entire 700-line
 // EpisodeViewerInner. Vercel rule: rerender-defer-reads.
 function UrlTimeSync() {
   const { currentTime, isPlaying } = useTime();
-  const searchParams = useSearchParams();
   const lastUrlSecondRef = useRef<number>(-1);
 
   // Only update the URL ?t= param when the integer second changes, and
@@ -133,7 +151,7 @@ function UrlTimeSync() {
     const currentSec = Math.floor(currentTime);
     if (currentTime > 0 && lastUrlSecondRef.current !== currentSec) {
       lastUrlSecondRef.current = currentSec;
-      const newParams = new URLSearchParams(searchParams.toString());
+      const newParams = new URLSearchParams(window.location.search);
       newParams.set("t", currentSec.toString());
       window.history.replaceState(
         {},
@@ -141,7 +159,7 @@ function UrlTimeSync() {
         `${window.location.pathname}?${newParams.toString()}`,
       );
     }
-  }, [isPlaying, currentTime, searchParams]);
+  }, [isPlaying, currentTime]);
 
   return null;
 }
@@ -391,28 +409,12 @@ function EpisodeViewerInner({
   // correct tab renders on the very first frame (no post-mount flash).
   // Safe because EpisodeViewerInner only mounts client-side (behind a loading gate).
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
+    const urlTab = normalizeActiveTab(searchParams.get("tab"));
+    if (urlTab) return urlTab;
     if (typeof window !== "undefined") {
-      const stored = sessionStorage.getItem("activeTab");
-      if (
-        stored &&
-        [
-          "episodes",
-          "annotations",
-          "statistics",
-          "frames",
-          "insights",
-          "doctor",
-          "filtering",
-          "urdf",
-          "parquet",
-          "workbench",
-          "dataset-review",
-        ].includes(stored)
-      ) {
-        // Keep links/session state created by the pre-Workbench build usable.
-        return (
-          stored === "dataset-review" ? "workbench" : stored
-        ) as ActiveTab;
+      const stored = normalizeActiveTab(sessionStorage.getItem("activeTab"));
+      if (stored) {
+        return stored;
       }
     }
     return "episodes";
@@ -497,6 +499,17 @@ function EpisodeViewerInner({
     sessionStorage.setItem("sidebarFlaggedOnly", String(sidebarFlaggedOnly));
     sessionStorage.setItem("framesFlaggedOnly", String(framesFlaggedOnly));
   }, [activeTab, sidebarFlaggedOnly, framesFlaggedOnly]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const nextTab = normalizeActiveTab(
+        new URLSearchParams(window.location.search).get("tab"),
+      );
+      setActiveTab(nextTab ?? "episodes");
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   const loadStats = () => {
     if (statsLoadedRef.current) return;
@@ -612,6 +625,18 @@ function EpisodeViewerInner({
 
   const handleTabChange = (tab: ActiveTab) => {
     setActiveTab(tab);
+    const params = new URLSearchParams(window.location.search);
+    if (tab === "episodes") {
+      params.delete("tab");
+    } else {
+      params.set("tab", tab);
+    }
+    const query = params.toString();
+    window.history.pushState(
+      {},
+      "",
+      `${window.location.pathname}${query ? `?${query}` : ""}`,
+    );
     if (tab === "statistics") loadStats();
     if (tab === "doctor") loadStats();
     if (tab === "workbench") loadStats();

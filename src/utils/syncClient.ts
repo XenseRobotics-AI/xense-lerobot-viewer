@@ -4,7 +4,9 @@
  * Always two steps: `listSyncCandidates` shows what would be pulled, then
  * `runSync` streams the transfer. The listing step is deliberate — some orgs
  * hold far more on the Hub than locally, and nobody should trigger a
- * hundred-gigabyte download from a single click.
+ * hundred-gigabyte download from a single click. `metadataOnly` keeps the
+ * same route but only pulls lightweight metadata files so Workbench statistics
+ * can be hydrated without touching the dataset payload.
  */
 
 import { tStandalone } from "@/i18n/standalone";
@@ -84,13 +86,17 @@ export async function listSyncCandidates(
 export async function runSync(
   source: string,
   onProgress: (progress: SyncProgress) => void,
-  options: { signal?: AbortSignal; force?: boolean } = {},
+  options: {
+    signal?: AbortSignal;
+    force?: boolean;
+    metadataOnly?: boolean;
+  } = {},
 ): Promise<SyncResult> {
-  const { signal, force = false } = options;
+  const { signal, force = false, metadataOnly = false } = options;
   const response = await fetch(SYNC_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source, confirm: true, force }),
+    body: JSON.stringify({ source, confirm: true, force, metadataOnly }),
     signal,
   });
 

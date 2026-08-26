@@ -1,7 +1,12 @@
 import path from "node:path";
 import { readCorpusHistory } from "@/lib/corpus-history-store";
 import { readDatasetTasks } from "@/lib/dataset-quality-loader";
+import { readHfCatalog, type HfCatalogEntry } from "@/lib/hf-catalog-cache";
 import { discoverLocalDatasets } from "@/lib/local-datasets-discovery";
+import {
+  defaultWorkbenchWorkstationMappings,
+  readWorkbenchWorkstationMappings,
+} from "@/lib/workbench-config-store";
 import { computeCorpusStats } from "@/utils/corpusStats";
 import {
   computeDailyDelta,
@@ -15,6 +20,100 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+type WorkbenchDatasetMetadata = {
+  lastModified: string | null;
+  uploader: string | null;
+  uploaderDisplayName: string | null;
+  durationHours: number | null;
+};
+
+type WorkbenchDatasetSummary = Awaited<
+  ReturnType<typeof discoverLocalDatasets>
+>["datasets"][number] & {
+  tasks?: Awaited<ReturnType<typeof readDatasetTasks>>;
+  hf?: WorkbenchDatasetMetadata;
+  lastModified?: string | null;
+  uploader?: string | null;
+  uploaderDisplayName?: string | null;
+  durationHours?: number | null;
+};
+
+function metadataFromCatalogEntry(
+  entry: HfCatalogEntry | undefined,
+): WorkbenchDatasetMetadata {
+  return {
+    lastModified:
+      typeof entry?.lastModified === "string" ? entry.lastModified : null,
+    uploader: typeof entry?.uploader === "string" ? entry.uploader : null,
+    uploaderDisplayName:
+      typeof entry?.uploaderDisplayName === "string"
+        ? entry.uploaderDisplayName
+        : null,
+    durationHours:
+      typeof entry?.durationHours === "number" &&
+      Number.isFinite(entry.durationHours)
+        ? entry.durationHours
+        : null,
+  };
+}
+
+function catalogTime(entry: HfCatalogEntry | undefined): number {
+  const value = entry?.lastModified;
+  if (typeof value !== "string") return Number.NEGATIVE_INFINITY;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function applyCatalogMetadata(
+  dataset: Awaited<
+    ReturnType<typeof discoverLocalDatasets>
+  >["datasets"][number],
+  remote: HfCatalogEntry | undefined,
+): WorkbenchDatasetSummary {
+  const metadata = metadataFromCatalogEntry(remote);
+  return {
+    ...dataset,
+    codebase_version: dataset.codebase_version,
+    robot_type:
+      typeof remote?.robotType === "string"
+        ? remote.robotType
+        : dataset.robot_type,
+    total_episodes: asNumber(remote?.totalEpisodes) ?? dataset.total_episodes,
+    total_frames: asNumber(remote?.totalFrames) ?? dataset.total_frames,
+    total_tasks: asNumber(remote?.totalTasks) ?? dataset.total_tasks,
+    fps: asNumber(remote?.fps) ?? dataset.fps,
+    durationHours: asNumber(remote?.durationHours),
+    tasks: dataset.tasks,
+    hf: metadata,
+    lastModified: metadata.lastModified,
+    uploader: metadata.uploader,
+    uploaderDisplayName: metadata.uploaderDisplayName,
+  };
+}
+
+async function readCatalogByRepo(
+  root: string,
+  organization: string,
+): Promise<Map<string, { entry: HfCatalogEntry; rank: number }>> {
+  try {
+    const catalog = await readHfCatalog(root, organization);
+    return new Map(
+      (catalog.datasets ?? [])
+        .filter((entry): entry is HfCatalogEntry & { repoId: string } =>
+          Boolean(entry.repoId),
+        )
+        .map((entry, rank) => [entry.repoId, { entry, rank }]),
+    );
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return new Map();
+    throw error;
+  }
+}
 
 /**
  * Read-only corpus summary used exclusively by the viewer's Workbench tab.
@@ -35,14 +134,37 @@ export async function GET(request: Request): Promise<Response> {
     const datasets = discovery.datasets.filter(
       (dataset) => getDatasetPrefix(dataset.relativePath) === organization,
     );
-    const workbenchDatasets = await Promise.all(
-      datasets.map(async (dataset) => ({
-        ...dataset,
-        tasks: await readDatasetTasks(
-          path.join(discovery.root, ...dataset.relativePath.split("/")),
-        ),
-      })),
+    const workstationMappings = await readWorkbenchWorkstationMappings(
+      organization,
+      discovery.root,
     );
+    const catalog = await readCatalogByRepo(discovery.root, organization);
+    const workbenchDatasets: WorkbenchDatasetSummary[] = await Promise.all(
+      datasets.map(async (dataset) => {
+        const remote = catalog.get(dataset.relativePath)?.entry;
+        const withTasks = {
+          ...dataset,
+          tasks: await readDatasetTasks(
+            path.join(discovery.root, ...dataset.relativePath.split("/")),
+          ),
+        };
+        return applyCatalogMetadata(withTasks, remote);
+      }),
+    );
+    workbenchDatasets.sort((left, right) => {
+      const leftCatalog = catalog.get(left.relativePath);
+      const rightCatalog = catalog.get(right.relativePath);
+      if (leftCatalog && rightCatalog) {
+        return (
+          catalogTime(rightCatalog.entry) - catalogTime(leftCatalog.entry) ||
+          leftCatalog.rank - rightCatalog.rank ||
+          left.relativePath.localeCompare(right.relativePath)
+        );
+      }
+      if (leftCatalog) return -1;
+      if (rightCatalog) return 1;
+      return left.relativePath.localeCompare(right.relativePath);
+    });
     const errors = discovery.errors.filter((entry) =>
       entry.path.split(/[\\/]/).filter(Boolean).includes(organization),
     );
@@ -72,6 +194,10 @@ export async function GET(request: Request): Promise<Response> {
       datasets: workbenchDatasets,
       errors,
       delta,
+      workstationMappings: {
+        ...workstationMappings,
+        defaults: defaultWorkbenchWorkstationMappings(organization),
+      },
     });
   } catch (error) {
     return Response.json(

@@ -9,6 +9,7 @@ import { EpisodeLengthHistogram } from "@/components/stats-panel";
 import WorkbenchDatasetStatistics from "@/components/workbench-dataset-statistics";
 import WorkbenchGroupingPanel from "@/components/workbench-grouping-panel";
 import { assignEpisodesToBins } from "@/utils/episodeLengthHistogram";
+import { runSync } from "@/utils/syncClient";
 
 type QualityCheckResult = {
   id: string;
@@ -206,10 +207,21 @@ export default function DatasetReviewPanel({
   const [qualityError, setQualityError] = useState<string | null>(null);
   const [qualityLoading, setQualityLoading] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
+  const [statisticsRefreshToken, setStatisticsRefreshToken] = useState(0);
+  const [statisticsAction, setStatisticsAction] = useState<"refresh" | null>(
+    null,
+  );
+  const [statisticsRefreshError, setStatisticsRefreshError] = useState<
+    string | null
+  >(null);
+  const [statisticsRefreshMessage, setStatisticsRefreshMessage] = useState<
+    string | null
+  >(null);
   const [workbenchView, setWorkbenchView] = useState<
     "dataset-statistics" | "checks" | "grouping"
-  >("dataset-statistics");
+  >("grouping");
   const qualityRequestIdRef = useRef(0);
+  const statisticsRefreshAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const requestId = ++qualityRequestIdRef.current;
@@ -276,6 +288,123 @@ export default function DatasetReviewPanel({
     : null;
   const displayDatasetName = quality?.datasetName || datasetName;
 
+  const refreshStatistics = async () => {
+    if (!organization) {
+      setStatisticsRefreshError(
+        "Workbench statistics requires a dataset organization.",
+      );
+      setStatisticsRefreshMessage(null);
+      return;
+    }
+    statisticsRefreshAbortRef.current?.abort();
+    const controller = new AbortController();
+    statisticsRefreshAbortRef.current = controller;
+    setStatisticsAction("refresh");
+    setStatisticsRefreshError(null);
+    setStatisticsRefreshMessage(null);
+    try {
+      const response = await fetch("/api/hf/catalog", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ org: organization }),
+        signal: controller.signal,
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(
+          payload.error || `Statistics refresh failed (${response.status}).`,
+        );
+      }
+      if (!response.body) {
+        throw new Error("Statistics refresh returned no stream.");
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let refreshError: string | null = null;
+      let catalogCount: number | null = null;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/u);
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const event = JSON.parse(line) as {
+              type?: string;
+              error?: string;
+              result?: { datasets?: unknown[] };
+            };
+            if (event.type === "error" && !refreshError) {
+              refreshError = event.error || "Statistics refresh failed.";
+            }
+            if (
+              event.type === "result" &&
+              Array.isArray(event.result?.datasets)
+            ) {
+              catalogCount = event.result.datasets.length;
+            }
+          } catch {
+            // Progress lines are best-effort; final API errors are handled above.
+          }
+        }
+      }
+      if (buffer.trim()) {
+        try {
+          const event = JSON.parse(buffer) as {
+            type?: string;
+            error?: string;
+            result?: { datasets?: unknown[] };
+          };
+          if (event.type === "error" && !refreshError) {
+            refreshError = event.error || "Statistics refresh failed.";
+          }
+          if (
+            event.type === "result" &&
+            Array.isArray(event.result?.datasets)
+          ) {
+            catalogCount = event.result.datasets.length;
+          }
+        } catch {
+          // Ignore trailing non-JSON output.
+        }
+      }
+      if (refreshError) throw new Error(refreshError);
+
+      const result = await runSync(organization, () => undefined, {
+        signal: controller.signal,
+        metadataOnly: true,
+      });
+      setStatisticsRefreshToken((value) => value + 1);
+      const catalogMessage =
+        catalogCount === null
+          ? "Catalog refreshed."
+          : `Catalog refreshed: ${catalogCount.toLocaleString()} datasets.`;
+      const syncMessage =
+        result.failed.length === 0
+          ? result.downloaded === 0
+            ? "Stats files are already up to date."
+            : `Stats files synced: ${result.downloaded.toLocaleString()} datasets.`
+          : `Stats files synced: ${result.downloaded.toLocaleString()} datasets, ${result.failed.length.toLocaleString()} failed.`;
+      setStatisticsRefreshMessage(`${catalogMessage} ${syncMessage}`);
+    } catch (error: unknown) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setStatisticsRefreshError(
+        error instanceof Error ? error.message : "Statistics refresh failed.",
+      );
+    } finally {
+      if (statisticsRefreshAbortRef.current === controller) {
+        statisticsRefreshAbortRef.current = null;
+      }
+      if (!controller.signal.aborted) setStatisticsAction(null);
+    }
+  };
+
   return (
     <div className="mx-auto w-full max-w-6xl space-y-6 py-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -294,16 +423,40 @@ export default function DatasetReviewPanel({
             Parquet remain independent.
           </p>
         </div>
-        {encodedPath && workbenchView === "checks" && (
+        <div className="flex flex-wrap items-center gap-2">
+          {encodedPath && workbenchView === "checks" && (
+            <button
+              type="button"
+              onClick={() => setRefreshToken((value) => value + 1)}
+              className="rounded-md border border-white/10 bg-[var(--surface-1)]/70 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-cyan-400/40 hover:text-cyan-200"
+            >
+              Refresh checks
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => setRefreshToken((value) => value + 1)}
-            className="rounded-md border border-white/10 bg-[var(--surface-1)]/70 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-cyan-400/40 hover:text-cyan-200"
+            onClick={refreshStatistics}
+            disabled={statisticsAction !== null || !organization}
+            className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-3 py-1.5 text-xs text-cyan-100 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Refresh checks
+            {statisticsAction === "refresh"
+              ? "Refreshing statistics…"
+              : "Refresh statistics"}
           </button>
-        )}
+        </div>
       </div>
+
+      {(statisticsRefreshError || statisticsRefreshMessage) && (
+        <div
+          className={`rounded-lg border p-3 text-xs ${
+            statisticsRefreshError
+              ? "border-amber-400/25 bg-amber-400/5 text-amber-200"
+              : "border-emerald-400/25 bg-emerald-400/5 text-emerald-200"
+          }`}
+        >
+          {statisticsRefreshError || statisticsRefreshMessage}
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-1 border-b border-white/10 pb-1">
         {(
@@ -329,9 +482,15 @@ export default function DatasetReviewPanel({
       </div>
 
       {workbenchView === "dataset-statistics" ? (
-        <WorkbenchDatasetStatistics organization={organization} />
+        <WorkbenchDatasetStatistics
+          organization={organization}
+          refreshToken={statisticsRefreshToken}
+        />
       ) : workbenchView === "grouping" ? (
-        <WorkbenchGroupingPanel organization={organization} />
+        <WorkbenchGroupingPanel
+          organization={organization}
+          refreshToken={statisticsRefreshToken}
+        />
       ) : (
         <>
           <section className="rounded-xl border border-cyan-400/20 bg-[var(--surface-1)]/30 p-4 sm:p-5">

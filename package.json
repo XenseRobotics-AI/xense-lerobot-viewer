@@ -4,7 +4,8 @@
   "description": "XenseRobotics local LeRobot dataset visualizer",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "bun scripts/dev-with-link.ts",
+    "dev:next": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

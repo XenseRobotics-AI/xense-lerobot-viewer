@@ -6,12 +6,15 @@ import {
 } from "@/utils/homepageDatasetStatistics";
 
 function dataset(
-  overrides: Partial<LocalDatasetSummary> = {},
-): LocalDatasetSummary {
+  overrides: Partial<LocalDatasetSummary> & {
+    durationHours?: number | null;
+  } = {},
+): LocalDatasetSummary & { durationHours?: number | null } {
   return {
     relativePath: "TacVerse/taccap-g1-place-cup-0818",
     encodedPath: "encoded",
     codebase_version: "v3.0",
+    leftGripperSn: null,
     robot_type: "taccap-g1",
     total_episodes: 10,
     total_frames: 36_000,
@@ -85,6 +88,20 @@ describe("buildHomepageDatasetStatistics", () => {
     expect(summary.rows[0].checkStatus).toBe("ok");
     expect(summary.rows[0].hasIssue).toBe(true);
     expect(summary.issues).toBe(1);
+  });
+
+  test("prefers refreshed catalog duration hours when present", () => {
+    const summary = buildHomepageDatasetStatistics([
+      dataset({
+        total_frames: 0,
+        fps: 0,
+        durationHours: 2.5,
+      }),
+    ]);
+
+    expect(summary.hours).toBe(2.5);
+    expect(summary.rows[0].hours).toBe(2.5);
+    expect(summary.rows[0].averageEpisodeSeconds).toBe(900);
   });
 
   test("does not emit NaN or Infinity for unusable fps", () => {

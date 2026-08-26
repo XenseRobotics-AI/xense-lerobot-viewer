@@ -18,6 +18,7 @@ const ds = (over: Partial<LocalDatasetSummary> = {}): LocalDatasetSummary =>
     relativePath: "Org/task",
     encodedPath: "enc",
     codebase_version: "v3.0",
+    leftGripperSn: null,
     robot_type: null,
     total_episodes: 0,
     total_frames: 0,

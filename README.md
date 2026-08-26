@@ -263,6 +263,45 @@ credential; dataset transfer still starts from the source tab below.
 > HF_ENDPOINT=https://huggingface.co bun dev
 > ```
 
+## Workbench tab
+
+Workbench gives a read-only operations view over the local datasets for one
+organization. Open it from any local dataset episode by clicking the
+**Workbench** tab, or jump straight to an organization view with a URL like:
+
+```text
+http://localhost:3000/?org=TacVerse&tab=workbench
+```
+
+The tab has three subviews:
+
+- **Grouped statistics** rolls datasets up by uploader, task, robot type, Left
+  SN, or source.
+- **Dataset statistics** shows an organization-level table with local health,
+  episodes, frames, recorded hours, average episode duration, and lightweight
+  checks.
+- **Current dataset checks** runs the per-dataset custom checks when Workbench
+  is opened from a local episode.
+
+For the Left SN OKR workflow, choose **Group by: Left SN**, set the start and
+end dates, then enter the daily OKR hours and reward amount. The end date is
+exclusive. OKR status uses `✅` when recorded hours are at least the target, `…`
+when they are at least 90% of the target, and `❌` below 90%.
+
+The **Workstation** column appears only while grouping by Left SN. Click
+**Workstation mappings** to edit labels for the selected organization. **Import
+defaults** loads the repository defaults, and **Save** writes only to your local
+dataset root, not to the git-tracked defaults. Repository defaults live in
+`src/config/workbench-workstation-mappings.json`; local overrides live at:
+
+```text
+<LOCAL_DATASET_ROOT>/.xense-viewer/workbench/<org>.workstation-mappings.json
+```
+
+Use **Refresh statistics** to sync lightweight metadata for Workbench views. Use
+**Reload local data** to refresh local dataset discovery without editing any
+dataset files.
+
 ## Architecture notes
 
 - Dataset files are served by an internal route `/api/local-datasets/[encodedPath]/[...filePath]` with HTTP range support for video streaming.

@@ -7,6 +7,10 @@ import {
   type DatasetQualityCheckResult,
 } from "@/utils/datasetQualityChecks";
 
+export type HomepageDatasetStatisticsSource = LocalDatasetSummary & {
+  durationHours?: number | null;
+};
+
 export type HomepageDatasetStatisticsRow = {
   encodedPath: string;
   name: string;
@@ -47,14 +51,28 @@ function nonNegativeFinite(value: number): number {
  * checks still run with the same shared rules used by the per-dataset
  * Workbench tab. A skipped check is visible but is not counted as an issue.
  */
+function datasetHoursWithOverride(
+  dataset: HomepageDatasetStatisticsSource,
+): number {
+  const override = dataset.durationHours;
+  if (
+    typeof override === "number" &&
+    Number.isFinite(override) &&
+    override >= 0
+  ) {
+    return override;
+  }
+  return datasetHours(dataset);
+}
+
 export function buildHomepageDatasetStatistics(
-  datasets: readonly LocalDatasetSummary[],
+  datasets: readonly HomepageDatasetStatisticsSource[],
   options: { preserveOrder?: boolean } = {},
 ): HomepageDatasetStatistics {
   const rows = datasets.map((dataset): HomepageDatasetStatisticsRow => {
     const episodes = nonNegativeFinite(dataset.total_episodes);
     const frames = nonNegativeFinite(dataset.total_frames);
-    const hours = datasetHours(dataset);
+    const hours = datasetHoursWithOverride(dataset);
     const quality = runDatasetChecks(
       {
         dataset_name: dataset.relativePath,

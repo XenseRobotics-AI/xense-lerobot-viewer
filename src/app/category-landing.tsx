@@ -4,8 +4,6 @@ import React, { useMemo, useState } from "react";
 import type { DatasetGroup } from "@/utils/datasetGrouping";
 import HoverPlayVideo from "@/components/hover-play-video";
 import LanguageSwitcher from "@/components/language-switcher";
-import HomepageDatasetStatistics from "@/components/homepage-dataset-statistics";
-import HfWorkbenchToolbar from "@/components/hf-workbench-toolbar";
 import CorpusDashboard from "@/components/corpus-dashboard";
 import { formatCompact } from "@/utils/corpusStats";
 import type { DailyDelta } from "@/utils/corpusHistory";

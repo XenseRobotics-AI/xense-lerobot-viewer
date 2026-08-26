@@ -9,6 +9,11 @@ import {
   resolvePython,
   type ResolvedPython,
 } from "@/lib/python-runtime";
+import {
+  hfCatalogCachePath,
+  mergeWorkbenchHistory,
+  type HfCatalogDocument,
+} from "@/lib/hf-catalog-cache";
 import { resolveHfToken } from "@/lib/hf-token-store";
 import { redactHfSecrets } from "@/lib/hf-identity";
 import { isSameOriginRequest } from "@/lib/request-security";
@@ -27,92 +32,6 @@ function safeCatalogError(value: unknown, secrets: readonly string[]): string {
   return redacted.length > MAX_ERROR_LENGTH
     ? `${redacted.slice(0, MAX_ERROR_LENGTH)}…`
     : redacted;
-}
-
-function cachePath(root: string, org: string): string {
-  return path.join(root, ".xense-viewer", "hf-catalog", `${org}.json`);
-}
-
-type CatalogEntry = {
-  repoId?: string;
-  org?: string;
-  name?: string;
-  uploader?: string | null;
-  lastModified?: string | null;
-  [key: string]: unknown;
-};
-
-type CatalogDocument = {
-  datasets?: CatalogEntry[];
-  [key: string]: unknown;
-};
-
-async function readWorkbenchHistory(org: string): Promise<CatalogEntry[]> {
-  const configured = process.env.TACVERSE_WORKBENCH_DATASET_LOG?.trim();
-  const candidates = [
-    configured,
-    path.resolve(process.cwd(), "..", "tacverse-workbench", "dataset_log.json"),
-  ].filter((candidate): candidate is string => Boolean(candidate));
-
-  for (const file of candidates) {
-    try {
-      const parsed = JSON.parse(await fs.readFile(file, "utf8")) as {
-        datasets?: Record<
-          string,
-          { uploader?: unknown; last_modified?: unknown }
-        >;
-      };
-      return Object.entries(parsed.datasets ?? {})
-        .filter(([repoId]) => repoId.startsWith(`${org}/`))
-        .map(([repoId, metadata]) => ({
-          repoId,
-          org,
-          name: repoId.slice(org.length + 1),
-          uploader:
-            typeof metadata.uploader === "string" ? metadata.uploader : null,
-          lastModified:
-            typeof metadata.last_modified === "string"
-              ? metadata.last_modified
-              : null,
-        }));
-    } catch {
-      // Try the next configured/default Workbench history location.
-    }
-  }
-  return [];
-}
-
-function modifiedTime(entry: CatalogEntry): number {
-  const value = entry.lastModified;
-  if (typeof value !== "string") return Number.NEGATIVE_INFINITY;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
-}
-
-async function mergeWorkbenchHistory(
-  catalog: CatalogDocument,
-  org: string,
-): Promise<CatalogDocument> {
-  const current = Array.isArray(catalog.datasets) ? catalog.datasets : [];
-  const byRepo = new Map<string, CatalogEntry>();
-  for (const entry of await readWorkbenchHistory(org)) {
-    if (entry.repoId) byRepo.set(entry.repoId, entry);
-  }
-  // Live HF metadata is authoritative for repositories present in both data
-  // sources; the Workbench log only restores uploader/time for older entries
-  // omitted by the current Hub listing.
-  for (const entry of current) {
-    if (!entry.repoId) continue;
-    byRepo.set(entry.repoId, { ...byRepo.get(entry.repoId), ...entry });
-  }
-  return {
-    ...catalog,
-    datasets: [...byRepo.values()].sort(
-      (left, right) =>
-        modifiedTime(right) - modifiedTime(left) ||
-        String(left.repoId).localeCompare(String(right.repoId)),
-    ),
-  };
 }
 
 function scriptPath(): string {
@@ -142,9 +61,9 @@ export async function GET(request: NextRequest): Promise<Response> {
   if (!org) return Response.json({ error: "Invalid org." }, { status: 400 });
   try {
     const root = resolveLocalDatasetRoot();
-    const file = cachePath(root, org);
+    const file = hfCatalogCachePath(root, org);
     const raw = await fs.readFile(file, "utf8");
-    const parsed = JSON.parse(raw) as CatalogDocument;
+    const parsed = JSON.parse(raw) as HfCatalogDocument;
     const catalog = await mergeWorkbenchHistory(parsed, org);
     return Response.json(catalog, {
       headers: {
@@ -216,7 +135,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
-  const cache = cachePath(root, org);
+  const cache = hfCatalogCachePath(root, org);
   let activeChild: ChildProcessWithoutNullStreams | null = null;
   let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
   return new Response(
