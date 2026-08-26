@@ -38,6 +38,7 @@ import {
 } from "@/utils/taccapGripperReplay";
 import {
   locateEpisodePoseTrajectory,
+  selectTrailStartIndex,
   type EpisodePoseTrajectory,
 } from "@/utils/poseTrajectory3d";
 import {
@@ -290,7 +291,24 @@ const SINGLE_ARM_TIP_NAMES = [
 const DUAL_ARM_TIP_NAMES = ["openarm_left_hand_tcp", "openarm_right_hand_tcp"];
 const G1_TIP_NAMES = ["left_hand_palm_link", "right_hand_palm_link"];
 const TRAIL_DURATION = 1.0;
+/**
+ * Trail extent. The window is a *time* window with a size floor, not one
+ * or the other.
+ *
+ * A pure time window is what made the trail unreadable: on a real folding
+ * episode the distance covered in 3 s swings from 0.75 cm to 28 cm — 38x —
+ * against a 45 cm scene, so the same 3 seconds is either a legible arc or a
+ * dot depending only on where you paused. A pure fixed-length window fixes the
+ * length but destroys the meaning of the colour ramp, which encodes age.
+ *
+ * So: always show at least `TACCAP_TRAIL_DURATION`, then keep walking back
+ * until the trail spans `TACCAP_TRAIL_MIN_SPAN_FRACTION` of the scene, and
+ * stop unconditionally at `TACCAP_TRAIL_MAX_DURATION` so a stationary gripper
+ * does not drag in the whole episode.
+ */
 const TACCAP_TRAIL_DURATION = 3.0;
+const TACCAP_TRAIL_MAX_DURATION = 10.0;
+const TACCAP_TRAIL_MIN_SPAN_FRACTION = 0.12;
 const TACCAP_TRAIL_SOLID_COLOR_DURATION = 1.0;
 const TACCAP_TRAIL_MIN_COLOR_INTENSITY = 0.35;
 const TRAIL_COLORS = [new THREE.Color("#ff6600"), new THREE.Color("#00aaff")];
@@ -688,12 +706,15 @@ function TacCapPoseTrail({
   color,
   enabled,
   pose,
+  sceneExtent,
   timeSeconds,
 }: {
   alwaysVisible?: boolean;
   color: string;
   enabled: boolean;
   pose: EpisodePoseTrajectory;
+  /** Scene size, so the trail's size floor scales with what is on screen. */
+  sceneExtent: number;
   timeSeconds: number;
 }) {
   const viewportSize = useThree((state) => state.size);
@@ -748,17 +769,25 @@ function TacCapPoseTrail({
       resources.line.visible = false;
       return;
     }
-    const start = locateEpisodePoseTrajectory(
-      pose,
-      Math.max(0, timeSeconds - TACCAP_TRAIL_DURATION),
-    );
     const end = locateEpisodePoseTrajectory(pose, timeSeconds);
-    if (!start || !end) {
+    if (!end) {
       resources.line.visible = false;
       return;
     }
-    const startIndex = start.lowerIndex;
-    const endIndex = Math.max(startIndex, end.completedPointCount - 1);
+    const endIndex = Math.max(0, end.completedPointCount - 1);
+
+    // Time window with a bounding-box size floor — see `selectTrailStartIndex`.
+    // Bounded by TACCAP_TRAIL_MAX_DURATION, so this is one pass over at most a
+    // few hundred points, the same order as the copy loop below.
+    const startIndex = selectTrailStartIndex({
+      timestamps: pose.timestamps,
+      positions: scenePositions,
+      endIndex,
+      timeSeconds,
+      baseDuration: TACCAP_TRAIL_DURATION,
+      maxDuration: TACCAP_TRAIL_MAX_DURATION,
+      minSpan: Math.max(0, sceneExtent) * TACCAP_TRAIL_MIN_SPAN_FRACTION,
+    });
     const completedPointCount = endIndex - startIndex + 1;
     const includeInterpolatedPoint =
       end.lowerIndex !== end.upperIndex && end.alpha > 0;
@@ -778,6 +807,13 @@ function TacCapPoseTrail({
     }
     const positions = scratch.current.positions.subarray(0, required);
     const colors = scratch.current.colors.subarray(0, required);
+    const windowSpan = Math.max(
+      Number.EPSILON,
+      timeSeconds - pose.timestamps[startIndex],
+    );
+    const solidSpan =
+      windowSpan * (TACCAP_TRAIL_SOLID_COLOR_DURATION / TACCAP_TRAIL_DURATION);
+    const gradientDuration = Math.max(Number.EPSILON, windowSpan - solidSpan);
     for (
       let pointIndex = 0;
       pointIndex < completedPointCount;
@@ -790,18 +826,16 @@ function TacCapPoseTrail({
       positions[targetOffset + 1] = scenePositions[sourceOffset + 1];
       positions[targetOffset + 2] = scenePositions[sourceOffset + 2];
 
-      // Keep the tail in the trajectory's own hue: the older two seconds
-      // brighten from a visible same-colour tint, then the newest second
-      // remains at full colour instead of immediately entering a fade.
+      // Keep the tail in the trajectory's own hue: the older part brightens
+      // from a visible same-colour tint, then the newest third stays at full
+      // colour instead of immediately entering a fade. The ramp spans the
+      // window actually drawn, so a stretched window fades across all of it
+      // rather than bottoming out at the nominal 3 s mark.
       const sampleTime = pose.timestamps[sourceIndex] ?? timeSeconds;
       const age = Math.max(0, timeSeconds - sampleTime);
-      const gradientDuration = Math.max(
-        Number.EPSILON,
-        TACCAP_TRAIL_DURATION - TACCAP_TRAIL_SOLID_COLOR_DURATION,
-      );
       const gradientProgress = Math.max(
         0,
-        Math.min(1, (TACCAP_TRAIL_DURATION - age) / gradientDuration),
+        Math.min(1, (windowSpan - age) / gradientDuration),
       );
       const intensity =
         TACCAP_TRAIL_MIN_COLOR_INTENSITY +
@@ -839,7 +873,15 @@ function TacCapPoseTrail({
     }
     resources.line.computeLineDistances();
     resources.line.visible = true;
-  }, [enabled, pose, resources, scenePositions, timeSeconds, trailColor]);
+  }, [
+    enabled,
+    pose,
+    resources,
+    sceneExtent,
+    scenePositions,
+    timeSeconds,
+    trailColor,
+  ]);
 
   useEffect(
     () => () => {
@@ -1047,6 +1089,7 @@ function TacCapGripperScene({
           color={TACCAP_TRAIL_COLOR[track.side]}
           enabled={trailEnabled}
           pose={track.pose}
+          sceneExtent={bounds.extent}
           timeSeconds={timeSeconds}
         />
       ))}
@@ -1056,6 +1099,7 @@ function TacCapGripperScene({
           color={TACCAP_HEAD_COLOR}
           enabled={trailEnabled}
           pose={headTrack.pose}
+          sceneExtent={bounds.extent}
           timeSeconds={timeSeconds}
         />
       )}

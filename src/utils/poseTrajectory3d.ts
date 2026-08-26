@@ -464,3 +464,69 @@ export function sampleEpisodePoseTrajectory(
   }
   return { point: location.point, trailPoints };
 }
+
+/**
+ * How far back a trail should start, given where its head is.
+ *
+ * A trail drawn over a fixed *time* window is unreadable on real data: the
+ * distance a gripper covers in three seconds varies by more than an order of
+ * magnitude within one episode, so the same window is a legible arc during a
+ * reach and a dot during a pause. A fixed *length* window fixes that but
+ * destroys the age semantics the colour ramp encodes.
+ *
+ * So this returns the earliest index that satisfies both: at least
+ * `baseDuration` of history, extended until the trail is at least `minSpan`
+ * across, and never reaching further back than `maxDuration` — otherwise a
+ * stationary gripper would drag in the entire episode.
+ *
+ * "Across" is the diagonal of the window's bounding box, **not** accumulated
+ * path length. Path length is inflated by jitter: on a real folding episode a
+ * gripper holding position still racks up 5 cm of arc in 3 s while occupying
+ * under 3 cm of screen, which is exactly the case this floor exists to catch,
+ * and an arc-length test would declare it satisfied and stop.
+ *
+ * `positions` is a flat xyz array in the same space `minSpan` is measured in.
+ * Pure and bounded: the walk visits at most the points inside `maxDuration`.
+ */
+export function selectTrailStartIndex({
+  timestamps,
+  positions,
+  endIndex,
+  timeSeconds,
+  baseDuration,
+  maxDuration,
+  minSpan,
+}: {
+  timestamps: number[];
+  positions: ArrayLike<number>;
+  endIndex: number;
+  timeSeconds: number;
+  baseDuration: number;
+  maxDuration: number;
+  minSpan: number;
+}): number {
+  let startIndex = Math.max(0, endIndex);
+  const head = startIndex * 3;
+  let minX = positions[head];
+  let maxX = positions[head];
+  let minY = positions[head + 1];
+  let maxY = positions[head + 1];
+  let minZ = positions[head + 2];
+  let maxZ = positions[head + 2];
+
+  while (startIndex > 0) {
+    const age = timeSeconds - timestamps[startIndex];
+    if (age >= maxDuration) break;
+    const span = Math.hypot(maxX - minX, maxY - minY, maxZ - minZ);
+    if (age >= baseDuration && span >= minSpan) break;
+    startIndex -= 1;
+    const offset = startIndex * 3;
+    minX = Math.min(minX, positions[offset]);
+    maxX = Math.max(maxX, positions[offset]);
+    minY = Math.min(minY, positions[offset + 1]);
+    maxY = Math.max(maxY, positions[offset + 1]);
+    minZ = Math.min(minZ, positions[offset + 2]);
+    maxZ = Math.max(maxZ, positions[offset + 2]);
+  }
+  return startIndex;
+}
