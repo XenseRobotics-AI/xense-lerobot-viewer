@@ -45,12 +45,6 @@ import {
   tacCapRecordedTcpSceneMatrix,
   tacCapRecordedTcpToRootMatrix,
 } from "@/utils/taccapGripperTransforms";
-import {
-  loadTacCapExtrinsicsMetadata,
-  resolveTacCapPoseProfile,
-  type TacCapPoseProfile,
-  type TacCapPoseSelection,
-} from "@/utils/taccapPoseSemantics";
 
 const SERIES_DELIM = CHART_CONFIG.SERIES_NAME_DELIMITER;
 const DEG2RAD = Math.PI / 180;
@@ -1630,76 +1624,11 @@ export default function URDFViewer({
   const selectedEpisode = data.episodeId;
   const chartData = data.flatChartData;
 
-  const [tacCapPoseSelection, setTacCapPoseSelection] =
-    useState<TacCapPoseSelection>("canonical-tcp");
-  const [tacCapMetadataState, setTacCapMetadataState] = useState<{
-    repoId: string;
-    metadata: Parameters<typeof resolveTacCapPoseProfile>[0];
-  } | null>(null);
-  useEffect(() => {
-    if (!isTacCap) {
-      setTacCapMetadataState(null);
-      return;
-    }
-    if (tacCapPoseSelection !== "tracker-to-tcp") {
-      return;
-    }
-
-    let cancelled = false;
-    loadTacCapExtrinsicsMetadata(datasetInfo.repoId)
-      .then((metadata) => {
-        if (cancelled) return;
-        setTacCapMetadataState({
-          repoId: datasetInfo.repoId,
-          metadata,
-        });
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        // Retain the recorded pose when optional metadata is malformed or
-        // temporarily unreadable. The viewport exposes a manual override.
-        console.warn(
-          "Failed to load TacCap extrinsics; measured defaults will be used if Tracker → TCP is selected",
-          error,
-        );
-        setTacCapMetadataState({
-          repoId: datasetInfo.repoId,
-          metadata: null,
-        });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [datasetInfo.repoId, isTacCap, tacCapPoseSelection]);
-  const tacCapMetadataReady =
-    tacCapMetadataState?.repoId === datasetInfo.repoId;
-  const tacCapProfileReady =
-    !isTacCap || tacCapPoseSelection === "canonical-tcp" || tacCapMetadataReady;
-  const tacCapPoseProfile = useMemo<TacCapPoseProfile | null>(() => {
-    if (!isTacCap) return null;
-    if (tacCapPoseSelection === "canonical-tcp") {
-      return resolveTacCapPoseProfile(null, selectedEpisode, "canonical-tcp");
-    }
-    if (!tacCapMetadataReady) return null;
-    return resolveTacCapPoseProfile(
-      tacCapMetadataState.metadata,
-      selectedEpisode,
-      "tracker-to-tcp",
-    );
-  }, [
-    isTacCap,
-    selectedEpisode,
-    tacCapMetadataReady,
-    tacCapMetadataState,
-    tacCapPoseSelection,
-  ]);
-  const tacCapPoseStatus = tacCapPoseProfile
-    ? t(
-        tacCapPoseProfile.mode === "tracker-to-tcp"
-          ? "urdf.tacCapPoseCorrected"
-          : "urdf.tacCapPoseCanonical",
-      )
-    : "";
+  // TacCap poses are read as canonical TCP. The viewer used to offer a
+  // Tracker -> TCP switch that re-derived them through measured extrinsics;
+  // it was removed as an unused control. `extractTacCapGripperTracks` still
+  // takes an optional profile, so the capability is one caller away if a
+  // dataset ever needs it — but episode extrinsics metadata is not read.
 
   const totalFrames = chartData.length;
 
@@ -1756,14 +1685,8 @@ export default function URDFViewer({
   );
   const tacCapTracks = useMemo(
     () =>
-      isTacCap && tacCapPoseProfile
-        ? extractTacCapGripperTracks(
-            chartData,
-            selectedGroup,
-            tacCapPoseProfile,
-          )
-        : [],
-    [chartData, isTacCap, selectedGroup, tacCapPoseProfile],
+      isTacCap ? extractTacCapGripperTracks(chartData, selectedGroup) : [],
+    [chartData, isTacCap, selectedGroup],
   );
   const tacCapHeadTrack = useMemo(
     () => (isTacCap ? extractTacCapHeadTrack(chartData, selectedGroup) : null),
@@ -1827,15 +1750,14 @@ export default function URDFViewer({
         : null,
     [replayTimeSeconds, tacCapHeadTrack],
   );
-  const tacCapDataUnavailable =
-    isTacCap && tacCapProfileReady && tacCapTracks.length === 0;
+  const tacCapDataUnavailable = isTacCap && tacCapTracks.length === 0;
   const trajectoryUnavailable = totalFrames === 0 || tacCapDataUnavailable;
 
   // URDF meshes load asynchronously. Generic robots report their joints when
   // ready; the TacCap scene reports once every required left/right model and
   // mesh has loaded from the project-local public assets.
   const urdfLoading = isTacCap
-    ? !tacCapProfileReady || (!tacCapDataUnavailable && !tacCapModelsReady)
+    ? !tacCapDataUnavailable && !tacCapModelsReady
     : urdfJointNames.length === 0;
   const playbackDisabled = !active || urdfLoading || trajectoryUnavailable;
 
@@ -1998,45 +1920,6 @@ export default function URDFViewer({
             <span className="text-blue-400">Z · {t("urdf.axisUp")}</span>
           </div>
         )}
-        {isTacCap && (
-          <div className="absolute bottom-3 right-3 z-20 rounded border border-white/10 bg-slate-950/85 px-2 py-1.5 font-mono text-[10px] shadow backdrop-blur-sm">
-            <div className="flex items-center gap-2 text-slate-300">
-              <span>{t("urdf.tacCapPoseMode")}</span>
-              <div
-                className="flex overflow-hidden rounded border border-white/10 bg-slate-900"
-                role="group"
-                aria-label={t("urdf.tacCapPoseMode")}
-                title={t("urdf.tacCapPoseModeHelp")}
-              >
-                {(
-                  [
-                    ["canonical-tcp", "urdf.tacCapPoseModeTcpShort"],
-                    ["tracker-to-tcp", "urdf.tacCapPoseModeTrackerShort"],
-                  ] as const
-                ).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    aria-pressed={tacCapPoseSelection === value}
-                    onClick={() => setTacCapPoseSelection(value)}
-                    className={`border-l border-white/10 px-2 py-1 first:border-l-0 transition-colors ${
-                      tacCapPoseSelection === value
-                        ? "bg-cyan-500 text-white"
-                        : "text-slate-300 hover:bg-white/10"
-                    }`}
-                  >
-                    {t(label)}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {tacCapPoseStatus && (
-              <div className="mt-1 text-right text-slate-400">
-                {tacCapPoseStatus}
-              </div>
-            )}
-          </div>
-        )}
         {urdfLoading && (
           <div className="absolute inset-0 z-30 flex items-center justify-center bg-[var(--bg)]/80">
             <span className="text-white text-lg animate-pulse">
@@ -2096,7 +1979,7 @@ export default function URDFViewer({
             position={[0, 3, -4]}
             intensity={0.4}
           />
-          {isTacCap && tacCapProfileReady ? (
+          {isTacCap ? (
             <TacCapGripperScene
               frames={tacCapFrames}
               headFrame={tacCapHeadFrame}
