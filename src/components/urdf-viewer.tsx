@@ -310,6 +310,9 @@ const TACCAP_TRAIL_DURATION = 3.0;
 const TACCAP_TRAIL_MAX_DURATION = 10.0;
 const TACCAP_TRAIL_MIN_SPAN_FRACTION = 0.12;
 const TACCAP_TRAIL_SOLID_COLOR_DURATION = 1.0;
+/** Trail geometry grows in whole steps so a slowly filling window costs a
+ *  handful of rebuilds rather than one per added sample. */
+const TRAIL_CAPACITY_STEP = 128;
 const TACCAP_TRAIL_MIN_COLOR_INTENSITY = 0.35;
 const TRAIL_COLORS = [new THREE.Color("#ff6600"), new THREE.Color("#00aaff")];
 const MAX_TRAIL_POINTS = 300;
@@ -748,13 +751,16 @@ function TacCapPoseTrail({
     line.raycast = () => undefined;
     line.renderOrder = alwaysVisible ? 20 : 2;
     line.visible = false;
-    return { line, material };
+    // Capacity lives on the resource object rather than in a ref so it is
+    // reset together with the line it describes.
+    return { line, material, capacity: 0 };
   }, [alwaysVisible]);
   // This effect runs once per rendered frame per track. Scratch buffers sized
   // to the whole trajectory are reused across frames so the hot path only
   // writes into them — allocating a pair of Float32Arrays here (plus the
   // Array.from copies the geometry does not need) is what made the trail the
-  // GC-heaviest thing in the scene.
+  // GC-heaviest thing in the scene. The scratch is then blitted into the
+  // geometry's interleaved buffers directly; see the note at the write.
   const scratch = useRef<{ positions: Float32Array; colors: Float32Array }>({
     positions: new Float32Array(0),
     colors: new Float32Array(0),
@@ -855,23 +861,76 @@ function TacCapPoseTrail({
       colors[offset + 2] = trailColor.b;
     }
 
-    // The *first* build has to replace the geometry: Line2's vertex-colour
-    // shader is compiled from the attributes present at that moment, so the
-    // colour attribute must exist before the material is first used. Once it
-    // does, updating the same geometry in place is enough — and avoids
-    // building and disposing a LineGeometry on every frame.
-    const current = resources.line.geometry as LineGeometry;
-    if (current.getAttribute("instanceColorStart")) {
-      current.setPositions(positions);
-      current.setColors(colors);
-    } else {
+    // The geometry is allocated at a capacity and only ever refilled, because
+    // `WebGLRenderer` latches the instance count of an instanced geometry the
+    // first time it draws it:
+    //
+    //   if (geometry._maxInstanceCount === undefined)
+    //     geometry._maxInstanceCount = data.meshPerAttribute * data.count;
+    //   ...
+    //   const instanceCount = Math.min(geometry.instanceCount, maxInstanceCount);
+    //
+    // `_maxInstanceCount` is recomputed only on `dispose()`. A trail that was
+    // first drawn holding two points is therefore clamped to **one segment**
+    // for the rest of the episode, no matter how much `setPositions` raises
+    // `instanceCount` — and the one segment that survives is the oldest pair
+    // in the window, so the trail collapses to a dot that follows the gripper
+    // a whole window behind. That is the "single lagging point" bug.
+    //
+    // Sizing in steps and setting `instanceCount` per frame keeps the latched
+    // maximum at the capacity instead of at whatever the first frame held.
+    // Writing through the interleaved buffers is also strictly cheaper than
+    // the `setPositions` path this replaces: that call allocates a fresh
+    // `InstancedInterleavedBuffer` every time, so the old code was never the
+    // in-place update its comment claimed.
+    if (visiblePointCount > resources.capacity) {
+      const capacity =
+        Math.ceil(visiblePointCount / TRAIL_CAPACITY_STEP) *
+        TRAIL_CAPACITY_STEP;
       const geometry = new LineGeometry();
-      geometry.setPositions(positions);
-      geometry.setColors(colors);
-      current.dispose();
+      geometry.setPositions(new Float32Array(capacity * 3));
+      geometry.setColors(new Float32Array(capacity * 3));
+      resources.line.geometry.dispose();
       resources.line.geometry = geometry;
+      resources.capacity = capacity;
     }
-    resources.line.computeLineDistances();
+
+    const geometry = resources.line.geometry as LineGeometry;
+    const instanceStart = geometry.getAttribute(
+      "instanceStart",
+    ) as THREE.InterleavedBufferAttribute;
+    const instanceColorStart = geometry.getAttribute(
+      "instanceColorStart",
+    ) as THREE.InterleavedBufferAttribute;
+    const positionBuffer = instanceStart.data.array as Float32Array;
+    const colorBuffer = instanceColorStart.data.array as Float32Array;
+    // `instanceEnd` / `instanceColorEnd` are views onto these same buffers at
+    // offset 3, so each segment is one contiguous [start xyz, end xyz] stride.
+    const segmentCount = visiblePointCount - 1;
+    for (let segment = 0; segment < segmentCount; segment += 1) {
+      const target = segment * 6;
+      const from = segment * 3;
+      const to = from + 3;
+      positionBuffer[target] = positions[from];
+      positionBuffer[target + 1] = positions[from + 1];
+      positionBuffer[target + 2] = positions[from + 2];
+      positionBuffer[target + 3] = positions[to];
+      positionBuffer[target + 4] = positions[to + 1];
+      positionBuffer[target + 5] = positions[to + 2];
+      colorBuffer[target] = colors[from];
+      colorBuffer[target + 1] = colors[from + 1];
+      colorBuffer[target + 2] = colors[from + 2];
+      colorBuffer[target + 3] = colors[to];
+      colorBuffer[target + 4] = colors[to + 1];
+      colorBuffer[target + 5] = colors[to + 2];
+    }
+    instanceStart.data.needsUpdate = true;
+    instanceColorStart.data.needsUpdate = true;
+    geometry.instanceCount = segmentCount;
+
+    // No `computeLineDistances()`: it exists to feed the dash shader, which is
+    // compiled out while `dashed` is false, and it allocates a pair of arrays
+    // on every call.
     resources.line.visible = true;
   }, [
     enabled,
