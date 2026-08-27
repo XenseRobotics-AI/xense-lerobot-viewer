@@ -13,10 +13,8 @@ import {
 import { useT } from "@/context/locale-context";
 import type { VideoInfo } from "@/types";
 import { THRESHOLDS } from "@/utils/constants";
-import {
-  groupUrdfReplayVideos,
-  urdfReplayMediaTime,
-} from "@/utils/urdfReplayVideos";
+import { groupUrdfReplayVideos } from "@/utils/urdfReplayVideos";
+import { mediaTimeFromEpisodeTime } from "@/utils/videoSegments";
 
 function fallbackLabel(filename: string): string {
   const tail = filename.split(/[./]/).at(-1) ?? filename;
@@ -39,7 +37,7 @@ function ReplayVideoTile({
   video: VideoInfo;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const targetTime = urdfReplayMediaTime(video, episodeTimeSeconds);
+  const targetTime = mediaTimeFromEpisodeTime(video, episodeTimeSeconds);
   const targetTimeRef = useRef(targetTime);
   const shouldPlayRef = useRef(active && playing);
   targetTimeRef.current = targetTime;

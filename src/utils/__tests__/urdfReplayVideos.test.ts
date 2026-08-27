@@ -3,7 +3,6 @@ import type { VideoInfo } from "@/types";
 import {
   classifyUrdfReplayVideo,
   groupUrdfReplayVideos,
-  urdfReplayMediaTime,
 } from "@/utils/urdfReplayVideos";
 
 const video = (filename: string): VideoInfo => ({
@@ -79,20 +78,5 @@ describe("3D Replay video layout", () => {
       "observation.images.left_head",
       "observation.images.right_head",
     ]);
-  });
-
-  test("maps episode-local time into a segmented MP4 and clamps its end", () => {
-    const info: VideoInfo = {
-      filename: "observation.images.left_wrist",
-      url: "/shared.mp4",
-      isSegmented: true,
-      segmentStart: 100,
-      segmentEnd: 110,
-    };
-
-    expect(urdfReplayMediaTime(info, 2.5)).toBe(102.5);
-    expect(urdfReplayMediaTime(info, -1)).toBe(100);
-    expect(urdfReplayMediaTime(info, 12)).toBeCloseTo(109.999, 6);
-    expect(urdfReplayMediaTime(video("head_left"), 2.5)).toBe(2.5);
   });
 });

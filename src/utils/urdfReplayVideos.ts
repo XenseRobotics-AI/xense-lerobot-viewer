@@ -85,23 +85,3 @@ export function groupUrdfReplayVideos(
     right: stableSort(inRegion("right"), sideOrder),
   };
 }
-
-/** Convert episode-local replay time to time in the underlying MP4 shard. */
-export function urdfReplayMediaTime(
-  video: VideoInfo,
-  episodeTimeSeconds: number,
-): number {
-  const localTime = Number.isFinite(episodeTimeSeconds)
-    ? Math.max(0, episodeTimeSeconds)
-    : 0;
-  const segmentStart = video.isSegmented
-    ? Math.max(0, video.segmentStart ?? 0)
-    : 0;
-  const target = segmentStart + localTime;
-  const segmentEnd = video.isSegmented ? video.segmentEnd : undefined;
-
-  if (segmentEnd === undefined || !Number.isFinite(segmentEnd)) return target;
-  // Staying a millisecond inside the segment avoids the browser briefly
-  // presenting the first frame of the following episode at the right edge.
-  return Math.min(target, Math.max(segmentStart, segmentEnd - 0.001));
-}
