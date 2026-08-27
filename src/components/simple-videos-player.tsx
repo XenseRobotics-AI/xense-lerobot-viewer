@@ -5,6 +5,10 @@ import { useTime } from "../context/time-context";
 import { FaExpand, FaCompress, FaTimes, FaEye } from "react-icons/fa";
 import type { VideoInfo } from "@/types";
 import { VideoOverlayCanvas } from "./video-overlay-canvas";
+import {
+  episodeTimeFromMediaTime,
+  mediaTimeFromEpisodeTime,
+} from "@/utils/videoSegments";
 import { useT } from "@/context/locale-context";
 
 const THRESHOLDS = {
@@ -172,11 +176,12 @@ export const SimpleVideosPlayer = ({
           }
         }
         if (index === firstVisibleIdxRef.current) {
-          let globalTime = video.currentTime;
-          if (info.isSegmented) {
-            globalTime = video.currentTime - (info.segmentStart ?? 0);
-          }
-          seek(globalTime, "video");
+          // Clamped into the segment: the first `timeupdate` after a load or
+          // an episode switch arrives while the element still sits at 0, i.e.
+          // before the seek to `segmentStart` has landed. The raw difference
+          // is then `-segmentStart` — a large negative time on the playback
+          // bar for any episode deep inside a shared v3 MP4.
+          seek(episodeTimeFromMediaTime(info, video.currentTime), "video");
         }
       };
 
@@ -299,10 +304,7 @@ export const SimpleVideosPlayer = ({
       if (hiddenSet.has(videosInfo[index].filename)) return;
 
       const info = videosInfo[index];
-      let targetTime = currentTime;
-      if (info.isSegmented) {
-        targetTime = (info.segmentStart ?? 0) + currentTime;
-      }
+      const targetTime = mediaTimeFromEpisodeTime(info, currentTime);
 
       if (
         Math.abs(video.currentTime - targetTime) >
