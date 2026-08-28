@@ -497,10 +497,12 @@ export async function getEpisodeData(
   episodeId: number,
 ): Promise<EpisodeData> {
   const repoId = repoIdFromRouteParams(org, dataset);
+  const perfKey = `${repoId} episode ${episodeId}`;
   try {
-    console.time(`[perf] getDatasetVersionAndInfo`);
+    const metadataTimer = `[perf] metadata (${perfKey})`;
+    console.time(metadataTimer);
     const { version, info: rawInfo } = await getDatasetVersionAndInfo(repoId);
-    console.timeEnd(`[perf] getDatasetVersionAndInfo`);
+    console.timeEnd(metadataTimer);
     const info = rawInfo as unknown as DatasetMetadata;
 
     if (info.video_path === null) {
@@ -515,14 +517,15 @@ export async function getEpisodeData(
     // timestamps at the end. Now loadEpisodeProgressGroup returns a
     // builder we apply once both promises settle.
     // Vercel rule: async-parallel.
-    console.time(`[perf] getEpisodeData (${version})`);
+    const episodeTimer = `[perf] episode data (${version}, ${perfKey})`;
+    console.time(episodeTimer);
     const [result, progressBuilder] = await Promise.all([
       version === "v3.0"
         ? getEpisodeDataV3(repoId, version, info, episodeId)
         : getEpisodeDataV2(repoId, version, info, episodeId),
       loadEpisodeProgressGroup(repoId, version, episodeId),
     ]);
-    console.timeEnd(`[perf] getEpisodeData (${version})`);
+    console.timeEnd(episodeTimer);
 
     // Extract camera resolutions from features
     const cameras: CameraInfo[] = Object.entries(rawInfo.features)

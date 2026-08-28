@@ -7,7 +7,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { useTime } from "../context/time-context";
+import { useTimeControls, useTimeState } from "../context/time-context";
 import {
   LineChart,
   Line,
@@ -16,11 +16,11 @@ import {
   CartesianGrid,
   ResponsiveContainer,
   Tooltip,
-  ReferenceLine,
 } from "recharts";
 import { useT } from "@/context/locale-context";
 import { hasEpisodePoseTrajectories } from "@/utils/poseTrajectory3d";
 import { CHART_CONFIG } from "@/utils/constants";
+import { evenlySampleArray } from "@/utils/sampling";
 
 const EpisodePose3DViewer = React.lazy(
   () => import("@/components/episode-pose-3d-viewer"),
@@ -41,6 +41,11 @@ type DataGraphProps = {
 type EpisodeGraphMode = "position" | "velocity" | "threeD";
 
 const SERIES_NAME_DELIMITER = CHART_CONFIG.SERIES_NAME_DELIMITER;
+// Episode loaders retain up to 4,000 rows for analysis and 3D playback. An
+// SVG chart is only a few hundred CSS pixels wide, so sending all 4,000 rows
+// through every Recharts line creates multi-megabyte path strings with no
+// visible gain. Keep the source data intact and thin only the render input.
+const MAX_SVG_POINTS_PER_GRAPH = 800;
 
 const CHART_COLORS = [
   "#f97316",
@@ -62,6 +67,31 @@ const DIRECTION_COLORS = {
   y: "#22c55e",
   z: "#3b82f6",
 } as const;
+
+/**
+ * The chart itself is intentionally not subscribed to playback time. A
+ * Recharts tree can contain thousands of SVG nodes; rebuilding it for every
+ * 80ms clock tick made episode switches compete with playback. Keep the
+ * playhead as a tiny DOM child that alone follows the clock.
+ */
+const GraphPlayhead = React.memo(
+  ({ minTime, maxTime }: { minTime: number; maxTime: number }) => {
+    const { currentTime } = useTimeState();
+    const span = maxTime - minTime;
+    const ratio =
+      span > 0 ? Math.min(1, Math.max(0, (currentTime - minTime) / span)) : 0;
+
+    return (
+      <div className="pointer-events-none absolute inset-y-0 left-[55px] right-3 z-10">
+        <div
+          className="absolute inset-y-0 w-px bg-orange-400/80"
+          style={{ left: `${ratio * 100}%` }}
+        />
+      </div>
+    );
+  },
+);
+GraphPlayhead.displayName = "GraphPlayhead";
 
 type VelocityDirection = keyof typeof DIRECTION_COLORS;
 
@@ -276,7 +306,7 @@ const SingleDataGraph = React.memo(
     setHoveredTime: (t: number | null) => void;
     tall?: boolean;
   }) => {
-    const { currentTime, seek } = useTime();
+    const { seek } = useTimeControls();
     const flattenRow = useCallback(
       (row: Record<string, number | Record<string, number>>, prefix = "") => {
         const result: Record<string, number> = {};
@@ -313,7 +343,10 @@ const SingleDataGraph = React.memo(
 
     // Flatten all rows for recharts
     const chartData = useMemo(
-      () => data.map((row) => flattenRow(row)),
+      () =>
+        evenlySampleArray(data, MAX_SVG_POINTS_PER_GRAPH).map((row) =>
+          flattenRow(row),
+        ),
       [data, flattenRow],
     );
 
@@ -405,6 +438,7 @@ const SingleDataGraph = React.memo(
 
     // Custom legend to show current value next to each series
     const CustomLegend = () => {
+      const { currentTime } = useTimeState();
       const closestIndex = findClosestDataIndex(
         hoveredTime != null ? hoveredTime : currentTime,
       );
@@ -549,7 +583,7 @@ const SingleDataGraph = React.memo(
           </p>
         )}
         <div
-          className={`w-full ${tall ? "h-[500px]" : "h-72"}`}
+          className={`relative w-full ${tall ? "h-[500px]" : "h-72"}`}
           onMouseLeave={handleMouseLeave}
         >
           <ResponsiveContainer width="100%" height="100%">
@@ -601,16 +635,6 @@ const SingleDataGraph = React.memo(
                 content={() => null}
                 active={true}
                 isAnimationActive={false}
-                defaultIndex={
-                  !hoveredTime ? findClosestDataIndex(currentTime) : undefined
-                }
-              />
-
-              <ReferenceLine
-                x={currentTime}
-                stroke="#f97316"
-                strokeWidth={1.5}
-                strokeOpacity={0.7}
               />
 
               {dataKeys.map((key) => {
@@ -645,6 +669,10 @@ const SingleDataGraph = React.memo(
               })}
             </LineChart>
           </ResponsiveContainer>
+          <GraphPlayhead
+            minTime={chartData.at(0)?.timestamp ?? 0}
+            maxTime={chartData.at(-1)?.timestamp ?? 0}
+          />
         </div>
         <CustomLegend />
       </div>

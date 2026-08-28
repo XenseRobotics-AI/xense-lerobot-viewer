@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef } from "react";
-import { useTime } from "../context/time-context";
+import { useTimeControls, useTimeState } from "../context/time-context";
 import { FaExpand, FaCompress, FaTimes, FaEye } from "react-icons/fa";
 import type { VideoInfo } from "@/types";
 import { VideoOverlayCanvas } from "./video-overlay-canvas";
@@ -49,8 +49,8 @@ export const SimpleVideosPlayer = ({
   annotationOverlay = false,
 }: VideoPlayerProps) => {
   const t = useT();
-  const { currentTime, seek, externalSeekVersion, isPlaying, setIsPlaying } =
-    useTime();
+  const { seek, setIsPlaying } = useTimeControls();
+  const { currentTime, externalSeekVersion, isPlaying } = useTimeState();
   const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
   // Mirror videoRefs into state so the absolutely-positioned VQA overlay can
   // re-render with the actual <video> element once it mounts. Using a ref
@@ -420,6 +420,12 @@ export const SimpleVideosPlayer = ({
     });
   }, [externalSeekVersion, currentTime, videosInfo, videosReady, hiddenSet]);
 
+  // The page shell becomes interactive as soon as the episode data commits.
+  // Keep only the media tiles covered until their requested segment has
+  // actually decoded, so a retained <video> can never flash the previous
+  // episode's frame while the rest of the page already shows the new one.
+  const mediaPending = loading || !videosReady;
+
   return (
     <>
       {/* Hidden videos menu */}
@@ -527,9 +533,18 @@ export const SimpleVideosPlayer = ({
                   muted
                   preload="metadata"
                   src={info.url}
+                  aria-busy={mediaPending}
                 >
                   {t("player.noVideoTag")}
                 </video>
+                {mediaPending && (
+                  <div
+                    className="absolute inset-0 z-20 flex items-center justify-center bg-[var(--surface-0)]"
+                    aria-hidden="true"
+                  >
+                    <span className="size-6 animate-spin rounded-full border-2 border-slate-700 border-t-cyan-300" />
+                  </div>
+                )}
                 {/* VQA bbox/keypoint overlay. Reads atoms + drawMode from
                     AnnotationsContext; pointer-events fall through when
                     not in draw mode so video controls remain usable. */}
