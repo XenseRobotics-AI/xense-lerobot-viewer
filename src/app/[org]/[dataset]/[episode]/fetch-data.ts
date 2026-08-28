@@ -181,6 +181,69 @@ function parsePositiveIntEnv(
   return Number.isFinite(parsed) && parsed >= min ? parsed : fallback;
 }
 
+// Episode switches used to be route transitions, so every visit naturally
+// threw away the parsed episode object. The in-page selector introduced by
+// PR #19 keeps the viewer mounted; retain a small LRU here as well so going
+// back to a recently viewed episode is synchronous and overlapping switches
+// share one request. The cache is deliberately bounded because chart rows and
+// frame timestamps are kept in the object passed to the client UI.
+const MAX_EPISODE_DATA_CACHE_ENTRIES = parsePositiveIntEnv(
+  process.env.MAX_EPISODE_DATA_CACHE_ENTRIES,
+  8,
+);
+const episodeDataCache = new Map<string, EpisodeData>();
+const episodeDataInFlight = new Map<
+  string,
+  Promise<{ data?: EpisodeData; error?: string }>
+>();
+
+// v3 episode metadata is tiny compared with the data/video shards, but each
+// lookup used to decode the same metadata parquet files again. Cache parsed
+// files (including missing-file results) and individual rows. The iterator
+// still stops as soon as it finds the requested row, so the first episode
+// does not pay for the whole dataset.
+const episodeMetadataFileCache = new Map<
+  string,
+  Record<string, unknown>[] | null
+>();
+const episodeMetadataFileInFlight = new Map<
+  string,
+  Promise<Record<string, unknown>[] | null>
+>();
+const episodeMetadataRowCache = new Map<string, EpisodeMetadataV3>();
+
+function rememberMetadataFile(
+  url: string,
+  rows: Record<string, unknown>[] | null,
+): void {
+  episodeMetadataFileCache.delete(url);
+  episodeMetadataFileCache.set(url, rows);
+  while (episodeMetadataFileCache.size > 96) {
+    const oldestKey = episodeMetadataFileCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    episodeMetadataFileCache.delete(oldestKey);
+  }
+}
+
+function episodeDataCacheKey(
+  org: string,
+  dataset: string,
+  episodeId: number,
+): string {
+  return `${org}\u0000${dataset}\u0000${episodeId}`;
+}
+
+function rememberEpisodeData(key: string, data: EpisodeData): void {
+  // Move a hit to the newest end so the eviction order is LRU-like.
+  episodeDataCache.delete(key);
+  episodeDataCache.set(key, data);
+  while (episodeDataCache.size > MAX_EPISODE_DATA_CACHE_ENTRIES) {
+    const oldestKey = episodeDataCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    episodeDataCache.delete(oldestKey);
+  }
+}
+
 const MAX_EPISODE_POINTS = parsePositiveIntEnv(
   process.env.MAX_EPISODE_POINTS,
   4000,
@@ -229,6 +292,10 @@ const PROGRESS_PARQUET_CANDIDATES = [
   "sarm_progress.parquet",
   "srm_progress.parquet",
 ] as const;
+// Most datasets do not ship either optional progress parquet. Remember a
+// confirmed miss so every episode switch does not repeat two HEAD/range
+// requests for files that cannot exist in this dataset.
+const missingProgressUrls = new Set<string>();
 const PREFERRED_PROGRESS_COLUMNS = [
   "progress_sparse",
   "progress_dense",
@@ -357,6 +424,7 @@ async function loadEpisodeProgressGroup(
 ): Promise<((episodeDuration: number) => ChartRow[]) | null> {
   for (const progressPath of PROGRESS_PARQUET_CANDIDATES) {
     const progressUrl = buildVersionedUrl(repoId, version, progressPath);
+    if (missingProgressUrls.has(progressUrl)) continue;
     try {
       const progressBuffer = await fetchParquetFile(progressUrl);
       const progressRows = await readParquetAsObjects(progressBuffer, []);
@@ -407,6 +475,7 @@ async function loadEpisodeProgressGroup(
         }));
       };
     } catch {
+      missingProgressUrls.add(progressUrl);
       // Optional file: ignore and try next candidate.
     }
   }
@@ -1456,18 +1525,37 @@ async function* iterateEpisodeMetadataFilesV3(
   while (true) {
     const path = buildV3EpisodesMetadataPath(chunkIndex, fileIndex);
     const url = buildVersionedUrl(repoId, version, path);
-    let rows: Record<string, unknown>[];
-    try {
-      const buf = await fetchParquetFile(url);
-      rows = await readParquetAsObjects(buf, []);
-    } catch {
-      if (fileIndex === 0) return;
-      chunkIndex++;
-      fileIndex = 0;
-      continue;
+    let rows: Record<string, unknown>[] | null;
+    const cachedRows = episodeMetadataFileCache.get(url);
+    if (cachedRows !== undefined) {
+      rows = cachedRows;
+    } else {
+      const inFlight = episodeMetadataFileInFlight.get(url);
+      if (inFlight) {
+        rows = await inFlight;
+        rememberMetadataFile(url, rows);
+      } else {
+        const request = (async () => {
+          try {
+            const buf = await fetchParquetFile(url);
+            return await readParquetAsObjects(buf, []);
+          } catch {
+            return null;
+          }
+        })();
+        episodeMetadataFileInFlight.set(url, request);
+        try {
+          rows = await request;
+        } finally {
+          if (episodeMetadataFileInFlight.get(url) === request) {
+            episodeMetadataFileInFlight.delete(url);
+          }
+        }
+        rememberMetadataFile(url, rows);
+      }
     }
 
-    if (rows.length === 0) {
+    if (!rows || rows.length === 0) {
       if (fileIndex === 0) return;
       chunkIndex++;
       fileIndex = 0;
@@ -1485,11 +1573,25 @@ async function loadEpisodeMetadataV3Simple(
   version: string,
   episodeId: number,
 ): Promise<EpisodeMetadataV3> {
+  const key = `${repoId}\u0000${version}\u0000${episodeId}`;
+  const cached = episodeMetadataRowCache.get(key);
+  if (cached) {
+    episodeMetadataRowCache.delete(key);
+    episodeMetadataRowCache.set(key, cached);
+    return cached;
+  }
+
   for await (const rows of iterateEpisodeMetadataFilesV3(repoId, version)) {
     for (const row of rows) {
-      if (parseEpisodeRowSimple(row).episode_index === episodeId) {
-        return parseEpisodeRowSimple(row);
+      const metadata = parseEpisodeRowSimple(row);
+      if (metadata.episode_index !== episodeId) continue;
+      episodeMetadataRowCache.set(key, metadata);
+      while (episodeMetadataRowCache.size > 4096) {
+        const oldestKey = episodeMetadataRowCache.keys().next().value;
+        if (oldestKey === undefined) break;
+        episodeMetadataRowCache.delete(oldestKey);
       }
+      return metadata;
     }
   }
   throw new Error(tStandalone("err.episodeNotFound", { id: episodeId }));
@@ -2748,11 +2850,47 @@ export async function getEpisodeDataSafe(
   dataset: string,
   episodeId: number,
 ): Promise<{ data?: EpisodeData; error?: string }> {
-  try {
-    const data = await getEpisodeData(org, dataset, episodeId);
-    return { data };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { error: message || "Unknown error" };
+  const key = episodeDataCacheKey(org, dataset, episodeId);
+  const cached = episodeDataCache.get(key);
+  if (cached) {
+    rememberEpisodeData(key, cached);
+    return { data: cached };
   }
+
+  const inFlight = episodeDataInFlight.get(key);
+  if (inFlight) return inFlight;
+
+  const request = (async () => {
+    try {
+      const data = await getEpisodeData(org, dataset, episodeId);
+      rememberEpisodeData(key, data);
+      return { data };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { error: message || "Unknown error" };
+    }
+  })();
+
+  episodeDataInFlight.set(key, request);
+  try {
+    return await request;
+  } finally {
+    if (episodeDataInFlight.get(key) === request) {
+      episodeDataInFlight.delete(key);
+    }
+  }
+}
+
+/**
+ * Warm one episode in the same bounded cache used by the viewer. This is
+ * intentionally fire-and-forget: a failed warm-up must never affect the
+ * episode currently on screen.
+ */
+export function prefetchEpisodeData(
+  org: string,
+  dataset: string,
+  episodeId: number,
+): void {
+  if (!Number.isSafeInteger(episodeId)) return;
+  void getEpisodeDataSafe(org, dataset, episodeId).catch(() => undefined);
 }

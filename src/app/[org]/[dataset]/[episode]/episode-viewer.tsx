@@ -8,6 +8,8 @@ import {
   useCallback,
   lazy,
   Suspense,
+  useLayoutEffect,
+  useTransition,
 } from "react";
 import { useSearchParams } from "next/navigation";
 import { SimpleVideosPlayer } from "@/components/simple-videos-player";
@@ -31,6 +33,7 @@ import { hasURDFSupport } from "@/lib/so101-robot";
 import {
   computeColumnMinMax,
   getEpisodeDataSafe,
+  prefetchEpisodeData,
   loadAllEpisodeLengthsV3,
   loadAllEpisodeFrameInfo,
   loadCrossEpisodeActionVariance,
@@ -208,6 +211,10 @@ export default function EpisodeViewer({
   const selectEpisode = useCallback(
     (nextEpisode: number) => {
       if (nextEpisode === selectedEpisodeId) return;
+      // Mark the transition in the same event as the selection. This pauses
+      // the currently mounted player before React gets a chance to paint one
+      // more frame of the previous episode underneath the loading overlay.
+      setEpisodeLoading(true);
       setSelectedEpisodeId(nextEpisode);
       const repoId = repoIdFromRouteParams(org, dataset);
       window.history.pushState(
@@ -218,6 +225,40 @@ export default function EpisodeViewer({
     },
     [dataset, org, selectedEpisodeId],
   );
+
+  // Warm the two likely next choices after the current render settles. The
+  // request shares the same in-flight/result cache as the active load, so a
+  // rapid click never starts duplicate parquet work.
+  useEffect(() => {
+    if (
+      !Number.isSafeInteger(selectedEpisodeId) ||
+      data?.episodeId !== selectedEpisodeId
+    ) {
+      return;
+    }
+    const lowestEpisode = data.episodes[0] ?? 0;
+    const highestEpisode = data.episodes[data.episodes.length - 1] ?? -1;
+    const availableEpisodes = new Set(data.episodes);
+    const neighbors = [selectedEpisodeId - 1, selectedEpisodeId + 1].filter(
+      (nextEpisode) =>
+        nextEpisode >= lowestEpisode &&
+        nextEpisode <= highestEpisode &&
+        availableEpisodes.has(nextEpisode),
+    );
+    const warmup = () => {
+      for (const nextEpisode of neighbors) {
+        prefetchEpisodeData(org, dataset, nextEpisode);
+      }
+    };
+
+    if (typeof window.requestIdleCallback === "function") {
+      const idleId = window.requestIdleCallback(warmup, { timeout: 1200 });
+      return () => window.cancelIdleCallback(idleId);
+    }
+
+    const timerId = window.setTimeout(warmup, 250);
+    return () => window.clearTimeout(timerId);
+  }, [data, dataset, org, selectedEpisodeId]);
 
   useEffect(() => {
     if (Number.isNaN(selectedEpisodeId)) {
@@ -232,26 +273,38 @@ export default function EpisodeViewer({
       setData(null);
     }
     setEpisodeLoading(!changingDataset && loadedDatasetRef.current !== null);
-    getEpisodeDataSafe(org, dataset, selectedEpisodeId)
-      .then(({ data: loaded, error: loadError }) => {
-        if (requestIdRef.current !== requestId) return;
-        if (loadError) {
-          setError(loadError);
+
+    // Let the transition render once before starting parquet decoding. A
+    // cache hit can still enter a CPU-heavy parquet parse synchronously in a
+    // promise continuation; starting it directly from this effect can block
+    // the browser's next paint, making the user see the old episode first and
+    // the Loading overlay only afterwards. A macrotask gives the urgent
+    // loading state a paint opportunity without adding meaningful latency.
+    const timerId = window.setTimeout(() => {
+      if (requestIdRef.current !== requestId) return;
+      getEpisodeDataSafe(org, dataset, selectedEpisodeId)
+        .then(({ data: loaded, error: loadError }) => {
+          if (requestIdRef.current !== requestId) return;
+          if (loadError) {
+            setError(loadError);
+            if (changingDataset) setData(null);
+            return;
+          }
+          loadedDatasetRef.current = datasetKey;
+          setData(loaded ?? null);
+        })
+        .catch((err) => {
+          if (requestIdRef.current !== requestId) return;
+          const message = err instanceof Error ? err.message : String(err);
+          setError(message || t("err.unknown"));
           if (changingDataset) setData(null);
-          return;
-        }
-        loadedDatasetRef.current = datasetKey;
-        setData(loaded ?? null);
-      })
-      .catch((err) => {
-        if (requestIdRef.current !== requestId) return;
-        const message = err instanceof Error ? err.message : String(err);
-        setError(message || t("err.unknown"));
-        if (changingDataset) setData(null);
-      })
-      .finally(() => {
-        if (requestIdRef.current === requestId) setEpisodeLoading(false);
-      });
+        })
+        .finally(() => {
+          if (requestIdRef.current === requestId) setEpisodeLoading(false);
+        });
+    }, 0);
+
+    return () => window.clearTimeout(timerId);
   }, [datasetKey, org, dataset, selectedEpisodeId, t]);
 
   if (error && !data) {
@@ -401,14 +454,41 @@ function EpisodeViewerInner({
     }
     return "episodes";
   });
+  // Keep one loading layer mounted in the DOM. During an episode click the
+  // heavy viewer subtree can take a noticeable synchronous render; an
+  // imperative visibility flip lets the browser paint feedback before that
+  // transition render starts.
+  const instantLoadingRef = useRef<HTMLDivElement>(null);
+  const showInstantLoading = useCallback(() => {
+    const element = instantLoadingRef.current;
+    if (!element) return;
+    element.style.opacity = "1";
+    element.style.pointerEvents = "auto";
+    element.setAttribute("aria-hidden", "false");
+  }, []);
+  const syncInstantLoading = useCallback((visible: boolean) => {
+    const element = instantLoadingRef.current;
+    if (!element) return;
+    element.style.opacity = visible ? "1" : "0";
+    element.style.pointerEvents = visible ? "auto" : "none";
+    element.setAttribute("aria-hidden", String(!visible));
+  }, []);
+  const [, startEpisodeTransition] = useTransition();
+  const episodeTransitioning =
+    episodeLoading || selectedEpisodeId !== episodeId;
   const isLoading =
-    episodeLoading ||
+    episodeTransitioning ||
     (activeTab === "episodes" && (!videosReady || !chartsReady));
+  const playerLoading = episodeTransitioning || Boolean(episodeError);
 
   useEffect(() => {
     setVideosReady(!videosInfo.length);
     setChartsReady(false);
   }, [episodeId, videosInfo.length]);
+
+  useLayoutEffect(() => {
+    syncInstantLoading(isLoading);
+  }, [isLoading, syncInstantLoading]);
 
   useEffect(() => {
     if (!isLoading) {
@@ -584,11 +664,28 @@ function EpisodeViewerInner({
   const handleEpisodeSelect = useCallback(
     (nextEpisode: number) => {
       if (nextEpisode === selectedEpisodeId) return;
-      setIsPlaying(false);
-      seek(0);
-      onEpisodeSelect(nextEpisode);
+      // Do not seek the old episode here. seek(0) synchronously notified every
+      // time subscriber (and could trigger several media seeks) before React
+      // had a chance to paint the loading state. The TimeProvider resets the
+      // clock when the new EpisodeData arrives, while the player pauses from
+      // its loading prop.
+      showInstantLoading();
+      // Keep the click task paintable. The old implementation updated the
+      // whole viewer synchronously, so the spinner was inserted only after a
+      // long render. A transition lets the imperative overlay get one frame
+      // on screen before the episode/data subtree is reconciled.
+      startEpisodeTransition(() => {
+        onEpisodeSelect(nextEpisode);
+        setIsPlaying(false);
+      });
     },
-    [onEpisodeSelect, seek, selectedEpisodeId, setIsPlaying],
+    [
+      onEpisodeSelect,
+      selectedEpisodeId,
+      setIsPlaying,
+      showInstantLoading,
+      startEpisodeTransition,
+    ],
   );
 
   // URDF playback toggle — populated by URDFViewer after its first mount.
@@ -802,7 +899,13 @@ function EpisodeViewerInner({
               : "overflow-y-auto"
           }`}
         >
-          {isLoading && <Loading />}
+          <div
+            ref={instantLoadingRef}
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 z-30 opacity-0"
+          >
+            <Loading />
+          </div>
           {episodeError && (
             <div className="absolute inset-0 z-20 flex items-center justify-center bg-[var(--bg)]/80 p-6 backdrop-blur-sm">
               <div className="panel-raised max-w-xl border-red-500/40 p-6">
@@ -884,6 +987,8 @@ function EpisodeViewerInner({
               {videosInfo.length > 0 && (
                 <SimpleVideosPlayer
                   videosInfo={videosInfo}
+                  episodeId={episodeId}
+                  loading={playerLoading}
                   onVideosReady={() => setVideosReady(true)}
                 />
               )}
@@ -948,6 +1053,8 @@ function EpisodeViewerInner({
                   <div className="sticky top-0 z-20 bg-[var(--bg)] pb-3 lg:static lg:col-start-1 lg:row-start-1 lg:max-h-[55vh] lg:overflow-y-auto lg:bg-transparent lg:pb-0">
                     <SimpleVideosPlayer
                       videosInfo={videosInfo}
+                      episodeId={episodeId}
+                      loading={playerLoading}
                       onVideosReady={() => setVideosReady(true)}
                       annotationOverlay
                     />
