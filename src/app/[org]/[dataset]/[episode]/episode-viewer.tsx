@@ -56,6 +56,11 @@ import {
   routePathFromRepoId,
 } from "@/utils/datasetRoute";
 import { type DatasetTags, EMPTY_TAGS } from "@/lib/dataset-tags";
+import {
+  blocksAllShortcuts,
+  describeShortcutTarget,
+  yieldsSpaceShortcut,
+} from "@/utils/viewerShortcuts";
 import DatasetTagsEditor from "@/components/dataset-tags-editor";
 
 const URDFViewer = lazy(() => import("@/components/urdf-viewer"));
@@ -72,39 +77,37 @@ const ParquetTablePanel = lazy(
 // videos start downloading in parallel with the chart bundle.
 const DataRecharts = lazy(() => import("@/components/data-recharts"));
 
-/** Skip every global shortcut while typing in a field. */
-function isKeyboardFocusInsideTextEntry(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable || target.closest('[contenteditable="true"]')) {
-    return true;
-  }
-  const tag = target.tagName;
-  // The playback slider is an <input>, but it is *the* thing the shortcuts
-  // drive — keep them global while it has focus so clicking the scrubber
-  // doesn't disable Space/arrows.
-  if (tag === "INPUT") {
-    return (target as HTMLInputElement).type !== "range";
-  }
-  return tag === "TEXTAREA" || tag === "SELECT";
-}
+type EpisodeSwitchTiming = {
+  targetEpisode: number;
+  startedAt: number | null;
+  shellLogged: boolean;
+  videosLogged: boolean;
+  chartsLogged: boolean;
+};
 
 /**
- * Space activates buttons, but it does not activate a native link: on a
- * focused <a> the browser scrolls instead. Episode selection leaves its link
- * focused, so yielding to that link made the next Space scroll the sidebar
- * rather than toggle playback. Keep the old native behavior for other links;
- * episode links opt into the viewer shortcut explicitly.
+ * Episode-switch timings are development instrumentation, not behavior.
+ * Funnelling them through one helper keeps the measurement out of the state
+ * transitions it measures, and stops a production build from narrating every
+ * switch to the console.
  */
-function shouldYieldSpaceShortcut(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  // Episode links intentionally keep focus after a click so keyboard users
-  // can continue moving through the list. Their native Space behavior is
-  // scrolling, however, so let the viewer shortcut handle those links.
-  if (target.closest("[data-episode-link]")) return false;
-  return (
-    target.tagName === "BUTTON" ||
-    target.getAttribute("role") === "button" ||
-    (target.tagName === "A" && target.hasAttribute("href"))
+function logSwitchTiming(
+  timing: EpisodeSwitchTiming,
+  stage: "shellLogged" | "videosLogged" | "chartsLogged",
+  episodeId: number,
+  label: string,
+): void {
+  if (process.env.NODE_ENV === "production") return;
+  if (
+    timing.startedAt === null ||
+    timing.targetEpisode !== episodeId ||
+    timing[stage]
+  ) {
+    return;
+  }
+  timing[stage] = true;
+  console.log(
+    `[perf] episode ${episodeId}: ${label} in ${(performance.now() - timing.startedAt).toFixed(0)}ms`,
   );
 }
 
@@ -446,13 +449,7 @@ function EpisodeViewerInner({
   // click immediately, without forcing the heavyweight viewer to render an
   // urgent state update before the transition starts.
   const episodeSwitchRef = useRef(false);
-  const switchTimingRef = useRef<{
-    targetEpisode: number;
-    startedAt: number | null;
-    shellLogged: boolean;
-    videosLogged: boolean;
-    chartsLogged: boolean;
-  }>({
+  const switchTimingRef = useRef<EpisodeSwitchTiming>({
     targetEpisode: episodeId,
     // Initial page loading is timed by Next/server tooling. This clock is
     // deliberately armed only by an in-viewer episode switch.
@@ -487,7 +484,13 @@ function EpisodeViewerInner({
   // The full-page layer only guards the data transition. Media decoding and
   // Recharts rendering have their own local placeholders, so they no longer
   // hold the entire episode shell behind LOADING.
-  const isLoading = episodeTransitioning;
+  //
+  // A failed load leaves `data` on the previous episode while
+  // `selectedEpisodeId` stays on the requested one, so `episodeTransitioning`
+  // never clears. Without the error term the z-30 overlay would then sit on
+  // top of the z-20 error panel forever and the user would see an endless
+  // spinner instead of the reason the episode did not load.
+  const isLoading = episodeTransitioning && !episodeError;
   const playerLoading = episodeTransitioning || Boolean(episodeError);
 
   // Browser back/forward does not pass through handleEpisodeSelect. Start a
@@ -577,18 +580,12 @@ function EpisodeViewerInner({
   }, [isLoading, syncInstantLoading]);
 
   useEffect(() => {
-    const timing = switchTimingRef.current;
-    if (
-      isLoading ||
-      timing.startedAt === null ||
-      timing.targetEpisode !== episodeId ||
-      timing.shellLogged
-    ) {
-      return;
-    }
-    timing.shellLogged = true;
-    console.log(
-      `[perf] episode ${episodeId}: shell switched in ${(performance.now() - timing.startedAt).toFixed(0)}ms`,
+    if (isLoading) return;
+    logSwitchTiming(
+      switchTimingRef.current,
+      "shellLogged",
+      episodeId,
+      "shell switched",
     );
   }, [episodeId, isLoading]);
   const [, setColumnMinMax] = useState<ColumnMinMax[] | null>(null);
@@ -757,19 +754,21 @@ function EpisodeViewerInner({
   const { seek, setIsPlaying } = useTimeControls();
   const handleVideosReady = useCallback(() => {
     setVideosReady(true);
-    const timing = switchTimingRef.current;
-    if (
-      timing.startedAt !== null &&
-      timing.targetEpisode === episodeId &&
-      !timing.videosLogged
-    ) {
-      timing.videosLogged = true;
-      console.log(
-        `[perf] episode ${episodeId}: videos decoded in ${(performance.now() - timing.startedAt).toFixed(0)}ms`,
-      );
-    }
+    logSwitchTiming(
+      switchTimingRef.current,
+      "videosLogged",
+      episodeId,
+      "videos decoded",
+    );
   }, [episodeId]);
   const handleChartsReady = useCallback(() => {
+    // Commit readiness immediately: the two frames below exist only to make
+    // the *measurement* honest, and gating the state update behind them would
+    // hold `chartsReady` back for two frames on every episode for the sake of
+    // a console line.
+    setChartsReady(true);
+
+    if (process.env.NODE_ENV === "production") return;
     if (chartReadyFrameRef.current !== null) {
       window.cancelAnimationFrame(chartReadyFrameRef.current);
     }
@@ -780,18 +779,12 @@ function EpisodeViewerInner({
     chartReadyFrameRef.current = window.requestAnimationFrame(() => {
       chartReadyFrameRef.current = window.requestAnimationFrame(() => {
         chartReadyFrameRef.current = null;
-        const timing = switchTimingRef.current;
-        setChartsReady(true);
-        if (
-          timing.startedAt !== null &&
-          timing.targetEpisode === episodeId &&
-          !timing.chartsLogged
-        ) {
-          timing.chartsLogged = true;
-          console.log(
-            `[perf] episode ${episodeId}: charts painted in ${(performance.now() - timing.startedAt).toFixed(0)}ms`,
-          );
-        }
+        logSwitchTiming(
+          switchTimingRef.current,
+          "chartsLogged",
+          episodeId,
+          "charts painted",
+        );
       });
     });
   }, [episodeId]);
@@ -911,10 +904,11 @@ function EpisodeViewerInner({
     const onKeyDown = (e: KeyboardEvent) => {
       const { key } = e;
       const s = keyStateRef.current;
-      const inTextEntry = isKeyboardFocusInsideTextEntry(e.target);
+      const focus = describeShortcutTarget(e.target);
+      const inTextEntry = blocksAllShortcuts(focus);
 
       if (key === " ") {
-        if (inTextEntry || shouldYieldSpaceShortcut(e.target)) return;
+        if (inTextEntry || yieldsSpaceShortcut(focus)) return;
         e.preventDefault();
         if (s.activeTab === "urdf") {
           urdfPlayToggleRef.current?.();

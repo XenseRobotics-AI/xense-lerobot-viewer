@@ -47,6 +47,18 @@ const SERIES_NAME_DELIMITER = CHART_CONFIG.SERIES_NAME_DELIMITER;
 // visible gain. Keep the source data intact and thin only the render input.
 const MAX_SVG_POINTS_PER_GRAPH = 800;
 
+// Recharts computes its plot area as `margin + axis size`, and GraphPlayhead
+// has to line up with that box in plain CSS. Derive both edges from the same
+// numbers the <LineChart> and <YAxis> are given below so the playhead cannot
+// drift when a margin is tweaked.
+const CHART_MARGIN = { top: 12, right: 12, left: -8, bottom: 8 } as const;
+const CHART_Y_AXIS_WIDTH = 55;
+// Recharts' own XAxis default. Pinned explicitly on the axis below so the
+// playhead's bottom inset cannot silently disagree with it.
+const CHART_X_AXIS_HEIGHT = 30;
+const PLOT_INSET_LEFT = CHART_MARGIN.left + CHART_Y_AXIS_WIDTH;
+const PLOT_INSET_RIGHT = CHART_MARGIN.right;
+
 const CHART_COLORS = [
   "#f97316",
   "#3b82f6",
@@ -82,7 +94,15 @@ const GraphPlayhead = React.memo(
       span > 0 ? Math.min(1, Math.max(0, (currentTime - minTime) / span)) : 0;
 
     return (
-      <div className="pointer-events-none absolute inset-y-0 left-[55px] right-3 z-10">
+      <div
+        className="pointer-events-none absolute z-10"
+        style={{
+          left: PLOT_INSET_LEFT,
+          right: PLOT_INSET_RIGHT,
+          top: CHART_MARGIN.top,
+          bottom: CHART_X_AXIS_HEIGHT + CHART_MARGIN.bottom,
+        }}
+      >
         <div
           className="absolute inset-y-0 w-px bg-orange-400/80"
           style={{ left: `${ratio * 100}%` }}
@@ -590,7 +610,7 @@ const SingleDataGraph = React.memo(
             <LineChart
               data={chartData}
               syncId="episode-sync"
-              margin={{ top: 12, right: 12, left: -8, bottom: 8 }}
+              margin={CHART_MARGIN}
               onClick={handleClick}
               onMouseMove={(state) => {
                 const payload = state?.activePayload?.[0]?.payload as
@@ -615,13 +635,14 @@ const SingleDataGraph = React.memo(
                 stroke="#64748b"
                 tick={{ fontSize: 12, fill: "#94a3b8" }}
                 minTickGap={30}
+                height={CHART_X_AXIS_HEIGHT}
                 allowDataOverflow={true}
               />
               <YAxis
                 domain={["auto", "auto"]}
                 stroke="#64748b"
                 tick={{ fontSize: 12, fill: "#94a3b8" }}
-                width={55}
+                width={CHART_Y_AXIS_WIDTH}
                 allowDataOverflow={true}
                 tickFormatter={(v: number) => {
                   if (v === 0) return "0";

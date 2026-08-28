@@ -27,6 +27,7 @@ import {
 } from "@/utils/episodeLengthHistogram";
 import { buildPoseVelocityChartGroups } from "@/utils/poseVelocity";
 import { evenlySampleArray, evenlySampleIndices } from "@/utils/sampling";
+import { rememberInLru, touchLru } from "@/utils/lruCache";
 import {
   extractSpatialTrajectory,
   findSpatialAxisGroups,
@@ -187,6 +188,20 @@ function parsePositiveIntEnv(
 // back to a recently viewed episode is synchronous and overlapping switches
 // share one request. The cache is deliberately bounded because chart rows and
 // frame timestamps are kept in the object passed to the client UI.
+//
+// Two properties callers must know about:
+//
+//   - **There is no invalidation.** Unlike the Node-side handle cache in
+//     `src/lib/parquet-server.ts`, which re-keys on `mtime + size`, this one
+//     evicts by LRU only. A dataset rewritten underneath the tab — running
+//     `scripts/export_subtasks.py`, or an HF sync — keeps serving the parsed
+//     copy until it is evicted. This module runs in the browser, so a page
+//     reload is always the escape hatch; that is the trade being made.
+//   - **Entries are shared, so treat an `EpisodeData` as read-only.** Two
+//     visits to the same episode now receive the identical object (which is
+//     also why `extractEpisodePoseTrajectories`' per-rows-array memoisation
+//     starts hitting across a revisit). Mutating one in place — sorting a
+//     chart row array, say — corrupts every later reader.
 const MAX_EPISODE_DATA_CACHE_ENTRIES = parsePositiveIntEnv(
   process.env.MAX_EPISODE_DATA_CACHE_ENTRIES,
   8,
@@ -211,18 +226,19 @@ const episodeMetadataFileInFlight = new Map<
   Promise<Record<string, unknown>[] | null>
 >();
 const episodeMetadataRowCache = new Map<string, EpisodeMetadataV3>();
+const MAX_EPISODE_METADATA_FILES = 96;
+const MAX_EPISODE_METADATA_ROWS = 4096;
 
 function rememberMetadataFile(
   url: string,
   rows: Record<string, unknown>[] | null,
 ): void {
-  episodeMetadataFileCache.delete(url);
-  episodeMetadataFileCache.set(url, rows);
-  while (episodeMetadataFileCache.size > 96) {
-    const oldestKey = episodeMetadataFileCache.keys().next().value;
-    if (oldestKey === undefined) break;
-    episodeMetadataFileCache.delete(oldestKey);
-  }
+  rememberInLru(
+    episodeMetadataFileCache,
+    url,
+    rows,
+    MAX_EPISODE_METADATA_FILES,
+  );
 }
 
 function episodeDataCacheKey(
@@ -234,14 +250,7 @@ function episodeDataCacheKey(
 }
 
 function rememberEpisodeData(key: string, data: EpisodeData): void {
-  // Move a hit to the newest end so the eviction order is LRU-like.
-  episodeDataCache.delete(key);
-  episodeDataCache.set(key, data);
-  while (episodeDataCache.size > MAX_EPISODE_DATA_CACHE_ENTRIES) {
-    const oldestKey = episodeDataCache.keys().next().value;
-    if (oldestKey === undefined) break;
-    episodeDataCache.delete(oldestKey);
-  }
+  rememberInLru(episodeDataCache, key, data, MAX_EPISODE_DATA_CACHE_ENTRIES);
 }
 
 const MAX_EPISODE_POINTS = parsePositiveIntEnv(
@@ -425,8 +434,21 @@ async function loadEpisodeProgressGroup(
   for (const progressPath of PROGRESS_PARQUET_CANDIDATES) {
     const progressUrl = buildVersionedUrl(repoId, version, progressPath);
     if (missingProgressUrls.has(progressUrl)) continue;
+
+    // Only a failed *fetch* proves the candidate is absent from this dataset.
+    // Folding the decode and the row processing into the same catch would let
+    // one corrupt-but-present file — or a single transient read — disable the
+    // progress series for the rest of the session, with no way back short of
+    // a reload.
+    let progressBuffer;
     try {
-      const progressBuffer = await fetchParquetFile(progressUrl);
+      progressBuffer = await fetchParquetFile(progressUrl);
+    } catch {
+      missingProgressUrls.add(progressUrl);
+      continue;
+    }
+
+    try {
       const progressRows = await readParquetAsObjects(progressBuffer, []);
       if (progressRows.length === 0) continue;
 
@@ -475,8 +497,8 @@ async function loadEpisodeProgressGroup(
         }));
       };
     } catch {
-      missingProgressUrls.add(progressUrl);
-      // Optional file: ignore and try next candidate.
+      // The file exists but could not be decoded. Skip it for this episode
+      // and let the next call try again — do not blacklist the URL.
     }
   }
 
@@ -1529,9 +1551,11 @@ async function* iterateEpisodeMetadataFilesV3(
     const path = buildV3EpisodesMetadataPath(chunkIndex, fileIndex);
     const url = buildVersionedUrl(repoId, version, path);
     let rows: Record<string, unknown>[] | null;
-    const cachedRows = episodeMetadataFileCache.get(url);
-    if (cachedRows !== undefined) {
-      rows = cachedRows;
+    // `has` rather than a truthiness check: a cached `null` is the *result*
+    // "this shard does not exist", and it has to stop the refetch just as a
+    // cached row array does.
+    if (episodeMetadataFileCache.has(url)) {
+      rows = touchLru(episodeMetadataFileCache, url) ?? null;
     } else {
       const inFlight = episodeMetadataFileInFlight.get(url);
       if (inFlight) {
@@ -1577,23 +1601,19 @@ async function loadEpisodeMetadataV3Simple(
   episodeId: number,
 ): Promise<EpisodeMetadataV3> {
   const key = `${repoId}\u0000${version}\u0000${episodeId}`;
-  const cached = episodeMetadataRowCache.get(key);
-  if (cached) {
-    episodeMetadataRowCache.delete(key);
-    episodeMetadataRowCache.set(key, cached);
-    return cached;
-  }
+  const cached = touchLru(episodeMetadataRowCache, key);
+  if (cached) return cached;
 
   for await (const rows of iterateEpisodeMetadataFilesV3(repoId, version)) {
     for (const row of rows) {
       const metadata = parseEpisodeRowSimple(row);
       if (metadata.episode_index !== episodeId) continue;
-      episodeMetadataRowCache.set(key, metadata);
-      while (episodeMetadataRowCache.size > 4096) {
-        const oldestKey = episodeMetadataRowCache.keys().next().value;
-        if (oldestKey === undefined) break;
-        episodeMetadataRowCache.delete(oldestKey);
-      }
+      rememberInLru(
+        episodeMetadataRowCache,
+        key,
+        metadata,
+        MAX_EPISODE_METADATA_ROWS,
+      );
       return metadata;
     }
   }
@@ -2854,11 +2874,8 @@ export async function getEpisodeDataSafe(
   episodeId: number,
 ): Promise<{ data?: EpisodeData; error?: string }> {
   const key = episodeDataCacheKey(org, dataset, episodeId);
-  const cached = episodeDataCache.get(key);
-  if (cached) {
-    rememberEpisodeData(key, cached);
-    return { data: cached };
-  }
+  const cached = touchLru(episodeDataCache, key);
+  if (cached) return { data: cached };
 
   const inFlight = episodeDataInFlight.get(key);
   if (inFlight) return inFlight;
@@ -2882,18 +2899,4 @@ export async function getEpisodeDataSafe(
       episodeDataInFlight.delete(key);
     }
   }
-}
-
-/**
- * Warm one episode in the same bounded cache used by the viewer. This is
- * intentionally fire-and-forget: a failed warm-up must never affect the
- * episode currently on screen.
- */
-export function prefetchEpisodeData(
-  org: string,
-  dataset: string,
-  episodeId: number,
-): void {
-  if (!Number.isSafeInteger(episodeId)) return;
-  void getEpisodeDataSafe(org, dataset, episodeId).catch(() => undefined);
 }

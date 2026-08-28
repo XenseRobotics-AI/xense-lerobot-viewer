@@ -18,7 +18,7 @@ import "./annotations-skin.css";
  */
 
 import React, { useMemo, useState } from "react";
-import { useTime } from "../context/time-context";
+import { useTimeControls, useTimeState } from "../context/time-context";
 import { useAnnotations } from "../context/annotations-context";
 import { useT } from "../context/locale-context";
 import type { MessageKey } from "@/i18n/messages";
@@ -438,7 +438,9 @@ const RAIL_GROUPS: RailGroupDef[] = [
 ];
 
 function useJump(): (ts: number) => void {
-  const { seek, setIsPlaying } = useTime();
+  // Controls only — subscribing to the state context here would re-render
+  // every jump-capable panel on each throttled playback tick.
+  const { seek, setIsPlaying } = useTimeControls();
   return React.useCallback(
     (ts: number) => {
       seek(ts, "external");
@@ -465,7 +467,7 @@ export const AnnotationsPanel: React.FC<Props> = ({ cameraKeys }) => {
     selectedIdx,
     selectAtom,
   } = useAnnotations();
-  const { currentTime } = useTime();
+  const { currentTime } = useTimeState();
 
   // ============ Inline quick-add state ============
   const [qaKind, setQaKind] = useState<QuickAddKind>("subtask");
