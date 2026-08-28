@@ -89,15 +89,23 @@ function isKeyboardFocusInsideTextEntry(target: EventTarget | null): boolean {
 }
 
 /**
- * Space *activates* a focused button or link. Stealing it for play/pause
- * would leave every button in the viewer un-activatable by keyboard, so the
- * Space shortcut yields here — the arrow shortcuts, which these elements
- * don't consume, deliberately do not.
+ * Space activates buttons, but it does not activate a native link: on a
+ * focused <a> the browser scrolls instead. Episode selection leaves its link
+ * focused, so yielding to that link made the next Space scroll the sidebar
+ * rather than toggle playback. Keep the old native behavior for other links;
+ * episode links opt into the viewer shortcut explicitly.
  */
-function isKeyboardFocusOnActivatable(target: EventTarget | null): boolean {
+function shouldYieldSpaceShortcut(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName;
-  return tag === "BUTTON" || (tag === "A" && target.hasAttribute("href"));
+  // Episode links intentionally keep focus after a click so keyboard users
+  // can continue moving through the list. Their native Space behavior is
+  // scrolling, however, so let the viewer shortcut handle those links.
+  if (target.closest("[data-episode-link]")) return false;
+  return (
+    target.tagName === "BUTTON" ||
+    target.getAttribute("role") === "button" ||
+    (target.tagName === "A" && target.hasAttribute("href"))
+  );
 }
 
 type ActiveTab =
@@ -906,7 +914,7 @@ function EpisodeViewerInner({
       const inTextEntry = isKeyboardFocusInsideTextEntry(e.target);
 
       if (key === " ") {
-        if (inTextEntry || isKeyboardFocusOnActivatable(e.target)) return;
+        if (inTextEntry || shouldYieldSpaceShortcut(e.target)) return;
         e.preventDefault();
         if (s.activeTab === "urdf") {
           urdfPlayToggleRef.current?.();
