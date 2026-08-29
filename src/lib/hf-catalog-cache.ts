@@ -1,5 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  workbenchDayKey,
+  type WorkbenchDailyAddition,
+} from "@/utils/workbenchRollup";
 import { WORKBENCH_UPLOADER_NAMES } from "@/utils/workbenchUploaderNames";
 
 export type HfCatalogEntry = {
@@ -23,8 +27,106 @@ export type HfCatalogDocument = {
   [key: string]: unknown;
 };
 
+type HfChangeRow = {
+  dataset_name?: unknown;
+  created_at?: unknown;
+  date?: unknown;
+  episodes?: unknown;
+  frames?: unknown;
+  hours?: unknown;
+};
+
+type HfChangeRepo = {
+  changes?: unknown;
+};
+
 export function hfCatalogCachePath(root: string, org: string): string {
   return path.join(root, ".xense-viewer", "hf-catalog", `${org}.json`);
+}
+
+export function hfChangeHistoryCandidates(root: string): string[] {
+  return [
+    process.env.TACVERSE_WORKBENCH_CHANGE_HISTORY?.trim(),
+    path.join(root, ".xense-viewer", "hf-change-history.local.json"),
+    path.resolve(
+      process.cwd(),
+      "..",
+      "tacverse-workbench",
+      "hf_change_history.local.json",
+    ),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+}
+
+function nonNegativeNumber(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function dayFromLegacyYymmdd(value: unknown): string | null {
+  if (typeof value !== "string" || !/^\d{6}$/u.test(value)) return null;
+  return `20${value.slice(0, 2)}-${value.slice(2, 4)}-${value.slice(4, 6)}`;
+}
+
+function changeDay(row: HfChangeRow): string | null {
+  if (typeof row.created_at === "string") {
+    const day = workbenchDayKey(row.created_at);
+    if (day) return day;
+  }
+  return dayFromLegacyYymmdd(row.date);
+}
+
+function additionsFromRows(
+  rows: readonly HfChangeRow[],
+): WorkbenchDailyAddition[] {
+  const byDay = new Map<
+    string,
+    { episodes: number; frames: number; hours: number }
+  >();
+  for (const row of rows) {
+    const day = changeDay(row);
+    if (!day) continue;
+    const episodes = nonNegativeNumber(row.episodes);
+    const frames = nonNegativeNumber(row.frames);
+    const hours = nonNegativeNumber(row.hours);
+    if (episodes <= 0 && frames <= 0 && hours <= 0) continue;
+    const current = byDay.get(day) ?? { episodes: 0, frames: 0, hours: 0 };
+    current.episodes += Math.trunc(episodes);
+    current.frames += Math.trunc(frames);
+    current.hours += hours;
+    byDay.set(day, current);
+  }
+  return Array.from(byDay.entries())
+    .map(([day, value]) => ({
+      day,
+      episodes: value.episodes,
+      frames: value.frames,
+      hours: Math.round(value.hours * 1000) / 1000,
+    }))
+    .sort((left, right) => left.day.localeCompare(right.day));
+}
+
+export async function readHfChangeHistory(
+  root: string,
+  org: string,
+): Promise<Map<string, WorkbenchDailyAddition[]>> {
+  for (const file of hfChangeHistoryCandidates(root)) {
+    try {
+      const parsed = JSON.parse(await fs.readFile(file, "utf8")) as {
+        repos?: Record<string, HfChangeRepo>;
+      };
+      const output = new Map<string, WorkbenchDailyAddition[]>();
+      for (const [repoId, repo] of Object.entries(parsed.repos ?? {})) {
+        if (!repoId.startsWith(`${org}/`)) continue;
+        const changes = Array.isArray(repo.changes) ? repo.changes : [];
+        const additions = additionsFromRows(changes as HfChangeRow[]);
+        if (additions.length > 0) output.set(repoId, additions);
+      }
+      return output;
+    } catch {
+      // Try the next configured/default Workbench change-history location.
+    }
+  }
+  return new Map();
 }
 
 async function readWorkbenchHistory(org: string): Promise<HfCatalogEntry[]> {

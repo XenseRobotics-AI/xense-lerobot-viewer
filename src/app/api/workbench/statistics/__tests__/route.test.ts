@@ -8,16 +8,22 @@ import { writeWorkbenchWorkstationMappings } from "@/lib/workbench-config-store"
 let root: string;
 const previousRoot = process.env.LOCAL_DATASET_ROOT;
 const previousWorkbenchLog = process.env.TACVERSE_WORKBENCH_DATASET_LOG;
+const previousChangeHistory = process.env.TACVERSE_WORKBENCH_CHANGE_HISTORY;
 
 async function writeDataset(
   repoId: string,
   info: Record<string, unknown> = {},
   hardware: Record<string, unknown> | null = null,
+  options: { payload?: boolean } = {},
 ): Promise<void> {
   const dir = path.join(root, ...repoId.split("/"));
   await fs.mkdir(path.join(dir, "meta"), { recursive: true });
-  await fs.mkdir(path.join(dir, "data"), { recursive: true });
-  await fs.mkdir(path.join(dir, "videos"), { recursive: true });
+  if (options.payload !== false) {
+    await fs.mkdir(path.join(dir, "data"), { recursive: true });
+    await fs.mkdir(path.join(dir, "videos"), { recursive: true });
+    await fs.writeFile(path.join(dir, "data", "chunk-000.parquet"), "");
+    await fs.writeFile(path.join(dir, "videos", "camera.mp4"), "");
+  }
   await fs.writeFile(
     path.join(dir, "meta", "info.json"),
     JSON.stringify({
@@ -41,6 +47,7 @@ beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "xense-workbench-route-"));
   process.env.LOCAL_DATASET_ROOT = root;
   delete process.env.TACVERSE_WORKBENCH_DATASET_LOG;
+  delete process.env.TACVERSE_WORKBENCH_CHANGE_HISTORY;
 });
 
 afterEach(async () => {
@@ -50,6 +57,11 @@ afterEach(async () => {
     delete process.env.TACVERSE_WORKBENCH_DATASET_LOG;
   } else {
     process.env.TACVERSE_WORKBENCH_DATASET_LOG = previousWorkbenchLog;
+  }
+  if (previousChangeHistory === undefined) {
+    delete process.env.TACVERSE_WORKBENCH_CHANGE_HISTORY;
+  } else {
+    process.env.TACVERSE_WORKBENCH_CHANGE_HISTORY = previousChangeHistory;
   }
   await fs.rm(root, { recursive: true, force: true });
 });
@@ -89,6 +101,16 @@ describe("Workbench statistics route", () => {
         ],
       },
     );
+    await writeDataset(
+      "TacVerse/metadata-only-0818",
+      {
+        total_episodes: 100,
+        total_frames: 360_000,
+        fps: 10,
+      },
+      null,
+      { payload: false },
+    );
     const cacheDir = path.join(root, ".xense-viewer", "hf-catalog");
     await fs.mkdir(cacheDir, { recursive: true });
     await fs.writeFile(
@@ -115,7 +137,62 @@ describe("Workbench statistics route", () => {
             durationHours: 0.833333,
             lastModified: "2026-08-18T10:00:00Z",
           },
+          {
+            repoId: "TacVerse/metadata-only-0818",
+            uploader: "bob",
+            totalEpisodes: 100,
+            totalFrames: 360_000,
+            fps: 10,
+            durationHours: 10,
+            lastModified: "2026-08-18T11:00:00Z",
+          },
         ],
+      }),
+    );
+    const changeHistoryPath = path.join(root, "hf_change_history.local.json");
+    process.env.TACVERSE_WORKBENCH_CHANGE_HISTORY = changeHistoryPath;
+    await fs.writeFile(
+      changeHistoryPath,
+      JSON.stringify({
+        version: 1,
+        repos: {
+          "TacVerse/newer-0818": {
+            last_modified: "2026-08-18T10:00:00Z",
+            changes: [
+              {
+                dataset_name: "TacVerse/newer-0818",
+                created_at: "2026-08-18T02:00:00Z",
+                episodes: 10,
+                frames: 36_000,
+                hours: 0.333,
+              },
+              {
+                dataset_name: "TacVerse/newer-0818",
+                created_at: "2026-08-18T16:30:00Z",
+                episodes: 5,
+                frames: 18_000,
+                hours: 0.167,
+              },
+              {
+                dataset_name: "TacVerse/newer-0818",
+                created_at: "2026-08-18T17:00:00Z",
+                episodes: 0,
+                frames: 0,
+                hours: 0,
+              },
+            ],
+          },
+          "OtherOrg/ignored": {
+            changes: [
+              {
+                created_at: "2026-08-18T02:00:00Z",
+                episodes: 99,
+                frames: 99,
+                hours: 99,
+              },
+            ],
+          },
+        },
       }),
     );
 
@@ -143,6 +220,12 @@ describe("Workbench statistics route", () => {
         uploader: string | null;
         uploaderDisplayName: string | null;
         leftGripperSn: string | null;
+        dailyAdditions: Array<{
+          day: string;
+          episodes: number;
+          frames: number;
+          hours: number;
+        }>;
         hf: {
           lastModified: string | null;
           uploader: string | null;
@@ -158,10 +241,17 @@ describe("Workbench statistics route", () => {
     });
     expect(payload.workstationMappings.defaults.TCGU01A28Z0033m).toBe("N0");
     expect(payload.datasets.map((dataset) => dataset.relativePath)).toEqual([
+      "TacVerse/metadata-only-0818",
       "TacVerse/newer-0818",
       "TacVerse/older-0817",
     ]);
-    expect(payload.datasets[0]).toMatchObject({
+    const newer = payload.datasets.find(
+      (dataset) => dataset.relativePath === "TacVerse/newer-0818",
+    );
+    const metadataOnly = payload.datasets.find(
+      (dataset) => dataset.relativePath === "TacVerse/metadata-only-0818",
+    );
+    expect(newer).toMatchObject({
       total_episodes: 25,
       total_frames: 90_000,
       fps: 30,
@@ -169,13 +259,27 @@ describe("Workbench statistics route", () => {
       uploader: "alice",
       uploaderDisplayName: "Alice",
       leftGripperSn: "TCGU01A28Z0069m",
+      dailyAdditions: [
+        {
+          day: "2026-08-18",
+          episodes: 25,
+          frames: 90_000,
+          hours: 0.833,
+        },
+      ],
       hf: {
         lastModified: "2026-08-18T10:00:00Z",
         uploader: "alice",
         uploaderDisplayName: "Alice",
       },
     });
-    expect(payload.datasets[1]).toMatchObject({
+    expect(metadataOnly).toMatchObject({
+      relativePath: "TacVerse/metadata-only-0818",
+      total_episodes: 100,
+      total_frames: 360_000,
+      dailyAdditions: [],
+    });
+    expect(payload.datasets[2]).toMatchObject({
       total_episodes: 11,
       total_frames: 54_000,
       fps: 30,

@@ -19,6 +19,7 @@ export type WorkbenchRollupDataset = Pick<
   uploaderDisplayName?: string | null;
   lastModified?: string | null;
   durationHours?: number | null;
+  dailyAdditions?: WorkbenchDailyAddition[];
 };
 
 export type WorkbenchRollupRow = {
@@ -56,6 +57,13 @@ export type WorkbenchRollupTimeline = {
     frames: number;
     hours: number;
   };
+};
+
+export type WorkbenchDailyAddition = {
+  day: string;
+  episodes: number;
+  frames: number;
+  hours: number;
 };
 
 export const WORKBENCH_LEFT_SN_DAILY_TARGET_HOURS = 6;
@@ -212,23 +220,16 @@ export function workbenchDayKey(lastModified?: string | null): string | null {
   if (isDayKey(value)) return value;
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) return null;
-  return new Date(parsed).toISOString().slice(0, 10);
-}
-
-function localDayKey(date: Date): string {
-  const year = date.getFullYear().toString().padStart(4, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return dayKeyFromUtc(parsed);
 }
 
 export function getWorkbenchDefaultDateRange(
   now: Date = new Date(),
 ): WorkbenchRollupDateRange {
-  const endDate = localDayKey(now);
+  const endDate = dayKeyFromUtc(now.getTime());
   const start = new Date(now);
-  start.setDate(start.getDate() - 1);
-  return { startDate: localDayKey(start), endDate };
+  start.setTime(start.getTime() - 86_400_000);
+  return { startDate: dayKeyFromUtc(start.getTime()), endDate };
 }
 
 /** Workbench task grouping: leaf repo name with a trailing MMDD removed. */
@@ -279,6 +280,75 @@ export function workbenchGroupDatasetNames(
   const groups = new Map<string, Set<string>>();
 
   for (const dataset of filterWorkbenchDatasetsByDate(datasets, range)) {
+    const group = workbenchRollupLabel(dataset, dimension);
+    const names = groups.get(group) ?? new Set<string>();
+    names.add(workbenchDatasetName(dataset.relativePath));
+    groups.set(group, names);
+  }
+
+  return new Map(
+    Array.from(groups.entries()).map(([group, names]) => [
+      group,
+      Array.from(names).sort((left, right) => left.localeCompare(right)),
+    ]),
+  );
+}
+
+function additionDays(
+  dataset: WorkbenchRollupDataset,
+): WorkbenchDailyAddition[] {
+  return (dataset.dailyAdditions ?? []).filter((addition) => {
+    if (!isDayKey(addition.day)) return false;
+    return (
+      nonNegativeCount(Number(addition.episodes)) > 0 ||
+      nonNegativeCount(Number(addition.frames)) > 0 ||
+      datasetAdditionHours(addition) > 0
+    );
+  });
+}
+
+function datasetAdditionHours(addition: WorkbenchDailyAddition): number {
+  const hours = Number(addition.hours);
+  return Number.isFinite(hours) && hours > 0 ? hours : 0;
+}
+
+export function workbenchAdditionAvailableDays(
+  datasets: readonly WorkbenchRollupDataset[],
+): string[] {
+  return datasets
+    .flatMap((dataset) => additionDays(dataset).map((addition) => addition.day))
+    .sort();
+}
+
+function additionsInRange(
+  dataset: WorkbenchRollupDataset,
+  range: WorkbenchRollupDateRange,
+): WorkbenchDailyAddition[] {
+  return additionDays(dataset).filter((addition) => {
+    if (range.startDate && addition.day < range.startDate) return false;
+    if (range.endDate && addition.day >= range.endDate) return false;
+    return true;
+  });
+}
+
+export function workbenchGroupAdditionDatasetNames(
+  datasets: readonly WorkbenchRollupDataset[],
+  dimension: WorkbenchRollupDimension,
+  options: {
+    startDate?: string | null;
+    endDate?: string | null;
+  } = {},
+): Map<string, string[]> {
+  const availableDays = workbenchAdditionAvailableDays(datasets);
+  const range = normalizeWorkbenchDateRange(
+    options.startDate,
+    options.endDate,
+    availableDays,
+  );
+  const groups = new Map<string, Set<string>>();
+
+  for (const dataset of datasets) {
+    if (additionsInRange(dataset, range).length === 0) continue;
     const group = workbenchRollupLabel(dataset, dimension);
     const names = groups.get(group) ?? new Set<string>();
     names.add(workbenchDatasetName(dataset.relativePath));
@@ -390,6 +460,65 @@ export function computeWorkbenchRollup(
     );
 }
 
+export function computeWorkbenchAdditionRollup(
+  datasets: readonly WorkbenchRollupDataset[],
+  dimension: WorkbenchRollupDimension,
+  options: {
+    startDate?: string | null;
+    endDate?: string | null;
+  } = {},
+): WorkbenchRollupRow[] {
+  const availableDays = workbenchAdditionAvailableDays(datasets);
+  const range = normalizeWorkbenchDateRange(
+    options.startDate,
+    options.endDate,
+    availableDays,
+  );
+  const groups = new Map<
+    string,
+    Omit<WorkbenchRollupRow, "count" | "pctHours"> & { names: Set<string> }
+  >();
+
+  for (const dataset of datasets) {
+    const additions = additionsInRange(dataset, range);
+    if (additions.length === 0) continue;
+    const group = workbenchRollupLabel(dataset, dimension);
+    const current = groups.get(group) ?? {
+      group,
+      names: new Set<string>(),
+      episodes: 0,
+      frames: 0,
+      hours: 0,
+    };
+    current.names.add(workbenchDatasetName(dataset.relativePath));
+    for (const addition of additions) {
+      current.episodes += nonNegativeCount(Number(addition.episodes));
+      current.frames += nonNegativeCount(Number(addition.frames));
+      current.hours += datasetAdditionHours(addition);
+    }
+    groups.set(group, current);
+  }
+
+  const rows = Array.from(groups.values());
+  const totalHours = rows.reduce((sum, row) => sum + row.hours, 0);
+  return rows
+    .map((row) => ({
+      group: row.group,
+      count: row.names.size,
+      episodes: row.episodes,
+      frames: row.frames,
+      hours: roundHours(row.hours),
+      pctHours:
+        totalHours > 0 ? Math.round((row.hours / totalHours) * 1000) / 10 : 0,
+    }))
+    .sort(
+      (a, b) =>
+        b.hours - a.hours ||
+        b.episodes - a.episodes ||
+        a.group.localeCompare(b.group),
+    );
+}
+
 export function computeWorkbenchTimeline(
   datasets: readonly WorkbenchRollupDataset[],
   options: {
@@ -475,6 +604,84 @@ export function computeWorkbenchTimeline(
           return sum + datasetHours(dataset);
         }, 0),
       ),
+    },
+  };
+}
+
+export function computeWorkbenchAdditionTimeline(
+  datasets: readonly WorkbenchRollupDataset[],
+  options: {
+    startDate?: string | null;
+    endDate?: string | null;
+  } = {},
+): WorkbenchRollupTimeline {
+  const availableDays = workbenchAdditionAvailableDays(datasets);
+  const range = normalizeWorkbenchDateRange(
+    options.startDate,
+    options.endDate,
+    availableDays,
+  );
+  const byDay = new Map<
+    string,
+    {
+      names: Set<string>;
+      episodes: number;
+      frames: number;
+      hours: number;
+    }
+  >();
+  const totalNames = new Set<string>();
+
+  for (const dataset of datasets) {
+    const name = workbenchDatasetName(dataset.relativePath);
+    for (const addition of additionsInRange(dataset, range)) {
+      const current = byDay.get(addition.day) ?? {
+        names: new Set<string>(),
+        episodes: 0,
+        frames: 0,
+        hours: 0,
+      };
+      current.names.add(name);
+      totalNames.add(name);
+      current.episodes += nonNegativeCount(Number(addition.episodes));
+      current.frames += nonNegativeCount(Number(addition.frames));
+      current.hours += datasetAdditionHours(addition);
+      byDay.set(addition.day, current);
+    }
+  }
+
+  let cumulativeDatasets = 0;
+  let cumulativeEpisodes = 0;
+  let cumulativeFrames = 0;
+  let cumulativeHours = 0;
+  const rows = Array.from(byDay.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([day, current]) => {
+      cumulativeDatasets += current.names.size;
+      cumulativeEpisodes += current.episodes;
+      cumulativeFrames += current.frames;
+      cumulativeHours += current.hours;
+      return {
+        day,
+        datasets: current.names.size,
+        episodes: current.episodes,
+        frames: current.frames,
+        hours: roundHours(current.hours),
+        cumulativeDatasets,
+        cumulativeEpisodes,
+        cumulativeFrames,
+        cumulativeHours: roundHours(cumulativeHours),
+      };
+    });
+
+  return {
+    range,
+    rows,
+    total: {
+      datasets: totalNames.size,
+      episodes: rows.reduce((sum, row) => sum + row.episodes, 0),
+      frames: rows.reduce((sum, row) => sum + row.frames, 0),
+      hours: roundHours(rows.reduce((sum, row) => sum + row.hours, 0)),
     },
   };
 }
