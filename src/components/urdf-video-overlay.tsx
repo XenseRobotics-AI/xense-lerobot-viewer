@@ -137,7 +137,10 @@ function SideVideoGroup({
   return (
     <div className="space-y-1.5">
       <ReplayVideoTile
-        key={`${primary.filename}:${primary.url}:${primary.segmentStart ?? 0}`}
+        // Episodes in a v3 shard only change the segment window. Keep the
+        // media element alive for the same camera/file and let the tile seek
+        // to the new segment instead of restarting metadata/decode loading.
+        key={`${primary.filename}:${primary.url}`}
         active={active}
         episodeTimeSeconds={episodeTimeSeconds}
         playing={playing}
@@ -148,7 +151,7 @@ function SideVideoGroup({
         <div className="grid grid-cols-2 gap-1.5">
           {secondary.map((video) => (
             <ReplayVideoTile
-              key={`${video.filename}:${video.url}:${video.segmentStart ?? 0}`}
+              key={`${video.filename}:${video.url}`}
               active={active}
               compact
               episodeTimeSeconds={episodeTimeSeconds}
@@ -432,7 +435,7 @@ export default function UrdfVideoOverlay({
         >
           {groups.center.map((video) => (
             <ReplayVideoTile
-              key={`${video.filename}:${video.url}:${video.segmentStart ?? 0}`}
+              key={`${video.filename}:${video.url}`}
               {...shared}
               video={video}
             />

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef } from "react";
-import { useTime } from "../context/time-context";
+import { useTimeControls, useTimeState } from "../context/time-context";
 import { FaExpand, FaCompress, FaTimes, FaEye } from "react-icons/fa";
 import type { VideoInfo } from "@/types";
 import { VideoOverlayCanvas } from "./video-overlay-canvas";
@@ -20,6 +20,17 @@ const VIDEO_READY_TIMEOUT_MS = 10_000;
 
 type VideoPlayerProps = {
   videosInfo: VideoInfo[];
+  /**
+   * The episode currently being requested. This is separate from
+   * `videosInfo`: while the next episode is loading, the parent intentionally
+   * keeps the old data mounted. The player uses this signal to stop the old
+   * media immediately instead of letting it continue behind the loading
+   * overlay.
+   */
+  episodeId?: number;
+  /** Keep the old media mounted for fast v3 switches, but pause it while the
+   * next episode's metadata/data slice is being resolved. */
+  loading?: boolean;
   onVideosReady?: () => void;
   /**
    * Mount the VQA bbox/keypoint overlay over each video. Off by default: the
@@ -32,12 +43,14 @@ const videoEventCleanup = new WeakMap<HTMLVideoElement, () => void>();
 
 export const SimpleVideosPlayer = ({
   videosInfo,
+  episodeId,
+  loading = false,
   onVideosReady,
   annotationOverlay = false,
 }: VideoPlayerProps) => {
   const t = useT();
-  const { currentTime, seek, externalSeekVersion, isPlaying, setIsPlaying } =
-    useTime();
+  const { seek, setIsPlaying } = useTimeControls();
+  const { currentTime, externalSeekVersion, isPlaying } = useTimeState();
   const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
   // Mirror videoRefs into state so the absolutely-positioned VQA overlay can
   // re-render with the actual <video> element once it mounts. Using a ref
@@ -109,14 +122,55 @@ export const SimpleVideosPlayer = ({
     videoRefs.current = videoRefs.current.slice(0, videosInfo.length);
   }, [videosInfo.length]);
 
+  // Stop the previous episode as soon as selection changes. The parent keeps
+  // the previous data around while the next parquet slice is being decoded;
+  // without this effect that old media can keep playing underneath the
+  // loading overlay. Do not change the source here — retaining the element
+  // for a shared v3 MP4 is what lets the browser reuse its buffer.
+  React.useLayoutEffect(() => {
+    if (!loading) return;
+    // The parent intentionally keeps the previous EpisodeData visible while
+    // a new slice is loading. Stop both the media and this player's readiness
+    // state so an old timeout/event cannot restart the previous episode.
+    setVideosReady(false);
+    setIsPlaying(false);
+    videoRefs.current.forEach((video) => video?.pause());
+  }, [loading, setIsPlaying]);
+
+  // Seek the retained media element before the newly loaded episode paints.
+  // v3 episodes commonly share one MP4; changing the URL would throw away
+  // the browser's buffer, so the segment boundary is the thing that changes.
+  React.useLayoutEffect(() => {
+    if (loading || episodeId === undefined) return;
+    videoRefs.current.forEach((video, index) => {
+      const info = videosInfo[index];
+      if (
+        !video ||
+        !info ||
+        video.readyState < HTMLMediaElement.HAVE_METADATA
+      ) {
+        return;
+      }
+      video.pause();
+      video.currentTime = mediaTimeFromEpisodeTime(info, 0);
+    });
+  }, [episodeId, loading, videosInfo]);
+
   // Handle videos ready — with a timeout fallback so the UI never hangs
   // if a video fails to reach canplaythrough (e.g. network stall).
   useEffect(() => {
+    let cancelled = false;
+    if (loading) {
+      setVideosReady(false);
+      return () => {
+        cancelled = true;
+      };
+    }
     let readyCount = 0;
     let resolved = false;
 
     const markReady = () => {
-      if (resolved) return;
+      if (cancelled || resolved) return;
       resolved = true;
       setVideosReady(true);
       onVideosReadyRef.current?.();
@@ -124,6 +178,7 @@ export const SimpleVideosPlayer = ({
     };
 
     const checkReady = () => {
+      if (cancelled) return;
       readyCount++;
       if (readyCount >= videosInfo.length) markReady();
     };
@@ -138,6 +193,7 @@ export const SimpleVideosPlayer = ({
     // played fresh frames while the others still showed the segment-end
     // frame. Now the gap is microseconds.
     const loopAllVideos = () => {
+      if (cancelled) return;
       videoRefs.current.forEach((other, otherIdx) => {
         if (!other) return;
         const otherInfo = videosInfo[otherIdx];
@@ -149,6 +205,11 @@ export const SimpleVideosPlayer = ({
       seek(0, "video");
     };
 
+    // Capture the nodes this effect actually attaches to. React can clear a
+    // callback ref during a keyed media replacement before running the effect
+    // cleanup; reading `videoRefs.current` there would then miss the old node
+    // and leave its timeupdate handler alive.
+    const attachedVideos = videoRefs.current.slice();
     videoRefs.current.forEach((video, index) => {
       if (!video) return;
       const info = videosInfo[index];
@@ -200,10 +261,41 @@ export const SimpleVideosPlayer = ({
           }
         : null;
 
-      const handleLoadedData = info.isSegmented
+      let countedAsReady = false;
+      const markVideoReady = () => {
+        if (cancelled || countedAsReady) return;
+        countedAsReady = true;
+        checkReady();
+      };
+
+      // A seek inside an already-loaded MP4 does not reliably emit another
+      // `loadeddata`. That made a fast shared-shard episode switch sit behind
+      // the 10-second fallback even though the requested frame was already
+      // decoded. Treat `seeked`/`canplay` as the authoritative completion
+      // signals, and count each camera only after it is at the new segment.
+      const handleSegmentReady = info.isSegmented
         ? () => {
-            video.currentTime = info.segmentStart ?? 0;
-            checkReady();
+            if (cancelled || countedAsReady) return;
+            const targetTime = mediaTimeFromEpisodeTime(info, 0);
+            if (
+              Math.abs(video.currentTime - targetTime) >
+              THRESHOLDS.VIDEO_SEGMENT_BOUNDARY
+            ) {
+              if (
+                video.readyState >= HTMLMediaElement.HAVE_METADATA &&
+                !video.seeking
+              ) {
+                video.currentTime = targetTime;
+              }
+              return;
+            }
+            if (
+              video.seeking ||
+              video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
+            ) {
+              return;
+            }
+            markVideoReady();
           }
         : null;
 
@@ -224,17 +316,25 @@ export const SimpleVideosPlayer = ({
       if (handlePlay) video.addEventListener("play", handlePlay);
       if (handleEnded) video.addEventListener("ended", handleEnded);
 
-      // Already-loaded videos (cached or fast network) will never re-fire
-      // canplaythrough / loadeddata after we attach the listener — so check
-      // readyState synchronously and mark ready in a microtask. Without this,
-      // checkReady wouldn't be called and only the 10s fallback timeout would
-      // eventually unfreeze the UI.
-      if (info.isSegmented && handleLoadedData) {
-        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-          queueMicrotask(handleLoadedData);
-        } else {
-          video.addEventListener("loadeddata", handleLoadedData);
+      // Already-loaded videos (cached or fast network) may not re-fire a
+      // readiness event after we attach the listener. Check the current state
+      // in a microtask as well; otherwise only the 10s fallback would unfreeze
+      // the UI.
+      if (info.isSegmented && handleSegmentReady) {
+        video.addEventListener("loadeddata", handleSegmentReady);
+        video.addEventListener("canplay", handleSegmentReady);
+        video.addEventListener("seeked", handleSegmentReady);
+
+        const targetTime = mediaTimeFromEpisodeTime(info, 0);
+        if (
+          video.readyState >= HTMLMediaElement.HAVE_METADATA &&
+          !video.seeking &&
+          Math.abs(video.currentTime - targetTime) >
+            THRESHOLDS.VIDEO_SEGMENT_BOUNDARY
+        ) {
+          video.currentTime = targetTime;
         }
+        queueMicrotask(handleSegmentReady);
       } else if (!info.isSegmented) {
         if (video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
           queueMicrotask(checkReady);
@@ -246,17 +346,22 @@ export const SimpleVideosPlayer = ({
       videoEventCleanup.set(video, () => {
         video.removeEventListener("timeupdate", handleTimeUpdate);
         if (handlePlay) video.removeEventListener("play", handlePlay);
-        if (handleLoadedData)
-          video.removeEventListener("loadeddata", handleLoadedData);
+        if (handleSegmentReady) {
+          video.removeEventListener("loadeddata", handleSegmentReady);
+          video.removeEventListener("canplay", handleSegmentReady);
+          video.removeEventListener("seeked", handleSegmentReady);
+        }
         if (handleEnded) video.removeEventListener("ended", handleEnded);
         video.removeEventListener("canplaythrough", checkReady);
       });
     });
 
     return () => {
+      cancelled = true;
       clearTimeout(timeout);
-      videoRefs.current.forEach((video) => {
+      attachedVideos.forEach((video) => {
         if (!video) return;
+        video.pause();
         const cleanup = videoEventCleanup.get(video);
         if (cleanup) {
           cleanup();
@@ -269,7 +374,7 @@ export const SimpleVideosPlayer = ({
     // firstVisibleIdxRef above).
     // onVideosReady intentionally omitted — read via onVideosReadyRef so
     // an inline parent prop doesn't tear this effect down on every render.
-  }, [videosInfo, setIsPlaying, seek]);
+  }, [loading, videosInfo, setIsPlaying, seek]);
 
   // Handle play/pause — skip hidden videos
   useEffect(() => {
@@ -315,6 +420,12 @@ export const SimpleVideosPlayer = ({
     });
   }, [externalSeekVersion, currentTime, videosInfo, videosReady, hiddenSet]);
 
+  // The page shell becomes interactive as soon as the episode data commits.
+  // Keep only the media tiles covered until their requested segment has
+  // actually decoded, so a retained <video> can never flash the previous
+  // episode's frame while the rest of the page already shows the new one.
+  const mediaPending = loading || !videosReady;
+
   return (
     <>
       {/* Hidden videos menu */}
@@ -359,7 +470,13 @@ export const SimpleVideosPlayer = ({
 
           return (
             <div
-              key={info.filename}
+              // Camera names stay the same across episodes. Use the actual
+              // media URL as the identity: v3 episodes commonly share one
+              // MP4 and only change segmentStart/segmentEnd, so that element
+              // can be retained and seeked without another media load. When
+              // the URL changes (for example a v2 episode or a new v3 file),
+              // React replaces the tile and cannot retain the old resource.
+              key={`${info.filename}:${info.url}`}
               className={`${
                 isEnlarged
                   ? "z-40 fixed inset-0 bg-black bg-opacity-90 flex flex-col items-center justify-center"
@@ -415,10 +532,19 @@ export const SimpleVideosPlayer = ({
                   }`}
                   muted
                   preload="metadata"
+                  src={info.url}
+                  aria-busy={mediaPending}
                 >
-                  <source src={info.url} type="video/mp4" />
                   {t("player.noVideoTag")}
                 </video>
+                {mediaPending && (
+                  <div
+                    className="absolute inset-0 z-20 flex items-center justify-center bg-[var(--surface-0)]"
+                    aria-hidden="true"
+                  >
+                    <span className="size-6 animate-spin rounded-full border-2 border-slate-700 border-t-cyan-300" />
+                  </div>
+                )}
                 {/* VQA bbox/keypoint overlay. Reads atoms + drawMode from
                     AnnotationsContext; pointer-events fall through when
                     not in draw mode so video controls remain usable. */}

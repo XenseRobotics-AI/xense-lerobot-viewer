@@ -180,14 +180,62 @@ Separate from the atom-based language editor, but sharing the Annotations tab wi
 - **Authoring source of truth** — `meta/annotations.json` (**JSONL**, one Pi-style record per episode; the vendor format some datasets already ship). Read/written via `src/utils/subtasksClient.ts` → the `subtasks` route, which does per-episode merge (never clobbers other episodes / `key_frames`). Panel state uses a sessionStorage live buffer + explicit **Save**, mirroring the Annotations context. Not wired to `AnnotationsProvider` (the Pi model carries skill/paraphrases/success-frame the atom schema can't express).
 - **Compile to native** — `scripts/export_subtasks.py` (pandas/pyarrow; `scripts/requirements.txt`). Writes per-frame `subtask_index` into every `data/**/*.parquet` (the earliest subtask is pinned to frame 0 so annotated episodes are fully covered; an episode with no annotation falls back to its own `task` string as one whole-episode subtask), `meta/subtasks.parquet` (mirrors `tasks.parquet`: string as `__index_level_0__` index + `subtask_index` column; indices stable across runs), and adds the `subtask_index` feature + `total_subtasks` to `meta/info.json`. Uses pyarrow (not the JS writer) so the `list<float>` `action`/`observation.state` columns round-trip exactly; rewrites are verified (row count + untouched-column equality) with a `.bak` kept. Triggered by the panel's **Export** button (dataset-wide) or run standalone from the CLI.
 
+### Episode switching (in-page, cached, staged)
+
+Selecting an episode in the sidebar does **not** navigate. `EpisodeViewer` keeps
+one mount and swaps `EpisodeData` underneath it, which changes what "loading"
+means and who is allowed to keep rendering.
+
+- **`fetch-data.ts` holds three browser-side LRU caches** — parsed `EpisodeData`
+  (`MAX_EPISODE_DATA_CACHE_ENTRIES`, 8), decoded v3 episode-metadata shards, and
+  individual metadata rows — plus an in-flight map per key so overlapping
+  switches share one decode. All three go through `rememberInLru` / `touchLru`
+  in `src/utils/lruCache.ts`; do not hand-roll a fourth. The metadata shard
+  cache stores `null` for "this shard does not exist", so it is probed with
+  `has()`, never truthiness.
+- **None of these caches invalidate.** `src/lib/parquet-server.ts` re-keys on
+  `mtime + size`; these do not. A dataset rewritten underneath an open tab
+  (`export_subtasks.py`, an HF sync) keeps serving the parsed copy until it is
+  evicted. A reload is the escape hatch. Entries are **shared and must be
+  treated as read-only** — mutating a cached `EpisodeData` in place corrupts
+  every later reader.
+- **Loading is staged, not all-or-nothing.** The full-page `Loading` layer
+  guards only the _data_ transition (`episodeTransitioning`); video tiles and
+  Recharts carry their own local placeholders, and charts mount in an idle
+  callback after the media is ready. So "switch took 1 s" means the shell is
+  interactive, not that every chart is painted — don't compare that number
+  against the old all-or-nothing figure.
+- **The overlay must yield to the error panel.** A failed load leaves `data` on
+  the previous episode while `selectedEpisodeId` stays on the requested one, so
+  `episodeTransitioning` never clears. `isLoading` therefore carries
+  `&& !episodeError`; without it the z-30 spinner sits on the z-20 error panel
+  forever and the user never learns why the episode did not load.
+- **Retained `<video>` elements are the point.** v3 episodes commonly share one
+  MP4 and differ only in `segmentStart`/`segmentEnd`, so the tile key is
+  `filename:url` (no segment) and the player _seeks_ instead of reloading.
+  Putting `segmentStart` back in the key throws away the browser's buffer on
+  every switch. `SimpleVideosPlayer` takes `loading` and pauses the retained
+  media immediately, so the previous episode can't keep playing underneath.
+
 ### Viewer keyboard shortcuts
 
 `episode-viewer.tsx` binds `Space` (play/pause, routed to the 3D replay on that
 tab), `↑`/`↓` (previous/next episode) and `←`/`→` (±5 s, 3D tab only) on
-`window`. Two _separate_ guards decide when to yield, and the split matters:
+`window`. The rules live in the pure, unit-tested `src/utils/viewerShortcuts.ts`;
+the viewer only reads the DOM once per keydown via `describeShortcutTarget` and
+then asks two _separate_ questions, and the split matters:
 
-- `isKeyboardFocusInsideTextEntry` — contenteditable, `TEXTAREA`, `SELECT`, and `INPUT` **except `type=range`**. Blocks every shortcut. The scrubber is exempt because it is the thing the shortcuts drive; clicking it must not disable them.
-- `isKeyboardFocusOnActivatable` — `BUTTON` and `A[href]`. Blocks **`Space` only**. Space activates a focused button, so taking it would leave every button in the viewer un-activatable by keyboard; the arrow keys, which buttons and links don't consume, stay global — that is what keeps the shortcuts alive after clicking a sidebar episode or a 3D control.
+- `blocksAllShortcuts` — contenteditable, `TEXTAREA`, `SELECT`, and `INPUT` **except `type=range`**. Blocks every shortcut. The scrubber is exempt because it is the thing the shortcuts drive; clicking it must not disable them.
+- `yieldsSpaceShortcut` — `BUTTON`, `[role=button]` and `A[href]`. Blocks **`Space` only**. Space activates a focused button, so taking it would leave every button in the viewer un-activatable by keyboard; the arrow keys, which buttons and links don't consume, stay global — that is what keeps the shortcuts alive after clicking a sidebar episode or a 3D control.
+
+**Episode links are the one exception to the yield, and they must stay one.**
+Space does not _activate_ a native link — the browser scrolls instead. Since
+selecting an episode in-page leaves its `<Link>` focused, yielding to it made
+the next Space scroll the sidebar rather than toggle playback. Sidebar entries
+therefore carry `data-episode-link`, and `yieldsSpaceShortcut` returns false
+for anything inside one (checked before the activatable test, so a `<span>`
+child of the link is covered too). Do not "simplify" that back to a bare
+`A[href]` test.
 
 Sidebar episode entries are always `<Link href>`, even on tabs that select
 in-page: the click handler intercepts only unmodified left clicks, so
@@ -356,6 +404,8 @@ Every user-facing panel is translated (625 keys). To extend: add keys to both di
 | `src/utils/urdfReplayVideos.ts`                                   | Groups replay cameras into left / top-center / right by `left`/`right`/`head` tokens — pure                                                                        |
 | `src/utils/videoSegments.ts`                                      | Episode-local time ↔ the shared v3 MP4's media clock, both directions, each clamped into the segment — pure                                                        |
 | `src/utils/sampling.ts`                                           | `evenlySampleIndices` / `evenlySampleArray` — unique, sorted, first-and-last-preserving downsampling                                                               |
+| `src/utils/lruCache.ts`                                           | `touchLru` / `rememberInLru` — the one insertion-ordered LRU policy, shared by the three episode caches                                                            |
+| `src/utils/viewerShortcuts.ts`                                    | Pure focus rules for the global viewer shortcuts (`describeShortcutTarget`, `blocksAllShortcuts`, `yieldsSpaceShortcut`)                                           |
 | `src/utils/versionUtils.ts`                                       | `getDatasetInfo`, `getDatasetVersionAndInfo`, `buildVersionedUrl` (local-only)                                                                                     |
 | `src/utils/datasetRoute.ts`                                       | `local:` repoId wrapper, base64url encode, route ↔ repoId conversion                                                                                               |
 | `src/utils/stringFormatting.ts`                                   | `buildV3DataPath`, `buildV3VideoPath`, `buildV3EpisodesMetadataPath`, padding helpers                                                                              |
@@ -363,6 +413,30 @@ Every user-facing panel is translated (625 keys). To extend: add keys to both di
 | `src/utils/dataProcessing.ts`                                     | Chart grouping pipeline: `buildSuffixGroupsMap` → `computeGroupStats` → `groupByScale` → `flattenScaleGroups` → `processChartDataGroups`                           |
 | `src/utils/typeGuards.ts`                                         | `bigIntToNumber`, `isNumeric`, `isValidTaskIndex`, etc.                                                                                                            |
 | `src/utils/constants.ts`                                          | `PADDING`, `EXCLUDED_COLUMNS`, `CHART_CONFIG`, `THRESHOLDS`                                                                                                        |
+
+## Time context: state vs controls
+
+`src/context/time-context.tsx` exposes **two** contexts, and the split is a
+performance contract. `TimeStateContext` (`currentTime`, `externalSeekVersion`,
+`isPlaying`, `duration`) changes on every throttled tick (~12.5/s during
+playback); `TimeControlsContext` (`seek`, `subscribe`, `setIsPlaying`,
+`setDuration`) is memoised and effectively never changes.
+
+- A component that only issues commands must use `useTimeControls()`. Reaching
+  for `useTime()` there re-subscribes it to the clock and puts it back in the
+  playback render path — which is what made a Recharts tree of thousands of SVG
+  nodes rebuild 12.5 times a second.
+- `useTime()` survives as a compatibility wrapper that spreads both. It is fine
+  for components that genuinely need `currentTime` _and_ `seek`
+  (`playback-bar`, `annotations-timeline`, `subtask-panel`), and wrong anywhere
+  else.
+- The chart playhead follows the same rule structurally: `SingleDataGraph` is
+  not subscribed to time at all. `GraphPlayhead` is a tiny leaf that reads the
+  clock and moves one absolutely-positioned `<div>`. Its inset is derived from
+  `CHART_MARGIN` / `CHART_Y_AXIS_WIDTH` / `CHART_X_AXIS_HEIGHT`, the same
+  constants passed to `<LineChart>` and the axes — Recharts computes its plot
+  box as `margin + axis size`, so hardcoding the offset silently misaligns the
+  playhead from the data the moment a margin changes.
 
 ## Chart data pipeline
 

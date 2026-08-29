@@ -8,11 +8,17 @@ import {
   useCallback,
   lazy,
   Suspense,
+  useLayoutEffect,
+  useTransition,
 } from "react";
 import { useSearchParams } from "next/navigation";
 import { SimpleVideosPlayer } from "@/components/simple-videos-player";
 import PlaybackBar from "@/components/playback-bar";
-import { TimeProvider, useTime } from "@/context/time-context";
+import {
+  TimeProvider,
+  useTimeControls,
+  useTimeState,
+} from "@/context/time-context";
 import { FlaggedEpisodesProvider } from "@/context/flagged-episodes-context";
 import {
   AnnotationsProvider,
@@ -50,6 +56,11 @@ import {
   routePathFromRepoId,
 } from "@/utils/datasetRoute";
 import { type DatasetTags, EMPTY_TAGS } from "@/lib/dataset-tags";
+import {
+  blocksAllShortcuts,
+  describeShortcutTarget,
+  yieldsSpaceShortcut,
+} from "@/utils/viewerShortcuts";
 import DatasetTagsEditor from "@/components/dataset-tags-editor";
 
 const URDFViewer = lazy(() => import("@/components/urdf-viewer"));
@@ -66,32 +77,38 @@ const ParquetTablePanel = lazy(
 // videos start downloading in parallel with the chart bundle.
 const DataRecharts = lazy(() => import("@/components/data-recharts"));
 
-/** Skip every global shortcut while typing in a field. */
-function isKeyboardFocusInsideTextEntry(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable || target.closest('[contenteditable="true"]')) {
-    return true;
-  }
-  const tag = target.tagName;
-  // The playback slider is an <input>, but it is *the* thing the shortcuts
-  // drive — keep them global while it has focus so clicking the scrubber
-  // doesn't disable Space/arrows.
-  if (tag === "INPUT") {
-    return (target as HTMLInputElement).type !== "range";
-  }
-  return tag === "TEXTAREA" || tag === "SELECT";
-}
+type EpisodeSwitchTiming = {
+  targetEpisode: number;
+  startedAt: number | null;
+  shellLogged: boolean;
+  videosLogged: boolean;
+  chartsLogged: boolean;
+};
 
 /**
- * Space *activates* a focused button or link. Stealing it for play/pause
- * would leave every button in the viewer un-activatable by keyboard, so the
- * Space shortcut yields here — the arrow shortcuts, which these elements
- * don't consume, deliberately do not.
+ * Episode-switch timings are development instrumentation, not behavior.
+ * Funnelling them through one helper keeps the measurement out of the state
+ * transitions it measures, and stops a production build from narrating every
+ * switch to the console.
  */
-function isKeyboardFocusOnActivatable(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName;
-  return tag === "BUTTON" || (tag === "A" && target.hasAttribute("href"));
+function logSwitchTiming(
+  timing: EpisodeSwitchTiming,
+  stage: "shellLogged" | "videosLogged" | "chartsLogged",
+  episodeId: number,
+  label: string,
+): void {
+  if (process.env.NODE_ENV === "production") return;
+  if (
+    timing.startedAt === null ||
+    timing.targetEpisode !== episodeId ||
+    timing[stage]
+  ) {
+    return;
+  }
+  timing[stage] = true;
+  console.log(
+    `[perf] episode ${episodeId}: ${label} in ${(performance.now() - timing.startedAt).toFixed(0)}ms`,
+  );
 }
 
 type ActiveTab =
@@ -109,16 +126,28 @@ type ActiveTab =
 // in a leaf component means the throttled time ticks (~12.5/s during
 // playback) only re-render this no-op sub-tree, not the entire 700-line
 // EpisodeViewerInner. Vercel rule: rerender-defer-reads.
-function UrlTimeSync() {
-  const { currentTime, isPlaying } = useTime();
+function UrlTimeSync({
+  episodeKey,
+  suspendedRef,
+  transitioning,
+}: {
+  episodeKey: number;
+  suspendedRef: { current: boolean };
+  transitioning: boolean;
+}) {
+  const { currentTime, isPlaying } = useTimeState();
   const searchParams = useSearchParams();
   const lastUrlSecondRef = useRef<number>(-1);
+
+  useEffect(() => {
+    lastUrlSecondRef.current = -1;
+  }, [episodeKey]);
 
   // Only update the URL ?t= param when the integer second changes, and
   // only while paused — replacing state every frame during playback would
   // spam the browser's history.
   useEffect(() => {
-    if (isPlaying) return;
+    if (isPlaying || transitioning || suspendedRef.current) return;
     const currentSec = Math.floor(currentTime);
     if (currentTime > 0 && lastUrlSecondRef.current !== currentSec) {
       lastUrlSecondRef.current = currentSec;
@@ -130,7 +159,7 @@ function UrlTimeSync() {
         `${window.location.pathname}?${newParams.toString()}`,
       );
     }
-  }, [isPlaying, currentTime, searchParams]);
+  }, [isPlaying, currentTime, searchParams, suspendedRef, transitioning]);
 
   return null;
 }
@@ -208,6 +237,10 @@ export default function EpisodeViewer({
   const selectEpisode = useCallback(
     (nextEpisode: number) => {
       if (nextEpisode === selectedEpisodeId) return;
+      // Mark the transition in the same event as the selection. This pauses
+      // the currently mounted player before React gets a chance to paint one
+      // more frame of the previous episode underneath the loading overlay.
+      setEpisodeLoading(true);
       setSelectedEpisodeId(nextEpisode);
       const repoId = repoIdFromRouteParams(org, dataset);
       window.history.pushState(
@@ -232,26 +265,38 @@ export default function EpisodeViewer({
       setData(null);
     }
     setEpisodeLoading(!changingDataset && loadedDatasetRef.current !== null);
-    getEpisodeDataSafe(org, dataset, selectedEpisodeId)
-      .then(({ data: loaded, error: loadError }) => {
-        if (requestIdRef.current !== requestId) return;
-        if (loadError) {
-          setError(loadError);
+
+    // Let the transition render once before starting parquet decoding. A
+    // cache hit can still enter a CPU-heavy parquet parse synchronously in a
+    // promise continuation; starting it directly from this effect can block
+    // the browser's next paint, making the user see the old episode first and
+    // the Loading overlay only afterwards. A macrotask gives the urgent
+    // loading state a paint opportunity without adding meaningful latency.
+    const timerId = window.setTimeout(() => {
+      if (requestIdRef.current !== requestId) return;
+      getEpisodeDataSafe(org, dataset, selectedEpisodeId)
+        .then(({ data: loaded, error: loadError }) => {
+          if (requestIdRef.current !== requestId) return;
+          if (loadError) {
+            setError(loadError);
+            if (changingDataset) setData(null);
+            return;
+          }
+          loadedDatasetRef.current = datasetKey;
+          setData(loaded ?? null);
+        })
+        .catch((err) => {
+          if (requestIdRef.current !== requestId) return;
+          const message = err instanceof Error ? err.message : String(err);
+          setError(message || t("err.unknown"));
           if (changingDataset) setData(null);
-          return;
-        }
-        loadedDatasetRef.current = datasetKey;
-        setData(loaded ?? null);
-      })
-      .catch((err) => {
-        if (requestIdRef.current !== requestId) return;
-        const message = err instanceof Error ? err.message : String(err);
-        setError(message || t("err.unknown"));
-        if (changingDataset) setData(null);
-      })
-      .finally(() => {
-        if (requestIdRef.current === requestId) setEpisodeLoading(false);
-      });
+        })
+        .finally(() => {
+          if (requestIdRef.current === requestId) setEpisodeLoading(false);
+        });
+    }, 0);
+
+    return () => window.clearTimeout(timerId);
   }, [datasetKey, org, dataset, selectedEpisodeId, t]);
 
   if (error && !data) {
@@ -345,6 +390,7 @@ function EpisodeViewerInner({
 
   const [videosReady, setVideosReady] = useState(!videosInfo.length);
   const [chartsReady, setChartsReady] = useState(false);
+  const [chartEpisodeId, setChartEpisodeId] = useState<number | null>(null);
   const repoId = org && dataset ? repoIdFromRouteParams(org, dataset) : null;
   const datasetDisplayName = getDisplayNameForRepoId(datasetInfo.repoId);
   // Compute the encoded URL segment from the in-memory repoId so the viewer can
@@ -371,8 +417,6 @@ function EpisodeViewerInner({
       cancelled = true;
     };
   }, [encodedDatasetPath]);
-
-  const loadStartRef = useRef(performance.now());
 
   const searchParams = useSearchParams();
 
@@ -401,22 +445,149 @@ function EpisodeViewerInner({
     }
     return "episodes";
   });
-  const isLoading =
-    episodeLoading ||
-    (activeTab === "episodes" && (!videosReady || !chartsReady));
+  // A ref lets the URL synchronizer and imperative media pause react to a
+  // click immediately, without forcing the heavyweight viewer to render an
+  // urgent state update before the transition starts.
+  const episodeSwitchRef = useRef(false);
+  const switchTimingRef = useRef<EpisodeSwitchTiming>({
+    targetEpisode: episodeId,
+    // Initial page loading is timed by Next/server tooling. This clock is
+    // deliberately armed only by an in-viewer episode switch.
+    startedAt: null,
+    shellLogged: false,
+    videosLogged: false,
+    chartsLogged: false,
+  });
+  const chartReadyFrameRef = useRef<number | null>(null);
+  // Keep one loading layer mounted in the DOM. During an episode click the
+  // heavy viewer subtree can take a noticeable synchronous render; an
+  // imperative visibility flip lets the browser paint feedback before that
+  // transition render starts.
+  const instantLoadingRef = useRef<HTMLDivElement>(null);
+  const showInstantLoading = useCallback(() => {
+    const element = instantLoadingRef.current;
+    if (!element) return;
+    element.style.opacity = "1";
+    element.style.pointerEvents = "auto";
+    element.setAttribute("aria-hidden", "false");
+  }, []);
+  const syncInstantLoading = useCallback((visible: boolean) => {
+    const element = instantLoadingRef.current;
+    if (!element) return;
+    element.style.opacity = visible ? "1" : "0";
+    element.style.pointerEvents = visible ? "auto" : "none";
+    element.setAttribute("aria-hidden", String(!visible));
+  }, []);
+  const [, startEpisodeTransition] = useTransition();
+  const episodeTransitioning =
+    episodeLoading || selectedEpisodeId !== episodeId;
+  // The full-page layer only guards the data transition. Media decoding and
+  // Recharts rendering have their own local placeholders, so they no longer
+  // hold the entire episode shell behind LOADING.
+  //
+  // A failed load leaves `data` on the previous episode while
+  // `selectedEpisodeId` stays on the requested one, so `episodeTransitioning`
+  // never clears. Without the error term the z-30 overlay would then sit on
+  // top of the z-20 error panel forever and the user would see an endless
+  // spinner instead of the reason the episode did not load.
+  const isLoading = episodeTransitioning && !episodeError;
+  const playerLoading = episodeTransitioning || Boolean(episodeError);
+
+  // Browser back/forward does not pass through handleEpisodeSelect. Start a
+  // timing window and suspend URL time writes as soon as that transition is
+  // observed as well.
+  useLayoutEffect(() => {
+    const timing = switchTimingRef.current;
+    if (!episodeTransitioning || timing.targetEpisode === selectedEpisodeId) {
+      return;
+    }
+    episodeSwitchRef.current = true;
+    switchTimingRef.current = {
+      targetEpisode: selectedEpisodeId,
+      startedAt: performance.now(),
+      shellLogged: false,
+      videosLogged: false,
+      chartsLogged: false,
+    };
+  }, [episodeTransitioning, selectedEpisodeId]);
 
   useEffect(() => {
+    if (chartReadyFrameRef.current !== null) {
+      window.cancelAnimationFrame(chartReadyFrameRef.current);
+      chartReadyFrameRef.current = null;
+    }
     setVideosReady(!videosInfo.length);
     setChartsReady(false);
+    setChartEpisodeId(null);
   }, [episodeId, videosInfo.length]);
 
+  useEffect(
+    () => () => {
+      if (chartReadyFrameRef.current !== null) {
+        window.cancelAnimationFrame(chartReadyFrameRef.current);
+      }
+    },
+    [],
+  );
+
+  // Render the expensive SVG charts only after the new media frame is ready.
+  // Doing this in an idle callback keeps the data commit / first-frame paint
+  // on the same short path as 3D Replay instead of making them wait for every
+  // Recharts node to be reconciled.
   useEffect(() => {
-    if (!isLoading) {
-      console.log(
-        `[perf] Loading complete in ${(performance.now() - loadStartRef.current).toFixed(0)}ms (videos: ${videosReady ? "✓" : "…"}, charts: ${chartsReady ? "✓" : "…"})`,
-      );
+    if (
+      activeTab !== "episodes" ||
+      episodeTransitioning ||
+      !videosReady ||
+      chartEpisodeId === episodeId
+    ) {
+      return;
     }
-  }, [isLoading, videosReady, chartsReady]);
+
+    let idleId: number | null = null;
+    let timerId: number | null = null;
+    const frameId = window.requestAnimationFrame(() => {
+      const mountCharts = () => setChartEpisodeId(episodeId);
+      if (typeof window.requestIdleCallback === "function") {
+        idleId = window.requestIdleCallback(mountCharts, { timeout: 300 });
+      } else {
+        timerId = window.setTimeout(mountCharts, 50);
+      }
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      if (idleId !== null) window.cancelIdleCallback(idleId);
+      if (timerId !== null) window.clearTimeout(timerId);
+    };
+  }, [activeTab, chartEpisodeId, episodeId, episodeTransitioning, videosReady]);
+
+  // Keep stale time from the previous episode out of the new route. The
+  // synchronizer is suspended for the click, and we release it on the next
+  // frame after TimeProvider has reset the clock to zero.
+  useEffect(() => {
+    if (!episodeSwitchRef.current) return;
+    if (episodeError || (!episodeTransitioning && !episodeLoading)) {
+      const frameId = window.requestAnimationFrame(() => {
+        episodeSwitchRef.current = false;
+      });
+      return () => window.cancelAnimationFrame(frameId);
+    }
+  }, [episodeError, episodeLoading, episodeTransitioning, episodeId]);
+
+  useLayoutEffect(() => {
+    syncInstantLoading(isLoading);
+  }, [isLoading, syncInstantLoading]);
+
+  useEffect(() => {
+    if (isLoading) return;
+    logSwitchTiming(
+      switchTimingRef.current,
+      "shellLogged",
+      episodeId,
+      "shell switched",
+    );
+  }, [episodeId, isLoading]);
   const [, setColumnMinMax] = useState<ColumnMinMax[] | null>(null);
   const [episodeLengthStats, setEpisodeLengthStats] =
     useState<EpisodeLengthStats | null>(null);
@@ -580,15 +751,80 @@ function EpisodeViewerInner({
   // <UrlTimeSync /> child handles its only consumer (the ?t= URL writer).
   // `seek` and `setIsPlaying` are stable references from useCallback /
   // useState — they don't drive renders.
-  const { seek, setIsPlaying } = useTime();
+  const { seek, setIsPlaying } = useTimeControls();
+  const handleVideosReady = useCallback(() => {
+    setVideosReady(true);
+    logSwitchTiming(
+      switchTimingRef.current,
+      "videosLogged",
+      episodeId,
+      "videos decoded",
+    );
+  }, [episodeId]);
+  const handleChartsReady = useCallback(() => {
+    // Commit readiness immediately: the two frames below exist only to make
+    // the *measurement* honest, and gating the state update behind them would
+    // hold `chartsReady` back for two frames on every episode for the sake of
+    // a console line.
+    setChartsReady(true);
+
+    if (process.env.NODE_ENV === "production") return;
+    if (chartReadyFrameRef.current !== null) {
+      window.cancelAnimationFrame(chartReadyFrameRef.current);
+    }
+    // ResponsiveContainer measures itself after its parent commits and then
+    // performs the expensive SVG render. Two frames include that second
+    // commit, so this timing reflects pixels painted rather than the wrapper
+    // component's earlier effect.
+    chartReadyFrameRef.current = window.requestAnimationFrame(() => {
+      chartReadyFrameRef.current = window.requestAnimationFrame(() => {
+        chartReadyFrameRef.current = null;
+        logSwitchTiming(
+          switchTimingRef.current,
+          "chartsLogged",
+          episodeId,
+          "charts painted",
+        );
+      });
+    });
+  }, [episodeId]);
   const handleEpisodeSelect = useCallback(
     (nextEpisode: number) => {
       if (nextEpisode === selectedEpisodeId) return;
+      // Do not seek the old episode here. seek(0) synchronously notified every
+      // time subscriber (and could trigger several media seeks) before React
+      // had a chance to paint the loading state. The TimeProvider resets the
+      // clock when the new EpisodeData arrives, while the player pauses from
+      // its loading prop.
+      episodeSwitchRef.current = true;
+      switchTimingRef.current = {
+        targetEpisode: nextEpisode,
+        startedAt: performance.now(),
+        shellLogged: false,
+        videosLogged: false,
+        chartsLogged: false,
+      };
+      showInstantLoading();
+      // Pause is urgent: leaving it inside the transition lets another
+      // playback tick (and the chart subscribers) run while the data load is
+      // being scheduled.
       setIsPlaying(false);
-      seek(0);
-      onEpisodeSelect(nextEpisode);
+      // Keep the click task paintable. The old implementation updated the
+      // whole viewer synchronously, so the spinner was inserted only after a
+      // long render. A transition lets the imperative overlay get one frame
+      // on screen before the episode/data subtree is reconciled.
+      startEpisodeTransition(() => {
+        onEpisodeSelect(nextEpisode);
+      });
     },
-    [onEpisodeSelect, seek, selectedEpisodeId, setIsPlaying],
+    [
+      onEpisodeSelect,
+      episodeSwitchRef,
+      selectedEpisodeId,
+      setIsPlaying,
+      showInstantLoading,
+      startEpisodeTransition,
+    ],
   );
 
   // URDF playback toggle — populated by URDFViewer after its first mount.
@@ -616,16 +852,25 @@ function EpisodeViewerInner({
     currentPage * pageSize,
   );
 
-  // Initialize based on URL time parameter
+  // Apply a URL time only after the route and loaded episode agree. Without
+  // this guard, a paused `?t=` from the previous episode can issue a second
+  // seek while the new media is already decoding its first frame.
+  const appliedUrlTimeRef = useRef<string | null>(null);
   useEffect(() => {
+    if (episodeLoading || selectedEpisodeId !== episodeId) return;
     const timeParam = searchParams.get("t");
-    if (timeParam) {
-      const timeValue = parseFloat(timeParam);
-      if (!isNaN(timeValue)) {
-        seek(timeValue);
-      }
+    if (!timeParam) {
+      appliedUrlTimeRef.current = null;
+      return;
     }
-  }, [searchParams, seek]);
+    const applyKey = `${episodeId}:${timeParam}`;
+    if (appliedUrlTimeRef.current === applyKey) return;
+    const timeValue = parseFloat(timeParam);
+    if (!isNaN(timeValue)) {
+      appliedUrlTimeRef.current = applyKey;
+      seek(timeValue);
+    }
+  }, [episodeId, episodeLoading, searchParams, seek, selectedEpisodeId]);
 
   // Initialize page based on the current episode. Splitting this out from
   // the keyboard listener effect lets the listener attach exactly once.
@@ -659,10 +904,11 @@ function EpisodeViewerInner({
     const onKeyDown = (e: KeyboardEvent) => {
       const { key } = e;
       const s = keyStateRef.current;
-      const inTextEntry = isKeyboardFocusInsideTextEntry(e.target);
+      const focus = describeShortcutTarget(e.target);
+      const inTextEntry = blocksAllShortcuts(focus);
 
       if (key === " ") {
-        if (inTextEntry || isKeyboardFocusOnActivatable(e.target)) return;
+        if (inTextEntry || yieldsSpaceShortcut(focus)) return;
         e.preventDefault();
         if (s.activeTab === "urdf") {
           urdfPlayToggleRef.current?.();
@@ -721,7 +967,11 @@ function EpisodeViewerInner({
 
   return (
     <div className="flex flex-col h-screen max-h-screen bg-[var(--bg)] text-[var(--text-primary)]">
-      <UrlTimeSync />
+      <UrlTimeSync
+        episodeKey={episodeId}
+        suspendedRef={episodeSwitchRef}
+        transitioning={episodeTransitioning}
+      />
       {/* Top tab bar */}
       <div className="flex items-center overflow-x-auto border-b border-white/5 bg-[var(--surface-0)] shrink-0">
         <Link
@@ -802,7 +1052,13 @@ function EpisodeViewerInner({
               : "overflow-y-auto"
           }`}
         >
-          {isLoading && <Loading />}
+          <div
+            ref={instantLoadingRef}
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 z-30 opacity-0"
+          >
+            <Loading />
+          </div>
           {episodeError && (
             <div className="absolute inset-0 z-20 flex items-center justify-center bg-[var(--bg)]/80 p-6 backdrop-blur-sm">
               <div className="panel-raised max-w-xl border-red-500/40 p-6">
@@ -884,7 +1140,9 @@ function EpisodeViewerInner({
               {videosInfo.length > 0 && (
                 <SimpleVideosPlayer
                   videosInfo={videosInfo}
-                  onVideosReady={() => setVideosReady(true)}
+                  episodeId={episodeId}
+                  loading={playerLoading}
+                  onVideosReady={handleVideosReady}
                 />
               )}
 
@@ -905,16 +1163,33 @@ function EpisodeViewerInner({
               )}
 
               {/* Graph */}
-              <div className="mb-4">
-                <Suspense fallback={null}>
-                  <DataRecharts
-                    data={chartDataGroups}
-                    velocityData={velocityChartDataGroups}
-                    flatData={data.flatChartData}
-                    fps={datasetInfo.fps}
-                    onChartsReady={() => setChartsReady(true)}
-                  />
-                </Suspense>
+              <div
+                className="mb-4"
+                aria-busy={chartEpisodeId !== episodeId || !chartsReady}
+              >
+                {chartEpisodeId === episodeId ? (
+                  <Suspense fallback={null}>
+                    <DataRecharts
+                      data={chartDataGroups}
+                      velocityData={velocityChartDataGroups}
+                      flatData={data.flatChartData}
+                      fps={datasetInfo.fps}
+                      onChartsReady={handleChartsReady}
+                    />
+                  </Suspense>
+                ) : (
+                  <div
+                    className="grid grid-cols-1 gap-4 md:grid-cols-2"
+                    aria-hidden="true"
+                  >
+                    {chartDataGroups.map((_, index) => (
+                      <div
+                        key={index}
+                        className="h-72 animate-pulse rounded-lg border border-white/5 bg-[var(--surface-1)]/25"
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
 
               <PlaybackBar />
@@ -948,7 +1223,9 @@ function EpisodeViewerInner({
                   <div className="sticky top-0 z-20 bg-[var(--bg)] pb-3 lg:static lg:col-start-1 lg:row-start-1 lg:max-h-[55vh] lg:overflow-y-auto lg:bg-transparent lg:pb-0">
                     <SimpleVideosPlayer
                       videosInfo={videosInfo}
-                      onVideosReady={() => setVideosReady(true)}
+                      episodeId={episodeId}
+                      loading={playerLoading}
+                      onVideosReady={handleVideosReady}
                       annotationOverlay
                     />
                   </div>

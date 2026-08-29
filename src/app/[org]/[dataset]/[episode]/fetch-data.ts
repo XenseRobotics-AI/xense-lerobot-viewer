@@ -27,6 +27,7 @@ import {
 } from "@/utils/episodeLengthHistogram";
 import { buildPoseVelocityChartGroups } from "@/utils/poseVelocity";
 import { evenlySampleArray, evenlySampleIndices } from "@/utils/sampling";
+import { rememberInLru, touchLru } from "@/utils/lruCache";
 import {
   extractSpatialTrajectory,
   findSpatialAxisGroups,
@@ -181,6 +182,77 @@ function parsePositiveIntEnv(
   return Number.isFinite(parsed) && parsed >= min ? parsed : fallback;
 }
 
+// Episode switches used to be route transitions, so every visit naturally
+// threw away the parsed episode object. The in-page selector introduced by
+// PR #19 keeps the viewer mounted; retain a small LRU here as well so going
+// back to a recently viewed episode is synchronous and overlapping switches
+// share one request. The cache is deliberately bounded because chart rows and
+// frame timestamps are kept in the object passed to the client UI.
+//
+// Two properties callers must know about:
+//
+//   - **There is no invalidation.** Unlike the Node-side handle cache in
+//     `src/lib/parquet-server.ts`, which re-keys on `mtime + size`, this one
+//     evicts by LRU only. A dataset rewritten underneath the tab — running
+//     `scripts/export_subtasks.py`, or an HF sync — keeps serving the parsed
+//     copy until it is evicted. This module runs in the browser, so a page
+//     reload is always the escape hatch; that is the trade being made.
+//   - **Entries are shared, so treat an `EpisodeData` as read-only.** Two
+//     visits to the same episode now receive the identical object (which is
+//     also why `extractEpisodePoseTrajectories`' per-rows-array memoisation
+//     starts hitting across a revisit). Mutating one in place — sorting a
+//     chart row array, say — corrupts every later reader.
+const MAX_EPISODE_DATA_CACHE_ENTRIES = parsePositiveIntEnv(
+  process.env.MAX_EPISODE_DATA_CACHE_ENTRIES,
+  8,
+);
+const episodeDataCache = new Map<string, EpisodeData>();
+const episodeDataInFlight = new Map<
+  string,
+  Promise<{ data?: EpisodeData; error?: string }>
+>();
+
+// v3 episode metadata is tiny compared with the data/video shards, but each
+// lookup used to decode the same metadata parquet files again. Cache parsed
+// files (including missing-file results) and individual rows. The iterator
+// still stops as soon as it finds the requested row, so the first episode
+// does not pay for the whole dataset.
+const episodeMetadataFileCache = new Map<
+  string,
+  Record<string, unknown>[] | null
+>();
+const episodeMetadataFileInFlight = new Map<
+  string,
+  Promise<Record<string, unknown>[] | null>
+>();
+const episodeMetadataRowCache = new Map<string, EpisodeMetadataV3>();
+const MAX_EPISODE_METADATA_FILES = 96;
+const MAX_EPISODE_METADATA_ROWS = 4096;
+
+function rememberMetadataFile(
+  url: string,
+  rows: Record<string, unknown>[] | null,
+): void {
+  rememberInLru(
+    episodeMetadataFileCache,
+    url,
+    rows,
+    MAX_EPISODE_METADATA_FILES,
+  );
+}
+
+function episodeDataCacheKey(
+  org: string,
+  dataset: string,
+  episodeId: number,
+): string {
+  return `${org}\u0000${dataset}\u0000${episodeId}`;
+}
+
+function rememberEpisodeData(key: string, data: EpisodeData): void {
+  rememberInLru(episodeDataCache, key, data, MAX_EPISODE_DATA_CACHE_ENTRIES);
+}
+
 const MAX_EPISODE_POINTS = parsePositiveIntEnv(
   process.env.MAX_EPISODE_POINTS,
   4000,
@@ -229,6 +301,10 @@ const PROGRESS_PARQUET_CANDIDATES = [
   "sarm_progress.parquet",
   "srm_progress.parquet",
 ] as const;
+// Most datasets do not ship either optional progress parquet. Remember a
+// confirmed miss so every episode switch does not repeat two HEAD/range
+// requests for files that cannot exist in this dataset.
+const missingProgressUrls = new Set<string>();
 const PREFERRED_PROGRESS_COLUMNS = [
   "progress_sparse",
   "progress_dense",
@@ -357,8 +433,22 @@ async function loadEpisodeProgressGroup(
 ): Promise<((episodeDuration: number) => ChartRow[]) | null> {
   for (const progressPath of PROGRESS_PARQUET_CANDIDATES) {
     const progressUrl = buildVersionedUrl(repoId, version, progressPath);
+    if (missingProgressUrls.has(progressUrl)) continue;
+
+    // Only a failed *fetch* proves the candidate is absent from this dataset.
+    // Folding the decode and the row processing into the same catch would let
+    // one corrupt-but-present file — or a single transient read — disable the
+    // progress series for the rest of the session, with no way back short of
+    // a reload.
+    let progressBuffer;
     try {
-      const progressBuffer = await fetchParquetFile(progressUrl);
+      progressBuffer = await fetchParquetFile(progressUrl);
+    } catch {
+      missingProgressUrls.add(progressUrl);
+      continue;
+    }
+
+    try {
       const progressRows = await readParquetAsObjects(progressBuffer, []);
       if (progressRows.length === 0) continue;
 
@@ -407,7 +497,8 @@ async function loadEpisodeProgressGroup(
         }));
       };
     } catch {
-      // Optional file: ignore and try next candidate.
+      // The file exists but could not be decoded. Skip it for this episode
+      // and let the next call try again — do not blacklist the URL.
     }
   }
 
@@ -428,10 +519,12 @@ export async function getEpisodeData(
   episodeId: number,
 ): Promise<EpisodeData> {
   const repoId = repoIdFromRouteParams(org, dataset);
+  const perfKey = `${repoId} episode ${episodeId}`;
   try {
-    console.time(`[perf] getDatasetVersionAndInfo`);
+    const metadataTimer = `[perf] metadata (${perfKey})`;
+    console.time(metadataTimer);
     const { version, info: rawInfo } = await getDatasetVersionAndInfo(repoId);
-    console.timeEnd(`[perf] getDatasetVersionAndInfo`);
+    console.timeEnd(metadataTimer);
     const info = rawInfo as unknown as DatasetMetadata;
 
     if (info.video_path === null) {
@@ -446,14 +539,15 @@ export async function getEpisodeData(
     // timestamps at the end. Now loadEpisodeProgressGroup returns a
     // builder we apply once both promises settle.
     // Vercel rule: async-parallel.
-    console.time(`[perf] getEpisodeData (${version})`);
+    const episodeTimer = `[perf] episode data (${version}, ${perfKey})`;
+    console.time(episodeTimer);
     const [result, progressBuilder] = await Promise.all([
       version === "v3.0"
         ? getEpisodeDataV3(repoId, version, info, episodeId)
         : getEpisodeDataV2(repoId, version, info, episodeId),
       loadEpisodeProgressGroup(repoId, version, episodeId),
     ]);
-    console.timeEnd(`[perf] getEpisodeData (${version})`);
+    console.timeEnd(episodeTimer);
 
     // Extract camera resolutions from features
     const cameras: CameraInfo[] = Object.entries(rawInfo.features)
@@ -1456,18 +1550,39 @@ async function* iterateEpisodeMetadataFilesV3(
   while (true) {
     const path = buildV3EpisodesMetadataPath(chunkIndex, fileIndex);
     const url = buildVersionedUrl(repoId, version, path);
-    let rows: Record<string, unknown>[];
-    try {
-      const buf = await fetchParquetFile(url);
-      rows = await readParquetAsObjects(buf, []);
-    } catch {
-      if (fileIndex === 0) return;
-      chunkIndex++;
-      fileIndex = 0;
-      continue;
+    let rows: Record<string, unknown>[] | null;
+    // `has` rather than a truthiness check: a cached `null` is the *result*
+    // "this shard does not exist", and it has to stop the refetch just as a
+    // cached row array does.
+    if (episodeMetadataFileCache.has(url)) {
+      rows = touchLru(episodeMetadataFileCache, url) ?? null;
+    } else {
+      const inFlight = episodeMetadataFileInFlight.get(url);
+      if (inFlight) {
+        rows = await inFlight;
+        rememberMetadataFile(url, rows);
+      } else {
+        const request = (async () => {
+          try {
+            const buf = await fetchParquetFile(url);
+            return await readParquetAsObjects(buf, []);
+          } catch {
+            return null;
+          }
+        })();
+        episodeMetadataFileInFlight.set(url, request);
+        try {
+          rows = await request;
+        } finally {
+          if (episodeMetadataFileInFlight.get(url) === request) {
+            episodeMetadataFileInFlight.delete(url);
+          }
+        }
+        rememberMetadataFile(url, rows);
+      }
     }
 
-    if (rows.length === 0) {
+    if (!rows || rows.length === 0) {
       if (fileIndex === 0) return;
       chunkIndex++;
       fileIndex = 0;
@@ -1485,11 +1600,21 @@ async function loadEpisodeMetadataV3Simple(
   version: string,
   episodeId: number,
 ): Promise<EpisodeMetadataV3> {
+  const key = `${repoId}\u0000${version}\u0000${episodeId}`;
+  const cached = touchLru(episodeMetadataRowCache, key);
+  if (cached) return cached;
+
   for await (const rows of iterateEpisodeMetadataFilesV3(repoId, version)) {
     for (const row of rows) {
-      if (parseEpisodeRowSimple(row).episode_index === episodeId) {
-        return parseEpisodeRowSimple(row);
-      }
+      const metadata = parseEpisodeRowSimple(row);
+      if (metadata.episode_index !== episodeId) continue;
+      rememberInLru(
+        episodeMetadataRowCache,
+        key,
+        metadata,
+        MAX_EPISODE_METADATA_ROWS,
+      );
+      return metadata;
     }
   }
   throw new Error(tStandalone("err.episodeNotFound", { id: episodeId }));
@@ -2748,11 +2873,30 @@ export async function getEpisodeDataSafe(
   dataset: string,
   episodeId: number,
 ): Promise<{ data?: EpisodeData; error?: string }> {
+  const key = episodeDataCacheKey(org, dataset, episodeId);
+  const cached = touchLru(episodeDataCache, key);
+  if (cached) return { data: cached };
+
+  const inFlight = episodeDataInFlight.get(key);
+  if (inFlight) return inFlight;
+
+  const request = (async () => {
+    try {
+      const data = await getEpisodeData(org, dataset, episodeId);
+      rememberEpisodeData(key, data);
+      return { data };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { error: message || "Unknown error" };
+    }
+  })();
+
+  episodeDataInFlight.set(key, request);
   try {
-    const data = await getEpisodeData(org, dataset, episodeId);
-    return { data };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { error: message || "Unknown error" };
+    return await request;
+  } finally {
+    if (episodeDataInFlight.get(key) === request) {
+      episodeDataInFlight.delete(key);
+    }
   }
 }
