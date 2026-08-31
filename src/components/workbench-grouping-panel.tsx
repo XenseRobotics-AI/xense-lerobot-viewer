@@ -16,10 +16,11 @@ import type { LocalDatasetSummary } from "@/lib/local-datasets-discovery";
 import {
   WORKBENCH_LEFT_SN_DAILY_TARGET_HOURS,
   WORKBENCH_LEFT_SN_REWARD_AMOUNT,
-  computeWorkbenchRollup,
-  computeWorkbenchTimeline,
+  computeWorkbenchAdditionRollup,
+  computeWorkbenchAdditionTimeline,
   formatWorkbenchRewardCoins,
-  workbenchGroupDatasetNames,
+  workbenchAdditionAvailableDays,
+  workbenchGroupAdditionDatasetNames,
   getWorkbenchDefaultDateRange,
   getWorkbenchOkrAchievementRate,
   getWorkbenchLeftSnWorkstation,
@@ -27,7 +28,7 @@ import {
   getWorkbenchOkrRewardAmount,
   getWorkbenchOkrSymbol,
   normalizeWorkbenchDateRange,
-  workbenchDayKey,
+  type WorkbenchDailyAddition,
   type WorkbenchRollupDataset,
   type WorkbenchRollupDimension,
   type WorkbenchRollupRow,
@@ -53,6 +54,7 @@ type WorkbenchDataset = LocalDatasetSummary & {
   lastModified?: string | null;
   uploader?: string | null;
   uploaderDisplayName?: string | null;
+  dailyAdditions?: WorkbenchDailyAddition[];
 };
 
 type WorkbenchWorkstationMappingsPayload = {
@@ -227,11 +229,7 @@ export default function WorkbenchGroupingPanel({
   );
 
   const availableDays = useMemo(
-    () =>
-      rollupDatasets
-        .map((dataset) => workbenchDayKey(dataset.lastModified))
-        .filter((value): value is string => Boolean(value))
-        .sort(),
+    () => workbenchAdditionAvailableDays(rollupDatasets),
     [rollupDatasets],
   );
   const defaultRange = defaultDateRange;
@@ -245,7 +243,7 @@ export default function WorkbenchGroupingPanel({
 
   const rows = useMemo(
     () =>
-      computeWorkbenchRollup(rollupDatasets, dimension, {
+      computeWorkbenchAdditionRollup(rollupDatasets, dimension, {
         startDate: range.startDate,
         endDate: range.endDate,
       }),
@@ -253,7 +251,7 @@ export default function WorkbenchGroupingPanel({
   );
   const leftSnDatasetNames = useMemo(
     () =>
-      workbenchGroupDatasetNames(rollupDatasets, "left_gripper_sn", {
+      workbenchGroupAdditionDatasetNames(rollupDatasets, "left_gripper_sn", {
         startDate: range.startDate,
         endDate: range.endDate,
       }),
@@ -261,7 +259,7 @@ export default function WorkbenchGroupingPanel({
   );
   const timeline = useMemo(
     () =>
-      computeWorkbenchTimeline(rollupDatasets, {
+      computeWorkbenchAdditionTimeline(rollupDatasets, {
         startDate: range.startDate,
         endDate: range.endDate,
       }),
@@ -338,8 +336,9 @@ export default function WorkbenchGroupingPanel({
             Grouped statistics
           </h3>
           <p className="mt-1 text-xs text-slate-500">
-            Workbench rollup by HF lastModified date. End date is exclusive and
-            filters do not touch parquet or video files.
+            Strict Workbench additions by HF commit diff date. Dates use UTC,
+            the end date is exclusive, and filters do not touch parquet or video
+            files.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -456,9 +455,9 @@ export default function WorkbenchGroupingPanel({
 
       {missingDates && !loading && (
         <div className="rounded-lg border border-white/10 bg-white/[0.025] p-3 text-xs text-slate-500">
-          HF lastModified metadata is not cached for these datasets yet. Click
-          Refresh statistics in the dataset review header to rebuild the
-          metadata cache.
+          Strict HF addition metadata is not cached for these datasets yet.
+          Refresh statistics can update lightweight metadata; commit-diff
+          history is read from the local Workbench cache when available.
         </div>
       )}
 
@@ -561,7 +560,7 @@ export default function WorkbenchGroupingPanel({
         </div>
       ) : rows.length === 0 ? (
         <div className="rounded-lg border border-white/10 bg-[var(--surface-0)]/40 p-5 text-sm text-slate-400">
-          No local datasets are available for this grouping and date range.
+          No strict additions are available for this grouping and date range.
         </div>
       ) : (
         <div className="space-y-4">

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   WORKBENCH_LEFT_SN_REWARD_AMOUNT,
+  computeWorkbenchAdditionRollup,
+  computeWorkbenchAdditionTimeline,
   computeWorkbenchRollup,
   computeWorkbenchTimeline,
   countHalfOpenDays,
@@ -14,7 +16,9 @@ import {
   getWorkbenchOkrRewardAmount,
   getWorkbenchOkrSymbol,
   normalizeWorkbenchDateRange,
+  workbenchAdditionAvailableDays,
   workbenchDayKey,
+  workbenchGroupAdditionDatasetNames,
   workbenchRollupLabel,
   workbenchTaskPrefix,
   type WorkbenchRollupDataset,
@@ -280,6 +284,7 @@ describe("computeWorkbenchRollup", () => {
 describe("workbenchDayKey", () => {
   test("normalizes ISO timestamps to a UTC day key", () => {
     expect(workbenchDayKey("2026-08-25T23:30:00+08:00")).toBe("2026-08-25");
+    expect(workbenchDayKey("2026-08-28T16:30:00Z")).toBe("2026-08-28");
   });
 
   test("rejects missing and invalid values", () => {
@@ -376,6 +381,108 @@ describe("date-aware workbench rollups", () => {
       datasets: 2,
       episodes: 15,
       hours: 1.5,
+    });
+  });
+});
+
+describe("strict workbench addition rollups", () => {
+  test("rolls up only positive daily additions in the selected UTC range", () => {
+    const rows = computeWorkbenchAdditionRollup(
+      [
+        dataset("TacVerse/task-a-0828", {
+          uploader: "alice",
+          dailyAdditions: [
+            { day: "2026-08-28", episodes: 10, frames: 36_000, hours: 1 },
+            { day: "2026-08-29", episodes: 0, frames: 0, hours: 0 },
+          ],
+        }),
+        dataset("TacVerse/task-b-0828", {
+          uploader: "alice",
+          total_episodes: 500,
+          total_frames: 1_800_000,
+          dailyAdditions: [
+            { day: "2026-08-28", episodes: 5, frames: 18_000, hours: 0.5 },
+          ],
+        }),
+        dataset("TacVerse/metadata-only-0828", {
+          uploader: "bob",
+          total_episodes: 400,
+          total_frames: 1_440_000,
+          lastModified: "2026-08-28T04:00:00Z",
+        }),
+      ],
+      "uploader",
+      { startDate: "2026-08-28", endDate: "2026-08-29" },
+    );
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        group: "alice",
+        count: 2,
+        episodes: 15,
+        frames: 54_000,
+        hours: 1.5,
+        pctHours: 100,
+      }),
+    ]);
+  });
+
+  test("builds strict daily timelines and dataset name tooltips from additions", () => {
+    const datasets = [
+      dataset("TacVerse/task-a-0828", {
+        leftGripperSn: "left-a",
+        dailyAdditions: [
+          { day: "2026-08-28", episodes: 10, frames: 36_000, hours: 1 },
+          { day: "2026-08-29", episodes: 4, frames: 14_400, hours: 0.4 },
+        ],
+      }),
+      dataset("TacVerse/task-b-0828", {
+        leftGripperSn: "left-a",
+        dailyAdditions: [
+          { day: "2026-08-28", episodes: 5, frames: 18_000, hours: 0.5 },
+        ],
+      }),
+    ];
+
+    expect(workbenchAdditionAvailableDays(datasets)).toEqual([
+      "2026-08-28",
+      "2026-08-28",
+      "2026-08-29",
+    ]);
+    expect(
+      workbenchGroupAdditionDatasetNames(datasets, "left_gripper_sn", {
+        startDate: "2026-08-29",
+        endDate: "2026-08-30",
+      }).get("left-a"),
+    ).toEqual(["task-a-0828"]);
+
+    const timeline = computeWorkbenchAdditionTimeline(datasets, {
+      startDate: "2026-08-28",
+      endDate: "2026-08-30",
+    });
+
+    expect(timeline.rows).toEqual([
+      expect.objectContaining({
+        day: "2026-08-28",
+        datasets: 2,
+        episodes: 15,
+        hours: 1.5,
+        cumulativeDatasets: 2,
+        cumulativeEpisodes: 15,
+      }),
+      expect.objectContaining({
+        day: "2026-08-29",
+        datasets: 1,
+        episodes: 4,
+        hours: 0.4,
+        cumulativeDatasets: 3,
+        cumulativeEpisodes: 19,
+      }),
+    ]);
+    expect(timeline.total).toMatchObject({
+      datasets: 2,
+      episodes: 19,
+      hours: 1.9,
     });
   });
 });

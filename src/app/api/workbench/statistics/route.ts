@@ -1,7 +1,11 @@
 import path from "node:path";
 import { readCorpusHistory } from "@/lib/corpus-history-store";
 import { readDatasetTasks } from "@/lib/dataset-quality-loader";
-import { readHfCatalog, type HfCatalogEntry } from "@/lib/hf-catalog-cache";
+import {
+  readHfCatalog,
+  readHfChangeHistory,
+  type HfCatalogEntry,
+} from "@/lib/hf-catalog-cache";
 import { discoverLocalDatasets } from "@/lib/local-datasets-discovery";
 import {
   defaultWorkbenchWorkstationMappings,
@@ -17,6 +21,7 @@ import {
   getDatasetPrefix,
   groupDatasetsByPrefix,
 } from "@/utils/datasetGrouping";
+import type { WorkbenchDailyAddition } from "@/utils/workbenchRollup";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,6 +42,7 @@ type WorkbenchDatasetSummary = Awaited<
   uploader?: string | null;
   uploaderDisplayName?: string | null;
   durationHours?: number | null;
+  dailyAdditions?: WorkbenchDailyAddition[];
 };
 
 function metadataFromCatalogEntry(
@@ -69,11 +75,89 @@ function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function nonNegativeCount(value: number | null | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : 0;
+}
+
+function roundHours(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function datasetHours(
+  dataset: Awaited<
+    ReturnType<typeof discoverLocalDatasets>
+  >["datasets"][number],
+  remote: HfCatalogEntry | undefined,
+): number {
+  const durationHours = asNumber(remote?.durationHours);
+  if (durationHours !== null && durationHours >= 0) return durationHours;
+  const frames = asNumber(remote?.totalFrames) ?? dataset.total_frames;
+  const fps = asNumber(remote?.fps) ?? dataset.fps;
+  return frames > 0 && fps > 0 ? frames / fps / 3600 : 0;
+}
+
+function suffixYear(lastModified: string | null | undefined): number {
+  const parsed = Date.parse(lastModified ?? "");
+  if (Number.isFinite(parsed)) return new Date(parsed).getUTCFullYear();
+  return new Date().getUTCFullYear();
+}
+
+function datasetSuffixDay(
+  relativePath: string,
+  lastModified: string | null | undefined,
+): string | null {
+  const leaf = relativePath.split("/").filter(Boolean).at(-1) ?? relativePath;
+  const match = /-(\d{2})(\d{2})$/u.exec(leaf);
+  if (!match) return null;
+  const year = suffixYear(lastModified);
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  const candidate = new Date(Date.UTC(year, month - 1, day));
+  if (
+    candidate.getUTCFullYear() !== year ||
+    candidate.getUTCMonth() !== month - 1 ||
+    candidate.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return candidate.toISOString().slice(0, 10);
+}
+
+function dailyAdditionsForDataset(
+  dataset: Awaited<
+    ReturnType<typeof discoverLocalDatasets>
+  >["datasets"][number],
+  remote: HfCatalogEntry | undefined,
+  changeHistoryAdditions: WorkbenchDailyAddition[] = [],
+): WorkbenchDailyAddition[] {
+  const suffixDay = datasetSuffixDay(
+    dataset.relativePath,
+    remote?.lastModified,
+  );
+  if (!suffixDay) return changeHistoryAdditions;
+  if (!dataset.leftGripperSn) return [];
+  return [
+    {
+      day: suffixDay,
+      episodes: nonNegativeCount(
+        asNumber(remote?.totalEpisodes) ?? dataset.total_episodes,
+      ),
+      frames: nonNegativeCount(
+        asNumber(remote?.totalFrames) ?? dataset.total_frames,
+      ),
+      hours: roundHours(datasetHours(dataset, remote)),
+    },
+  ];
+}
+
 function applyCatalogMetadata(
   dataset: Awaited<
     ReturnType<typeof discoverLocalDatasets>
   >["datasets"][number],
   remote: HfCatalogEntry | undefined,
+  dailyAdditions: WorkbenchDailyAddition[] = [],
 ): WorkbenchDatasetSummary {
   const metadata = metadataFromCatalogEntry(remote);
   return {
@@ -93,6 +177,7 @@ function applyCatalogMetadata(
     lastModified: metadata.lastModified,
     uploader: metadata.uploader,
     uploaderDisplayName: metadata.uploaderDisplayName,
+    dailyAdditions,
   };
 }
 
@@ -139,6 +224,10 @@ export async function GET(request: Request): Promise<Response> {
       discovery.root,
     );
     const catalog = await readCatalogByRepo(discovery.root, organization);
+    const changeHistory = await readHfChangeHistory(
+      discovery.root,
+      organization,
+    );
     const workbenchDatasets: WorkbenchDatasetSummary[] = await Promise.all(
       datasets.map(async (dataset) => {
         const remote = catalog.get(dataset.relativePath)?.entry;
@@ -148,7 +237,15 @@ export async function GET(request: Request): Promise<Response> {
             path.join(discovery.root, ...dataset.relativePath.split("/")),
           ),
         };
-        return applyCatalogMetadata(withTasks, remote);
+        return applyCatalogMetadata(
+          withTasks,
+          remote,
+          dailyAdditionsForDataset(
+            withTasks,
+            remote,
+            changeHistory.get(dataset.relativePath) ?? [],
+          ),
+        );
       }),
     );
     workbenchDatasets.sort((left, right) => {
