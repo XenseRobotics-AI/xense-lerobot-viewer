@@ -20,6 +20,7 @@ import {
   runSync,
   type SyncProgress,
 } from "@/utils/syncClient";
+import { SyncOutcome, SyncProgressView } from "@/components/sync-progress";
 import { useLocale, useT } from "@/context/locale-context";
 
 type SourcePanelProps = {
@@ -39,20 +40,6 @@ type SyncState =
   | { kind: "running"; progress: SyncProgress }
   | { kind: "done"; downloaded: number; skipped: number; failed: number }
   | { kind: "error"; message: string };
-
-/**
- * Transferred volume, at the precision the magnitude deserves.
- *
- * Deliberately decimal (1000) and separate from `formatBytes`: this number is
- * read against what the Hub reports for the repo mid-download, whereas the
- * storage figures are read against the filesystem.
- */
-function formatTransferred(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "";
-  if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(2)} GB`;
-  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
-  return `${Math.round(bytes / 1000)} kB`;
-}
 
 /** Growth since the last recorded day, or an explanation of why there is none. */
 function TodayStrip({
@@ -153,7 +140,7 @@ export default function SourcePanel({
     abortRef.current = controller;
     try {
       const listing = await listSyncCandidates(
-        segment.prefix,
+        { source: segment.prefix },
         controller.signal,
       );
       if (listing.count === 0) {
@@ -178,7 +165,7 @@ export default function SourcePanel({
       abortRef.current = controller;
       try {
         const result = await runSync(
-          segment.prefix,
+          { source: segment.prefix },
           (progress) => setSync({ kind: "running", progress }),
           { signal: controller.signal, force },
         );
@@ -319,7 +306,7 @@ function SyncBlock({
   onConfirm: (force?: boolean) => void;
   onCancel: () => void;
 }) {
-  const { t, tp, tRich, tpRich } = useLocale();
+  const { t, tp, tRich } = useLocale();
 
   if (state.kind === "idle" || state.kind === "error") {
     return (
@@ -427,119 +414,14 @@ function SyncBlock({
   }
 
   if (state.kind === "running") {
-    const p = state.progress;
-    const percent = Math.max(0, Math.min(100, p.percent ?? 0));
-    const repoPercent = Math.max(0, Math.min(100, p.repoPercent ?? 0));
-    // Files and bytes are what tell you a large repo is moving; the overall
-    // percent barely shifts while one multi-gigabyte dataset transfers.
-    const detail = [
-      p.filesTotal
-        ? t("source.filesDetail", {
-            done: p.filesDone ?? 0,
-            total: p.filesTotal,
-          })
-        : null,
-      p.bytes ? formatTransferred(p.bytes) : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
-
-    return (
-      <div className="space-y-2">
-        <div className="flex items-baseline justify-between gap-3 text-xs">
-          <span className="truncate text-[var(--text-primary)]">
-            {p.phase === "listing" && t("source.phaseListing")}
-            {p.phase === "preflight" && t("source.phasePreflight")}
-            {p.phase === "downloading" &&
-              t("source.phaseDownloading", { repo: p.repo ?? "" })}
-            {p.phase === "failed" &&
-              t("source.phaseFailed", { repo: p.repo ?? "" })}
-            {p.phase === "complete" && t("source.phaseComplete")}
-          </span>
-          <span className="tabular shrink-0 text-[var(--text-muted)]">
-            {p.index && p.total ? `${p.index}/${p.total} · ` : ""}
-            {percent}%
-          </span>
-        </div>
-
-        {/* Overall across the org. */}
-        <div
-          role="progressbar"
-          aria-valuenow={percent}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-label={t("source.progressAria")}
-          className="h-1.5 w-full overflow-hidden rounded-full bg-white/5"
-        >
-          <div
-            className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-300"
-            style={{ width: `${percent}%` }}
-          />
-        </div>
-
-        {/* Current repo, so a single large dataset still shows movement. */}
-        {p.phase === "downloading" && (
-          <>
-            <div
-              role="progressbar"
-              aria-valuenow={repoPercent}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-label={t("source.repoProgressAria")}
-              className="h-1 w-full overflow-hidden rounded-full bg-white/5"
-            >
-              <div
-                className="h-full rounded-full bg-[var(--accent)]/40 transition-[width] duration-300"
-                style={{ width: `${repoPercent}%` }}
-              />
-            </div>
-            {detail && (
-              <p className="tabular text-[11px] text-[var(--text-muted)]">
-                {detail}
-              </p>
-            )}
-          </>
-        )}
-
-        <p className="text-[11px] text-[var(--text-faint)]">
-          {t("source.leavingNote")}
-        </p>
-      </div>
-    );
+    return <SyncProgressView progress={state.progress} />;
   }
 
   return (
-    <div className="space-y-1.5">
-      <p className="text-xs text-emerald-300">
-        {state.downloaded === 0 && state.failed === 0 ? (
-          <>{t("source.upToDate")}</>
-        ) : (
-          <>
-            {tpRich("source.downloaded", state.downloaded, {
-              count: <span className="tabular">{state.downloaded}</span>,
-            })}
-            {state.skipped > 0 && (
-              <span className="text-[var(--text-muted)]">
-                {" "}
-                {tRich("source.alreadyCurrent", {
-                  count: <span className="tabular">{state.skipped}</span>,
-                })}
-              </span>
-            )}
-            {state.failed > 0 && (
-              <span className="text-amber-300">
-                {" "}
-                {tRich("source.failedCount", {
-                  count: <span className="tabular">{state.failed}</span>,
-                })}
-              </span>
-            )}
-          </>
-        )}
-      </p>
-      <p className="text-[11px] text-[var(--text-faint)]">
-        {t("source.reloadNote")}
-      </p>
-    </div>
+    <SyncOutcome
+      downloaded={state.downloaded}
+      skipped={state.skipped}
+      failed={state.failed}
+    />
   );
 }

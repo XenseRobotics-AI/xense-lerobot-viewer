@@ -17,27 +17,40 @@ import React, {
 //                        report, not a command.
 type TimeUpdateSource = "external" | "video";
 
-type TimeContextType = {
+type TimeState = {
   currentTime: number;
-  seek: (t: number, source?: TimeUpdateSource) => void;
-  // Monotonically increasing counter that bumps on every `external` seek.
-  // Sync effects compare the current value against a stored ref to detect
-  // user-initiated seeks without relying on heuristics like "did the time
-  // jump by more than 0.3s".
   externalSeekVersion: number;
-  subscribe: (cb: (t: number) => void) => () => void;
   isPlaying: boolean;
-  setIsPlaying: React.Dispatch<React.SetStateAction<boolean>>;
   duration: number;
+};
+
+type TimeControls = {
+  seek: (t: number, source?: TimeUpdateSource) => void;
+  subscribe: (cb: (t: number) => void) => () => void;
+  setIsPlaying: React.Dispatch<React.SetStateAction<boolean>>;
   setDuration: React.Dispatch<React.SetStateAction<number>>;
 };
 
-const TimeContext = createContext<TimeContextType | undefined>(undefined);
+// Keep high-frequency playback state separate from stable commands. The old
+// single context changed its value on every throttled time tick, which made
+// components that only needed `seek`/`setIsPlaying` re-render as well.
+const TimeStateContext = createContext<TimeState | undefined>(undefined);
+const TimeControlsContext = createContext<TimeControls | undefined>(undefined);
+
+export const useTimeState = (): TimeState => {
+  const ctx = useContext(TimeStateContext);
+  if (!ctx) throw new Error("useTimeState must be used within TimeProvider");
+  return ctx;
+};
+
+export const useTimeControls = (): TimeControls => {
+  const ctx = useContext(TimeControlsContext);
+  if (!ctx) throw new Error("useTimeControls must be used within TimeProvider");
+  return ctx;
+};
 
 export const useTime = () => {
-  const ctx = useContext(TimeContext);
-  if (!ctx) throw new Error("useTime must be used within a TimeProvider");
-  return ctx;
+  return { ...useTimeState(), ...useTimeControls() };
 };
 
 const TIME_RENDER_THROTTLE_MS = 80;
@@ -128,20 +141,30 @@ export const TimeProvider: React.FC<{
     return () => listeners.current.delete(cb);
   }, []);
 
+  const timeState = React.useMemo<TimeState>(
+    () => ({
+      currentTime,
+      externalSeekVersion,
+      isPlaying,
+      duration,
+    }),
+    [currentTime, duration, externalSeekVersion, isPlaying],
+  );
+  const timeControls = React.useMemo<TimeControls>(
+    () => ({
+      seek: updateTime,
+      subscribe,
+      setIsPlaying,
+      setDuration,
+    }),
+    [subscribe, updateTime],
+  );
+
   return (
-    <TimeContext.Provider
-      value={{
-        currentTime,
-        seek: updateTime,
-        externalSeekVersion,
-        subscribe,
-        isPlaying,
-        setIsPlaying,
-        duration,
-        setDuration,
-      }}
-    >
-      {children}
-    </TimeContext.Provider>
+    <TimeControlsContext.Provider value={timeControls}>
+      <TimeStateContext.Provider value={timeState}>
+        {children}
+      </TimeStateContext.Provider>
+    </TimeControlsContext.Provider>
   );
 };

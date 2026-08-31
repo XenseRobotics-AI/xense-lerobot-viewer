@@ -18,7 +18,7 @@ import "./annotations-skin.css";
  */
 
 import React, { useMemo, useState } from "react";
-import { useTime } from "../context/time-context";
+import { useTimeControls, useTimeState } from "../context/time-context";
 import { useAnnotations } from "../context/annotations-context";
 import { useT } from "../context/locale-context";
 import type { MessageKey } from "@/i18n/messages";
@@ -438,7 +438,9 @@ const RAIL_GROUPS: RailGroupDef[] = [
 ];
 
 function useJump(): (ts: number) => void {
-  const { seek, setIsPlaying } = useTime();
+  // Controls only — subscribing to the state context here would re-render
+  // every jump-capable panel on each throttled playback tick.
+  const { seek, setIsPlaying } = useTimeControls();
   return React.useCallback(
     (ts: number) => {
       seek(ts, "external");
@@ -465,7 +467,7 @@ export const AnnotationsPanel: React.FC<Props> = ({ cameraKeys }) => {
     selectedIdx,
     selectAtom,
   } = useAnnotations();
-  const { currentTime } = useTime();
+  const { currentTime } = useTimeState();
 
   // ============ Inline quick-add state ============
   const [qaKind, setQaKind] = useState<QuickAddKind>("subtask");
@@ -553,12 +555,12 @@ export const AnnotationsPanel: React.FC<Props> = ({ cameraKeys }) => {
   return (
     <div className="annotation-workbench">
       <div className="annotation-actionbar">
-        <div>
-          <h3>
-            {t("ann.title")}
-            {dirty && <span className="dirty-pill">{t("ann.unsaved")}</span>}
-          </h3>
+        {/* No heading: the editor sub-tab above this pane already carries
+            `ann.title`, so repeating it here only reads as a stutter. What is
+            left is status — the unsaved pill — beside the instruction. */}
+        <div className="actionbar-copy">
           <p>{t("ann.subtitle")}</p>
+          {dirty && <span className="dirty-pill">{t("ann.unsaved")}</span>}
         </div>
         <div className="actionbar-actions">
           <button

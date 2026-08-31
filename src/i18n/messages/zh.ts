@@ -171,6 +171,26 @@ export const zh: Record<MessageKey, string> = {
   "source.failedCount": "· {count} 个失败",
   "source.reloadNote": "刷新页面即可看到新下载的数据集。",
 
+  // ── homepage: fetch one dataset by repo id ──
+  "repofetch.title": "按 Hugging Face id 下载单个数据集",
+  "repofetch.hint":
+    "各来源的同步按钮只能更新本地已有的来源。要拉取本机从未保存过的数据集，用这里。",
+  "repofetch.placeholder": "例：owner/dataset-name",
+  "repofetch.inputAria": "Hugging Face 数据集 id",
+  "repofetch.check": "查询",
+  "repofetch.checking": "正在向 Hub 查询 {repo}…",
+  "repofetch.invalid": "id 的形式为 owner/dataset-name —— 一个斜杠，不含空格。",
+  "repofetch.target": "将保存为数据集根目录下的 {path}。",
+  "repofetch.size": "{size}，共 {files} files。",
+  "repofetch.sizeUnknown": "Hub 没有返回该数据集的大小。",
+  "repofetch.pendingLine": "{repo} 可以下载了。",
+  "repofetch.alreadyLocal": "{repo} 本地已是最新提交。",
+  "repofetch.download": "下载",
+  "repofetch.downloadSized": "下载 {size}",
+  "repofetch.redownload": "重新下载",
+  "repofetch.redownloadTitle": "忽略本地提交检查，重新拉取该数据集",
+  "repofetch.another": "下载另一个",
+
   // ── homepage: trash ─────────────────────────────────────────────────────
   "trash.dialogTitle": "删除数据集",
   "trash.moveBody": "将整个目录移入 {path}。",
@@ -573,6 +593,7 @@ export const zh: Record<MessageKey, string> = {
   "ann.ph.object": "客体",
 
   "ann.title": "语言标注",
+  "ann.editorTablistAria": "标注编辑器",
   "ann.unsaved": "未保存",
   "ann.subtitle": "在时间轴或列表中选中一条原子标注，然后在右侧检查器中编辑。",
   "ann.save": "保存本 episode",
@@ -768,13 +789,6 @@ export const zh: Record<MessageKey, string> = {
     "TCP 坐标系：+X 向前、+Y 向左、+Z 向上（对应红/绿/蓝参考轴）。存在完整 head.xyz+r1-r6 时，黄色轨迹、头显示意模型和播放点坐标系会同步显示；头显以记录的 head 位姿为中心且面罩朝 +X，不附加未经标定的偏移。仅有头部视频不会生成轨迹。",
   "urdf.tacCapNoPose":
     "未找到可用于 TacCap 回放的完整 left_tcp/right_tcp xyz+r1-r6 轨迹。",
-  "urdf.tacCapPoseMode": "Pose 模式",
-  "urdf.tacCapPoseModeTcpShort": "已是 TCP",
-  "urdf.tacCapPoseModeTrackerShort": "Tracker → TCP",
-  "urdf.tacCapPoseModeHelp":
-    "默认按 TCP 记录值显示；只有手动选择 Tracker → TCP 时才执行外参变换。",
-  "urdf.tacCapPoseCorrected": "姿态：Tracker → TCP 已校正",
-  "urdf.tacCapPoseCanonical": "姿态：标准 TCP",
   "urdf.axisForward": "向前",
   "urdf.axisLeft": "向左",
   "urdf.axisUp": "向上",

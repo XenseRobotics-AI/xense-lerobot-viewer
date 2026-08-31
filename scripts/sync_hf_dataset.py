@@ -26,6 +26,9 @@ overrides that and re-fetches everything.
 Usage:
     sync_hf_dataset.py --org TacVerse --root /path/to/lerobot [--list-only]
                        [--limit N] [--force]
+
+    # one dataset, no org listing; the org is derived from the id
+    sync_hf_dataset.py --repo lerobot/svla_so101_pickplace --root /path/to/lerobot
 """
 
 from __future__ import annotations
@@ -104,101 +107,68 @@ def list_org_repos(org: str, limit: int | None) -> list[tuple[str, str | None]]:
     return repos[:limit] if limit else repos
 
 
+def fetch_repo_details(repo_ids: list[str]) -> list[dict]:
+    """Per-repo commit and size, for the explicit `--repo` path that never lists.
+
+    `files_metadata=True` costs one extra round trip per repo but returns the
+    size of every file, which is the whole point of the single-dataset flow:
+    the confirmation step can say "12.4 GB across 340 files" instead of the
+    useless "1 dataset pending". Deliberately not used on the org path — that
+    would be ~188 metadata calls before anything is shown.
+
+    The resolution error is kept rather than swallowed. On the org path an
+    unresolvable repo is conservatively treated as work, but here the repo id
+    was typed by hand, so "no such dataset" is the answer the caller needs and
+    the caller (`main`) turns it into a failure instead of a download attempt.
+    """
+    from huggingface_hub import HfApi
+
+    api = HfApi()
+    out: list[dict] = []
+    for repo_id in repo_ids:
+        try:
+            info = api.dataset_info(repo_id, files_metadata=True)
+            siblings = list(getattr(info, "siblings", None) or [])
+            sizes = [getattr(s, "size", None) for s in siblings]
+            out.append({
+                "id": repo_id,
+                "sha": info.sha,
+                # None rather than 0 when the Hub reports no sizes: "unknown"
+                # and "empty" must not render as the same thing.
+                "sizeBytes": (
+                    sum(s for s in sizes if s) if any(s for s in sizes) else None
+                ),
+                "files": len(siblings) or None,
+                "error": None,
+            })
+        except Exception as exc:
+            out.append({
+                "id": repo_id,
+                "sha": None,
+                "sizeBytes": None,
+                "files": None,
+                "error": str(exc),
+            })
+    return out
+
+
 def repo_target(root: str, org: str, repo_id: str) -> str:
     """`<root>/<org>/<name>` — the layout the viewer's scanner expects."""
     return os.path.join(root, org, repo_id.split("/")[-1])
 
 
-VIEWER_SNAPSHOT_MARKER = os.path.join(
-    ".cache", "huggingface", "viewer_snapshot.json"
-)
-
-
-def _marker_path(target: str) -> str:
-    return os.path.join(target, VIEWER_SNAPSHOT_MARKER)
-
-
-def _metadata_root(target: str) -> str:
-    return os.path.join(target, ".cache", "huggingface", "download")
-
-
-def _metadata_entries(target: str, sha: str | None = None) -> dict[str, int | None]:
-    """Return downloaded local files recorded by huggingface_hub metadata.
-
-    `snapshot_download(local_dir=...)` writes one `*.metadata` file beside its
-    local cache, not a `trees/<sha>.json` manifest. The first line is the Hub
-    commit SHA; the metadata file's relative path is the downloaded file's
-    relative path. Sizes are read from the materialised file so a marker can
-    detect a later truncation without hashing gigabytes of video.
-    """
-    root = _metadata_root(target)
-    entries: dict[str, int | None] = {}
-    for dirpath, _dirnames, filenames in os.walk(root):
-        for name in filenames:
-            if not name.endswith(".metadata"):
-                continue
-            metadata = os.path.join(dirpath, name)
-            try:
-                with open(metadata, encoding="utf-8") as handle:
-                    commit = handle.readline().strip()
-            except OSError:
-                continue
-            if sha is not None and commit != sha:
-                continue
-            relative = os.path.relpath(metadata, root)[: -len(".metadata")]
-            if not relative or relative == os.curdir:
-                continue
-            relative = relative.replace(os.sep, "/")
-            actual = os.path.join(target, *relative.split("/"))
-            try:
-                size: int | None = os.stat(actual).st_size
-            except OSError:
-                size = None
-            entries[relative] = size
-    return entries
-
-
-def _read_snapshot_marker(target: str) -> dict | None:
-    try:
-        with open(_marker_path(target), encoding="utf-8") as handle:
-            value = json.load(handle)
-        return value if isinstance(value, dict) else None
-    except (OSError, ValueError):
-        return None
-
-
 def local_snapshot_shas(target: str) -> set[str]:
-    """Return commits materialised in a local dataset directory.
+    """Commits `snapshot_download` has already materialised in this directory.
 
-    Older versions of this script looked for `trees/<sha>.json`, but that is
-    the *global* Hub cache layout and is not produced below `local_dir`. Keep
-    reading that layout for compatibility, then use our marker and the actual
-    `local_dir` metadata written by huggingface_hub.
+    It records one `.cache/huggingface/trees/<commit>.json` per snapshot it
+    wrote, so the filenames alone answer "which commit is this copy at".
     """
-    shas: set[str] = set()
     trees = os.path.join(target, ".cache", "huggingface", "trees")
     try:
-        shas.update(n[:-5] for n in os.listdir(trees) if n.endswith(".json"))
+        names = os.listdir(trees)
     except OSError:
-        pass
-
-    marker = _read_snapshot_marker(target)
-    marker_sha = marker.get("sha") if marker else None
-    if isinstance(marker_sha, str) and marker_sha:
-        shas.add(marker_sha)
-
-    for metadata in _metadata_entries(target):
-        metadata_path = os.path.join(
-            _metadata_root(target), *metadata.split("/")
-        ) + ".metadata"
-        try:
-            with open(metadata_path, encoding="utf-8") as handle:
-                commit = handle.readline().strip()
-            if commit:
-                shas.add(commit)
-        except OSError:
-            continue
-    return shas
+        return set()
+    return {n[:-5] for n in names if n.endswith(".json")}
 
 
 def tree_is_intact(target: str, sha: str) -> bool:
@@ -210,73 +180,24 @@ def tree_is_intact(target: str, sha: str) -> bool:
     cheap stand-in for content — the tree carries ~10 entries for a v3 dataset,
     so this is a handful of stat calls, not a hash.
     """
-    marker = _read_snapshot_marker(target)
-    if marker and marker.get("sha") == sha:
-        files = marker.get("files")
-        if isinstance(files, dict) and files:
-            for relative, expected in files.items():
-                if not isinstance(relative, str) or not relative:
-                    return False
-                normalized = os.path.normpath(relative)
-                if normalized.startswith("..") or os.path.isabs(normalized):
-                    return False
-                try:
-                    size = os.stat(os.path.join(target, *relative.split("/"))).st_size
-                except OSError:
-                    return False
-                if isinstance(expected, int) and size != expected:
-                    return False
-            return True
-
-    # Preserve support for the old global-cache tree manifest if one exists.
     path = os.path.join(target, ".cache", "huggingface", "trees", f"{sha}.json")
     try:
         with open(path, encoding="utf-8") as handle:
             files = json.load(handle).get("files") or {}
     except (OSError, ValueError):
-        files = None
-    if isinstance(files, dict) and files:
-        for relative, meta in files.items():
-            try:
-                size = os.stat(os.path.join(target, *relative.split("/"))).st_size
-            except OSError:
-                return False
-            expected = meta.get("size") if isinstance(meta, dict) else None
-            if isinstance(expected, int) and size != expected:
-                return False
-        return True
-
-    # Existing local_dir downloads have no tree file. Presence of every
-    # metadata-recorded file is the strongest integrity signal available
-    # without another Hub tree request; newly completed downloads get the
-    # stronger size-aware marker below.
-    entries = _metadata_entries(target, sha)
-    return bool(entries) and all(size is not None for size in entries.values())
-
-
-def write_snapshot_marker(target: str, sha: str | None) -> None:
-    """Persist a small, atomic commit/size marker after a successful download."""
-    if not sha:
-        return
-    files = _metadata_entries(target, sha)
+        return False
     if not files:
-        # Keep a marker even when a Hub revision contains no local metadata;
-        # tree_is_intact will reject it until a file is observable.
-        files = {}
-    marker = {"version": 1, "sha": sha, "files": files}
-    marker_dir = os.path.dirname(_marker_path(target))
-    os.makedirs(marker_dir, exist_ok=True)
-    temporary = f"{_marker_path(target)}.{os.getpid()}.tmp"
-    try:
-        with open(temporary, "w", encoding="utf-8") as handle:
-            json.dump(marker, handle, ensure_ascii=False, separators=(",", ":"))
-            handle.write("\n")
-        os.replace(temporary, _marker_path(target))
-    finally:
+        return False
+
+    for relative, meta in files.items():
         try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
+            size = os.stat(os.path.join(target, *relative.split("/"))).st_size
+        except OSError:
+            return False
+        expected = meta.get("size")
+        if isinstance(expected, int) and size != expected:
+            return False
+    return True
 
 
 def is_up_to_date(root: str, org: str, repo_id: str, remote_sha: str | None) -> bool:
@@ -395,12 +316,22 @@ def preflight(repo_id: str) -> str | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--org", required=True, help="Hugging Face org / author")
+    parser.add_argument(
+        "--org",
+        default=None,
+        help="Hugging Face org / author; derived from --repo when omitted",
+    )
     parser.add_argument("--root", required=True, help="local dataset root")
     parser.add_argument(
         "--list-only",
         action="store_true",
         help="report what would be downloaded, transfer nothing",
+    )
+    parser.add_argument(
+        "--repo",
+        action="append",
+        default=[],
+        help="restrict to these repo ids (repeatable); default is the whole org",
     )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument(
@@ -414,30 +345,57 @@ def main() -> int:
     if blocker:
         return fail(blocker)
 
-    endpoint = os.environ.get("HF_ENDPOINT", "")
-    progress(phase="listing", endpoint=endpoint, org=args.org, percent=0)
+    # The org is a directory under the root (`repo_target`), so with explicit
+    # repos it comes from the repo ids rather than being asked for twice and
+    # allowed to disagree with them.
+    owners = {r.split("/")[0] for r in args.repo if "/" in r}
+    if args.repo:
+        if len(owners) != 1 or any("/" not in r for r in args.repo):
+            return fail("--repo takes `owner/name` ids sharing a single owner.")
+        derived = next(iter(owners))
+        if args.org and args.org != derived:
+            return fail(f"--org {args.org} does not match --repo owner {derived}.")
+        org = derived
+    elif args.org:
+        org = args.org
+    else:
+        return parser.error("one of --org or --repo is required") or 1
 
+    endpoint = os.environ.get("HF_ENDPOINT", "")
+    progress(phase="listing", endpoint=endpoint, org=org, percent=0)
+
+    details: list[dict] | None = None
     try:
-        listed = list_org_repos(args.org, args.limit)
+        if args.repo:
+            details = fetch_repo_details(args.repo)
+            listed = [(d["id"], d["sha"]) for d in details]
+        else:
+            listed = list_org_repos(org, args.limit)
     except Exception as exc:  # network down, bad token, unknown org
-        return fail(f"Could not list datasets for {args.org}: {exc}")
+        return fail(f"Could not list datasets for {org}: {exc}")
+
+    # A hand-typed id that does not resolve is the answer, not a download to
+    # attempt: report it now rather than after a pointless transfer attempt.
+    unresolved = [d for d in (details or []) if d["error"]]
+    if unresolved:
+        first = unresolved[0]
+        return fail(f"Could not read {first['id']} from the Hub: {first['error']}")
 
     repos = [repo_id for repo_id, _ in listed]
-    remote_shas = {repo_id: sha for repo_id, sha in listed}
     # The work list is the diff, not the org. Without this every run walks all
     # ~200 repos and pays a per-file metadata round trip to confirm each one is
     # unchanged, which is where "it starts from 1 again every time" came from.
     pending = [
         repo_id
         for repo_id, sha in listed
-        if not is_up_to_date(args.root, args.org, repo_id, sha)
+        if not is_up_to_date(args.root, org, repo_id, sha)
     ]
 
     def emit_result(downloaded: int, failed: list[dict], work: list[str]) -> int:
         emit({
             "type": "result",
             "result": {
-                "org": args.org,
+                "org": org,
                 "endpoint": endpoint,
                 "repos": repos,
                 "pending": pending,
@@ -445,6 +403,9 @@ def main() -> int:
                 "skipped": len(repos) - len(work),
                 "failed": failed,
                 "listOnly": args.list_only,
+                # Only populated on the explicit --repo path; the org path does
+                # not pay for per-repo metadata.
+                **({"details": details} if details is not None else {}),
             },
         })
         return 0
@@ -477,7 +438,7 @@ def main() -> int:
     failed: list[dict] = []
 
     for i, repo_id in enumerate(work):
-        target = repo_target(args.root, args.org, repo_id)
+        target = repo_target(args.root, org, repo_id)
         progress(
             phase="downloading",
             repo=repo_id,
@@ -495,7 +456,6 @@ def main() -> int:
                 max_workers=4,
                 tqdm_class=make_reporter(repo_id, i + 1, total),
             )
-            write_snapshot_marker(target, remote_shas.get(repo_id))
             downloaded += 1
         except Exception as exc:
             # One bad repo must not abandon the rest of the org.

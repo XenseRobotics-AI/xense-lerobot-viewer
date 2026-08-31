@@ -8,11 +8,6 @@ import {
   resolvePython,
   type ResolvedPython,
 } from "@/lib/python-runtime";
-import { resolveHfToken } from "@/lib/hf-token-store";
-import { redactHfSecrets } from "@/lib/hf-identity";
-import { addHfMirrorProxyBypass } from "@/lib/proxy-bypass";
-import { isSameOriginRequest } from "@/lib/request-security";
-import { normalizeHfSource } from "@/utils/hfValidation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,15 +18,12 @@ export const dynamic = "force-dynamic";
  * Browsing stays entirely local; this runs when someone presses Sync and
  * nowhere else. Transfers go through hf-mirror (see `scripts/sync_hf_dataset.py`).
  *
- * Two shapes:
- *   POST { source }                  → fast listing, transfers nothing
- *   POST { source, confirm: true }   → NDJSON stream of the actual download
- *                                      (add `force: true` to re-fetch repos
- *                                      already at the remote commit)
- *   POST { source, confirm: true, metadataOnly: true }
- *                                    → stream only lightweight metadata files so
- *                                      Workbench statistics can be hydrated
- *                                      without pulling dataset payloads
+ * Two targets, each in two steps:
+ *   POST { source }                → list a whole org, transfer nothing
+ *   POST { repo: "owner/name" }    → check one dataset, transfer nothing
+ *   POST { …, confirm: true }      → NDJSON stream of the actual download
+ *                                    (add `force: true` to re-fetch a repo
+ *                                    already at the remote commit)
  *
  * The listing step is not optional politeness. `lerobot` is a public HF org with
  * ~188 datasets against 5 held locally; syncing it unprompted would pull
@@ -40,27 +32,27 @@ export const dynamic = "force-dynamic";
  * The listing also reports `pending` — the repos that genuinely differ from the
  * local copy — so both the confirmation and the progress counter are scoped to
  * real work instead of restarting at 1-of-everything on each run.
+ *
+ * The single-repo target exists because the org form can only ever re-fetch
+ * sources already on disk: to pull a dataset the machine has never held, there
+ * is nothing to press Sync on. It also carries `details` — the repo's size and
+ * file count — so its confirmation says what the transfer costs rather than
+ * "1 dataset pending".
  */
 
 /** Org names become a path segment under the dataset root, so anything that
  *  could climb out of it is rejected outright. */
+const SOURCE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** A full `owner/name` repo id. Both halves face the filesystem — the owner
+ *  becomes a directory and `repo_target` uses the name as the leaf — so each is
+ *  held to `SOURCE_PATTERN`, which a leading dot (and therefore `..`) fails. */
+const REPO_PATTERN = new RegExp(
+  `^${SOURCE_PATTERN.source.slice(1, -1)}/${SOURCE_PATTERN.source.slice(1, -1)}$`,
+);
+
 const HF_MIRROR = "https://hf-mirror.com";
 const LIST_TIMEOUT_MS = 120_000;
-const DOWNLOAD_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
-const MAX_ERROR_LENGTH = 4_000;
-
-function redactSyncMessage(
-  message: string,
-  token: string | null = null,
-): string {
-  const redacted = redactHfSecrets(message, [
-    token ?? "",
-    process.env.HF_TOKEN ?? "",
-  ]);
-  return redacted.length > MAX_ERROR_LENGTH
-    ? `${redacted.slice(0, MAX_ERROR_LENGTH)}…`
-    : redacted;
-}
 
 /** One sync at a time, process-wide: concurrent runs would write the same files. */
 let activeSync: { source: string; startedAt: number } | null = null;
@@ -76,50 +68,34 @@ type SyncResult = {
   skipped: number;
   failed: { repo: string; error: string }[];
   listOnly: boolean;
+  /** Per-repo size/file count — only on the single-repo path. */
+  details?: SyncRepoDetail[];
 };
 
-type SyncRequestBody = {
-  source?: unknown;
-  confirm?: unknown;
-  force?: unknown;
-  metadataOnly?: unknown;
+type SyncRepoDetail = {
+  id: string;
+  sha: string | null;
+  sizeBytes: number | null;
+  files: number | null;
+  error: string | null;
 };
 
-function scriptPath(metadataOnly: boolean): string {
-  return path.join(
-    process.cwd(),
-    "scripts",
-    metadataOnly ? "sync_hf_dataset_stats.py" : "sync_hf_dataset.py",
-  );
+function scriptPath(): string {
+  return path.join(process.cwd(), "scripts", "sync_hf_dataset.py");
 }
 
 function spawnScript(
   pythonBin: string,
   args: string[],
-  token: string | null = null,
-  metadataOnly = false,
 ): ChildProcessWithoutNullStreams {
-  const endpoint = process.env.HF_ENDPOINT || HF_MIRROR;
-  const env = {
-    ...pythonSpawnEnv(),
-    // Belt and braces: the script also defaults this, but setting it here
-    // means the mirror holds even if the script is run through a wrapper.
-    HF_ENDPOINT: endpoint,
-  } as NodeJS.ProcessEnv;
-  // This workstation commonly runs a VPN/HTTP proxy for the official Hub.
-  // Sending hf-mirror through that proxy makes the mirror see the proxy's
-  // foreign exit and respond with a metadata-breaking 308 back to the origin.
-  // Bypass only the mirror host in this download child; do not change the
-  // browser, Next server, or any other outbound request.
-  addHfMirrorProxyBypass(env, endpoint);
-  // Native SourcePanel sync accepts the same credential sources as the
-  // original viewer (CLI cache / HF_TOKEN), plus an explicitly validated
-  // viewer token when the optional account controls were used. Never put it in
-  // argv or the progress stream.
-  if (token) env.HF_TOKEN = token;
-  return spawn(pythonBin, [scriptPath(metadataOnly), ...args], {
+  return spawn(pythonBin, [scriptPath(), ...args], {
     cwd: process.cwd(),
-    env,
+    env: {
+      ...pythonSpawnEnv(),
+      // Belt and braces: the script also defaults this, but setting it here
+      // means the mirror holds even if the script is run through a wrapper.
+      HF_ENDPOINT: process.env.HF_ENDPOINT || HF_MIRROR,
+    },
   });
 }
 
@@ -136,8 +112,6 @@ function syncPython(): Promise<ResolvedPython> {
 async function runToCompletion(
   args: string[],
   timeoutMs: number,
-  token: string | null = null,
-  metadataOnly = false,
 ): Promise<{ result: SyncResult | null; error: string | null }> {
   let python: ResolvedPython;
   try {
@@ -148,19 +122,16 @@ async function runToCompletion(
       error:
         err instanceof PythonUnavailableError
           ? err.message
-          : redactSyncMessage(`Failed to launch Python: ${err}`, token),
+          : `Failed to launch Python: ${err}`,
     };
   }
 
   return new Promise((resolve) => {
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = spawnScript(python.bin, args, token, metadataOnly);
+      child = spawnScript(python.bin, args);
     } catch (err) {
-      resolve({
-        result: null,
-        error: redactSyncMessage(`Failed to launch Python: ${err}`, token),
-      });
+      resolve({ result: null, error: `Failed to launch Python: ${err}` });
       return;
     }
 
@@ -187,10 +158,7 @@ async function runToCompletion(
     child.on("error", (err) =>
       finish({
         result: null,
-        error: redactSyncMessage(
-          `Failed to launch ${python.bin}: ${err.message}. Is Python installed?`,
-          token,
-        ),
+        error: `Failed to launch ${python.bin}: ${err.message}. Is Python installed?`,
       }),
     );
     child.on("close", () => {
@@ -208,44 +176,25 @@ async function runToCompletion(
       }
       finish({
         result,
-        error: error
-          ? redactSyncMessage(error, token)
-          : result
-            ? null
-            : redactSyncMessage(
-                stderr.trim().split(/\r?\n/).pop() || "Sync failed",
-                token,
-              ),
+        error:
+          error ??
+          (result ? null : stderr.trim().split(/\r?\n/).pop() || "Sync failed"),
       });
     });
   });
 }
 
 /** Pipe the script's NDJSON straight through to the client as it arrives. */
-function streamDownload(
-  source: string,
-  root: string,
-  force: boolean,
-  pythonBin: string,
-  token: string | null = null,
-  metadataOnly = false,
-): Response {
+function streamDownload(args: string[], pythonBin: string): Response {
   const encoder = new TextEncoder();
-  let activeChild: ChildProcessWithoutNullStreams | null = null;
-  let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
   return new Response(
     new ReadableStream<Uint8Array>({
       start(controller) {
         let closed = false;
-        let idleTimer: ReturnType<typeof setTimeout> | null = null;
-        const secretValues = [token ?? "", process.env.HF_TOKEN ?? ""];
         const send = (obj: unknown) => {
           if (closed) return;
           try {
-            const serialized = JSON.stringify(obj);
-            controller.enqueue(
-              encoder.encode(`${redactHfSecrets(serialized, secretValues)}\n`),
-            );
+            controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
           } catch {
             closed = true;
           }
@@ -253,8 +202,6 @@ function streamDownload(
         const close = () => {
           if (closed) return;
           closed = true;
-          if (idleTimer) clearTimeout(idleTimer);
-          if (forceKillTimer) clearTimeout(forceKillTimer);
           try {
             controller.close();
           } catch {
@@ -262,67 +209,35 @@ function streamDownload(
           }
         };
 
+        let child: ChildProcessWithoutNullStreams;
         try {
-          const args = ["--org", source, "--root", root];
-          if (force) args.push("--force");
-          activeChild = spawnScript(pythonBin, args, token, metadataOnly);
+          child = spawnScript(pythonBin, args);
         } catch (err) {
-          send({
-            type: "error",
-            error: redactSyncMessage(`Failed to launch Python: ${err}`, token),
-          });
+          send({ type: "error", error: `Failed to launch Python: ${err}` });
           activeSync = null;
           close();
           return;
         }
-
-        const child = activeChild;
-        if (!child) {
-          send({ type: "error", error: "Sync process was not created." });
-          activeSync = null;
-          close();
-          return;
-        }
-
-        let sentError = false;
-        const armIdleTimeout = () => {
-          if (idleTimer) clearTimeout(idleTimer);
-          idleTimer = setTimeout(() => {
-            if (closed) return;
-            send({
-              type: "error",
-              error: `下载进程超过 ${DOWNLOAD_IDLE_TIMEOUT_MS / 60_000} 分钟没有进展，已终止。`,
-            });
-            sentError = true;
-            if (!child.killed) child.kill("SIGTERM");
-            forceKillTimer = setTimeout(() => {
-              if (!child.killed) child.kill("SIGKILL");
-            }, 5_000);
-          }, DOWNLOAD_IDLE_TIMEOUT_MS);
-        };
-        armIdleTimeout();
 
         // The script reports its own failures as an error event and then exits
         // non-zero. Track that, or the generic exit-code message below would
         // land second and overwrite the diagnosis the user actually needs.
+        let sentError = false;
+
         // The script emits one JSON object per line; hold a buffer because a
         // chunk boundary can land mid-line.
         let buffer = "";
         const forward = (line: string) => {
           if (!line.trim()) return;
           try {
-            const event = JSON.parse(line) as Record<string, unknown>;
+            const event = JSON.parse(line);
             if (event?.type === "error") sentError = true;
-            if (typeof event.error === "string") {
-              event.error = redactSyncMessage(event.error, token);
-            }
             send(event);
           } catch {
             /* ignore an unparseable line rather than killing the stream */
           }
         };
         child.stdout.on("data", (chunk) => {
-          armIdleTimeout();
           buffer += chunk.toString();
           const lines = buffer.split(/\r?\n/);
           buffer = lines.pop() ?? "";
@@ -330,16 +245,10 @@ function streamDownload(
         });
 
         let stderr = "";
-        child.stderr.on("data", (d) => {
-          armIdleTimeout();
-          stderr += d.toString();
-        });
+        child.stderr.on("data", (d) => (stderr += d.toString()));
 
         child.on("error", (err) => {
-          send({
-            type: "error",
-            error: redactSyncMessage(`Python failed: ${err.message}`, token),
-          });
+          send({ type: "error", error: `Python failed: ${err.message}` });
           activeSync = null;
           close();
         });
@@ -351,28 +260,19 @@ function streamDownload(
           if (code !== 0 && !sentError) {
             send({
               type: "error",
-              error: redactSyncMessage(
+              error:
                 stderr.trim().split(/\r?\n/).pop() ||
-                  `Sync exited with code ${code} and no output.`,
-                token,
-              ),
+                `Sync exited with code ${code} and no output.`,
             });
           }
-          activeChild = null;
           activeSync = null;
           close();
         });
       },
       cancel() {
-        // A disconnected browser no longer has a way to show progress. Stop
-        // the child instead of leaving an unbounded process holding the global
-        // sync lock; snapshot_download can resume the partial files later.
-        if (activeChild && !activeChild.killed) {
-          activeChild.kill("SIGTERM");
-          forceKillTimer = setTimeout(() => {
-            if (activeChild && !activeChild.killed) activeChild.kill("SIGKILL");
-          }, 5_000);
-        }
+        // Client navigated away; the child keeps running to completion so a
+        // half-written dataset directory isn't left behind.
+        activeSync = null;
       },
     }),
     {
@@ -384,30 +284,51 @@ function streamDownload(
   );
 }
 
-export async function POST(request: NextRequest): Promise<Response> {
-  if (!isSameOriginRequest(request)) {
-    return Response.json(
-      {
-        error: "Cross-origin sync requests are not allowed.",
-        code: "ORIGIN_REJECTED",
-      },
-      { status: 403 },
-    );
+/**
+ * The requested target as script arguments.
+ *
+ * `label` is what the single-run lock and its 409 report, so a blocked caller
+ * is told which dataset is holding it rather than just which org.
+ */
+function resolveTarget(body: {
+  source?: unknown;
+  repo?: unknown;
+}): { label: string; args: string[] } | { error: string } {
+  const repo = typeof body.repo === "string" ? body.repo.trim() : "";
+  if (repo) {
+    if (!REPO_PATTERN.test(repo)) {
+      return {
+        error: "`repo` must be a Hugging Face id of the form owner/name.",
+      };
+    }
+    // --org is derived from the id by the script; passing it too would only
+    // create a second place for the two to disagree.
+    return { label: repo, args: ["--repo", repo] };
   }
 
-  let body: SyncRequestBody;
+  const source = typeof body.source === "string" ? body.source.trim() : "";
+  if (!source || !SOURCE_PATTERN.test(source)) {
+    return { error: "`source` must be a plain Hugging Face org name." };
+  }
+  return { label: source, args: ["--org", source] };
+}
+
+export async function POST(request: NextRequest): Promise<Response> {
+  let body: {
+    source?: unknown;
+    repo?: unknown;
+    confirm?: unknown;
+    force?: unknown;
+  };
   try {
     body = await request.json();
   } catch {
     return Response.json({ error: "Expected a JSON body." }, { status: 400 });
   }
 
-  const source = normalizeHfSource(body.source);
-  if (!source) {
-    return Response.json(
-      { error: "`source` must be a plain Hugging Face org name." },
-      { status: 400 },
-    );
+  const target = resolveTarget(body);
+  if ("error" in target) {
+    return Response.json({ error: target.error }, { status: 400 });
   }
 
   let root: string;
@@ -424,30 +345,22 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
-  let token: string | null = null;
-  try {
-    token = (await resolveHfToken(root)).token;
-  } catch {
-    // Credential lookup is best-effort; public datasets can still sync
-    // anonymously and huggingface_hub can use its normal CLI cache.
-  }
+  const baseArgs = [...target.args, "--root", root];
 
   // Listing pass — cheap, transfers nothing, and always runs first.
   if (body.confirm !== true) {
     const { result, error } = await runToCompletion(
-      ["--org", source, "--root", root, "--list-only"],
+      [...baseArgs, "--list-only"],
       LIST_TIMEOUT_MS,
-      token,
-      body.metadataOnly === true,
     );
     if (!result) {
       return Response.json(
-        { error: redactSyncMessage(error ?? "Listing failed", token) },
+        { error: error ?? "Listing failed" },
         { status: 502 },
       );
     }
     return Response.json({
-      source,
+      source: result.org,
       endpoint: result.endpoint,
       repos: result.repos,
       count: result.repos.length,
@@ -455,6 +368,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       // "everything is work" keeps the old behaviour rather than claiming a
       // fully up-to-date corpus that was never checked.
       pending: result.pending ?? result.repos,
+      details: result.details ?? null,
       confirmRequired: true,
     });
   }
@@ -474,13 +388,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
-  activeSync = { source, startedAt: Date.now() };
+  activeSync = { source: target.label, startedAt: Date.now() };
   return streamDownload(
-    source,
-    root,
-    body.force === true,
+    body.force === true ? [...baseArgs, "--force"] : baseArgs,
     python.bin,
-    token,
-    body.metadataOnly === true,
   );
 }

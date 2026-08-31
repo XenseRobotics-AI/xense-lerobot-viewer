@@ -169,6 +169,28 @@ export const en = {
   "source.failedCount": "· {count} failed",
   "source.reloadNote": "Reload the page to pick up the new datasets.",
 
+  // ââ homepage: fetch one dataset by repo id ââââââââââââââââââââââââââââââ
+  "repofetch.title": "Download a dataset by Hugging Face id",
+  "repofetch.hint":
+    "The per-source Sync button only refreshes sources already on disk. Use this to pull a dataset this machine has never held.",
+  "repofetch.placeholder": "owner/dataset-name",
+  "repofetch.inputAria": "Hugging Face dataset id",
+  "repofetch.check": "Check",
+  "repofetch.checking": "Checking {repo} on the Hub…",
+  "repofetch.invalid":
+    "An id looks like owner/dataset-name — one slash, no spaces.",
+  "repofetch.target": "Will be saved as {path} under the dataset root.",
+  "repofetch.size": "{size} across {files} files.",
+  "repofetch.sizeUnknown": "The Hub did not report a size for this dataset.",
+  "repofetch.pendingLine": "{repo} is ready to download.",
+  "repofetch.alreadyLocal": "{repo} is already here at the latest commit.",
+  "repofetch.download": "Download",
+  "repofetch.downloadSized": "Download {size}",
+  "repofetch.redownload": "Download it again",
+  "repofetch.redownloadTitle":
+    "Ignore the local commit check and fetch the dataset again",
+  "repofetch.another": "Download another",
+
   // ── homepage: trash ─────────────────────────────────────────────────────
   "trash.dialogTitle": "Delete dataset",
   "trash.moveBody": "Moves the whole directory into {path}.",
@@ -590,6 +612,7 @@ export const en = {
   "ann.ph.object": "object",
 
   "ann.title": "Language annotations",
+  "ann.editorTablistAria": "Annotation editor",
   "ann.unsaved": "unsaved",
   "ann.subtitle":
     "Select an atom from the timeline or list, then edit it in the inspector.",
@@ -791,13 +814,6 @@ export const en = {
     "TCP frame: +X forward, +Y left, +Z up (red/green/blue reference axes). Complete head.xyz+r1-r6 data adds a yellow trail, schematic HMD, and playback frame. The HMD is centered on the recorded head pose with its visor facing +X; no uncalibrated offset is added. Head video alone does not create a trajectory.",
   "urdf.tacCapNoPose":
     "No complete left_tcp/right_tcp xyz+r1-r6 trajectories were found for TacCap replay.",
-  "urdf.tacCapPoseMode": "Pose mode",
-  "urdf.tacCapPoseModeTcpShort": "Already TCP",
-  "urdf.tacCapPoseModeTrackerShort": "Tracker → TCP",
-  "urdf.tacCapPoseModeHelp":
-    "Recorded values are treated as TCP by default. The extrinsic transform is applied only after selecting Tracker → TCP.",
-  "urdf.tacCapPoseCorrected": "Pose: Tracker → TCP corrected",
-  "urdf.tacCapPoseCanonical": "Pose: canonical TCP",
   "urdf.axisForward": "forward",
   "urdf.axisLeft": "left",
   "urdf.axisUp": "up",

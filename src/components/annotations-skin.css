@@ -269,14 +269,17 @@
   gap: 16px;
   padding: 12px 14px;
 }
-.annotations-skin .annotation-actionbar h3 {
+/* The actionbar lost its heading to the editor sub-tab; what remains is the
+   instruction line with the unsaved pill beside it. */
+.annotations-skin .annotation-actionbar .actionbar-copy {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.annotations-skin .annotation-actionbar .actionbar-copy p {
   margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--fg-1);
 }
 .annotations-skin .annotation-actionbar p,
 .annotations-skin .annotation-composer p,

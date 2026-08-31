@@ -106,6 +106,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                   */}
                   <Link
                     href={routePathFromRepoId(datasetInfo.repoId, episode)}
+                    data-episode-link="true"
                     onClick={
                       onEpisodeSelect
                         ? (event) => {

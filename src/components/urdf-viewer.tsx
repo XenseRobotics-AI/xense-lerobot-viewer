@@ -38,6 +38,7 @@ import {
 } from "@/utils/taccapGripperReplay";
 import {
   locateEpisodePoseTrajectory,
+  selectTrailStartIndex,
   type EpisodePoseTrajectory,
 } from "@/utils/poseTrajectory3d";
 import {
@@ -45,12 +46,6 @@ import {
   tacCapRecordedTcpSceneMatrix,
   tacCapRecordedTcpToRootMatrix,
 } from "@/utils/taccapGripperTransforms";
-import {
-  loadTacCapExtrinsicsMetadata,
-  resolveTacCapPoseProfile,
-  type TacCapPoseProfile,
-  type TacCapPoseSelection,
-} from "@/utils/taccapPoseSemantics";
 
 const SERIES_DELIM = CHART_CONFIG.SERIES_NAME_DELIMITER;
 const DEG2RAD = Math.PI / 180;
@@ -296,8 +291,28 @@ const SINGLE_ARM_TIP_NAMES = [
 const DUAL_ARM_TIP_NAMES = ["openarm_left_hand_tcp", "openarm_right_hand_tcp"];
 const G1_TIP_NAMES = ["left_hand_palm_link", "right_hand_palm_link"];
 const TRAIL_DURATION = 1.0;
+/**
+ * Trail extent. The window is a *time* window with a size floor, not one
+ * or the other.
+ *
+ * A pure time window is what made the trail unreadable: on a real folding
+ * episode the distance covered in 3 s swings from 0.75 cm to 28 cm — 38x —
+ * against a 45 cm scene, so the same 3 seconds is either a legible arc or a
+ * dot depending only on where you paused. A pure fixed-length window fixes the
+ * length but destroys the meaning of the colour ramp, which encodes age.
+ *
+ * So: always show at least `TACCAP_TRAIL_DURATION`, then keep walking back
+ * until the trail spans `TACCAP_TRAIL_MIN_SPAN_FRACTION` of the scene, and
+ * stop unconditionally at `TACCAP_TRAIL_MAX_DURATION` so a stationary gripper
+ * does not drag in the whole episode.
+ */
 const TACCAP_TRAIL_DURATION = 3.0;
+const TACCAP_TRAIL_MAX_DURATION = 10.0;
+const TACCAP_TRAIL_MIN_SPAN_FRACTION = 0.12;
 const TACCAP_TRAIL_SOLID_COLOR_DURATION = 1.0;
+/** Trail geometry grows in whole steps so a slowly filling window costs a
+ *  handful of rebuilds rather than one per added sample. */
+const TRAIL_CAPACITY_STEP = 128;
 const TACCAP_TRAIL_MIN_COLOR_INTENSITY = 0.35;
 const TRAIL_COLORS = [new THREE.Color("#ff6600"), new THREE.Color("#00aaff")];
 const MAX_TRAIL_POINTS = 300;
@@ -694,12 +709,15 @@ function TacCapPoseTrail({
   color,
   enabled,
   pose,
+  sceneExtent,
   timeSeconds,
 }: {
   alwaysVisible?: boolean;
   color: string;
   enabled: boolean;
   pose: EpisodePoseTrajectory;
+  /** Scene size, so the trail's size floor scales with what is on screen. */
+  sceneExtent: number;
   timeSeconds: number;
 }) {
   const viewportSize = useThree((state) => state.size);
@@ -733,13 +751,16 @@ function TacCapPoseTrail({
     line.raycast = () => undefined;
     line.renderOrder = alwaysVisible ? 20 : 2;
     line.visible = false;
-    return { line, material };
+    // Capacity lives on the resource object rather than in a ref so it is
+    // reset together with the line it describes.
+    return { line, material, capacity: 0 };
   }, [alwaysVisible]);
   // This effect runs once per rendered frame per track. Scratch buffers sized
   // to the whole trajectory are reused across frames so the hot path only
   // writes into them — allocating a pair of Float32Arrays here (plus the
   // Array.from copies the geometry does not need) is what made the trail the
-  // GC-heaviest thing in the scene.
+  // GC-heaviest thing in the scene. The scratch is then blitted into the
+  // geometry's interleaved buffers directly; see the note at the write.
   const scratch = useRef<{ positions: Float32Array; colors: Float32Array }>({
     positions: new Float32Array(0),
     colors: new Float32Array(0),
@@ -754,17 +775,25 @@ function TacCapPoseTrail({
       resources.line.visible = false;
       return;
     }
-    const start = locateEpisodePoseTrajectory(
-      pose,
-      Math.max(0, timeSeconds - TACCAP_TRAIL_DURATION),
-    );
     const end = locateEpisodePoseTrajectory(pose, timeSeconds);
-    if (!start || !end) {
+    if (!end) {
       resources.line.visible = false;
       return;
     }
-    const startIndex = start.lowerIndex;
-    const endIndex = Math.max(startIndex, end.completedPointCount - 1);
+    const endIndex = Math.max(0, end.completedPointCount - 1);
+
+    // Time window with a bounding-box size floor — see `selectTrailStartIndex`.
+    // Bounded by TACCAP_TRAIL_MAX_DURATION, so this is one pass over at most a
+    // few hundred points, the same order as the copy loop below.
+    const startIndex = selectTrailStartIndex({
+      timestamps: pose.timestamps,
+      positions: scenePositions,
+      endIndex,
+      timeSeconds,
+      baseDuration: TACCAP_TRAIL_DURATION,
+      maxDuration: TACCAP_TRAIL_MAX_DURATION,
+      minSpan: Math.max(0, sceneExtent) * TACCAP_TRAIL_MIN_SPAN_FRACTION,
+    });
     const completedPointCount = endIndex - startIndex + 1;
     const includeInterpolatedPoint =
       end.lowerIndex !== end.upperIndex && end.alpha > 0;
@@ -784,6 +813,13 @@ function TacCapPoseTrail({
     }
     const positions = scratch.current.positions.subarray(0, required);
     const colors = scratch.current.colors.subarray(0, required);
+    const windowSpan = Math.max(
+      Number.EPSILON,
+      timeSeconds - pose.timestamps[startIndex],
+    );
+    const solidSpan =
+      windowSpan * (TACCAP_TRAIL_SOLID_COLOR_DURATION / TACCAP_TRAIL_DURATION);
+    const gradientDuration = Math.max(Number.EPSILON, windowSpan - solidSpan);
     for (
       let pointIndex = 0;
       pointIndex < completedPointCount;
@@ -796,18 +832,16 @@ function TacCapPoseTrail({
       positions[targetOffset + 1] = scenePositions[sourceOffset + 1];
       positions[targetOffset + 2] = scenePositions[sourceOffset + 2];
 
-      // Keep the tail in the trajectory's own hue: the older two seconds
-      // brighten from a visible same-colour tint, then the newest second
-      // remains at full colour instead of immediately entering a fade.
+      // Keep the tail in the trajectory's own hue: the older part brightens
+      // from a visible same-colour tint, then the newest third stays at full
+      // colour instead of immediately entering a fade. The ramp spans the
+      // window actually drawn, so a stretched window fades across all of it
+      // rather than bottoming out at the nominal 3 s mark.
       const sampleTime = pose.timestamps[sourceIndex] ?? timeSeconds;
       const age = Math.max(0, timeSeconds - sampleTime);
-      const gradientDuration = Math.max(
-        Number.EPSILON,
-        TACCAP_TRAIL_DURATION - TACCAP_TRAIL_SOLID_COLOR_DURATION,
-      );
       const gradientProgress = Math.max(
         0,
-        Math.min(1, (TACCAP_TRAIL_DURATION - age) / gradientDuration),
+        Math.min(1, (windowSpan - age) / gradientDuration),
       );
       const intensity =
         TACCAP_TRAIL_MIN_COLOR_INTENSITY +
@@ -827,25 +861,86 @@ function TacCapPoseTrail({
       colors[offset + 2] = trailColor.b;
     }
 
-    // The *first* build has to replace the geometry: Line2's vertex-colour
-    // shader is compiled from the attributes present at that moment, so the
-    // colour attribute must exist before the material is first used. Once it
-    // does, updating the same geometry in place is enough — and avoids
-    // building and disposing a LineGeometry on every frame.
-    const current = resources.line.geometry as LineGeometry;
-    if (current.getAttribute("instanceColorStart")) {
-      current.setPositions(positions);
-      current.setColors(colors);
-    } else {
+    // The geometry is allocated at a capacity and only ever refilled, because
+    // `WebGLRenderer` latches the instance count of an instanced geometry the
+    // first time it draws it:
+    //
+    //   if (geometry._maxInstanceCount === undefined)
+    //     geometry._maxInstanceCount = data.meshPerAttribute * data.count;
+    //   ...
+    //   const instanceCount = Math.min(geometry.instanceCount, maxInstanceCount);
+    //
+    // `_maxInstanceCount` is recomputed only on `dispose()`. A trail that was
+    // first drawn holding two points is therefore clamped to **one segment**
+    // for the rest of the episode, no matter how much `setPositions` raises
+    // `instanceCount` — and the one segment that survives is the oldest pair
+    // in the window, so the trail collapses to a dot that follows the gripper
+    // a whole window behind. That is the "single lagging point" bug.
+    //
+    // Sizing in steps and setting `instanceCount` per frame keeps the latched
+    // maximum at the capacity instead of at whatever the first frame held.
+    // Writing through the interleaved buffers is also strictly cheaper than
+    // the `setPositions` path this replaces: that call allocates a fresh
+    // `InstancedInterleavedBuffer` every time, so the old code was never the
+    // in-place update its comment claimed.
+    if (visiblePointCount > resources.capacity) {
+      const capacity =
+        Math.ceil(visiblePointCount / TRAIL_CAPACITY_STEP) *
+        TRAIL_CAPACITY_STEP;
       const geometry = new LineGeometry();
-      geometry.setPositions(positions);
-      geometry.setColors(colors);
-      current.dispose();
+      geometry.setPositions(new Float32Array(capacity * 3));
+      geometry.setColors(new Float32Array(capacity * 3));
+      resources.line.geometry.dispose();
       resources.line.geometry = geometry;
+      resources.capacity = capacity;
     }
-    resources.line.computeLineDistances();
+
+    const geometry = resources.line.geometry as LineGeometry;
+    const instanceStart = geometry.getAttribute(
+      "instanceStart",
+    ) as THREE.InterleavedBufferAttribute;
+    const instanceColorStart = geometry.getAttribute(
+      "instanceColorStart",
+    ) as THREE.InterleavedBufferAttribute;
+    const positionBuffer = instanceStart.data.array as Float32Array;
+    const colorBuffer = instanceColorStart.data.array as Float32Array;
+    // `instanceEnd` / `instanceColorEnd` are views onto these same buffers at
+    // offset 3, so each segment is one contiguous [start xyz, end xyz] stride.
+    const segmentCount = visiblePointCount - 1;
+    for (let segment = 0; segment < segmentCount; segment += 1) {
+      const target = segment * 6;
+      const from = segment * 3;
+      const to = from + 3;
+      positionBuffer[target] = positions[from];
+      positionBuffer[target + 1] = positions[from + 1];
+      positionBuffer[target + 2] = positions[from + 2];
+      positionBuffer[target + 3] = positions[to];
+      positionBuffer[target + 4] = positions[to + 1];
+      positionBuffer[target + 5] = positions[to + 2];
+      colorBuffer[target] = colors[from];
+      colorBuffer[target + 1] = colors[from + 1];
+      colorBuffer[target + 2] = colors[from + 2];
+      colorBuffer[target + 3] = colors[to];
+      colorBuffer[target + 4] = colors[to + 1];
+      colorBuffer[target + 5] = colors[to + 2];
+    }
+    instanceStart.data.needsUpdate = true;
+    instanceColorStart.data.needsUpdate = true;
+    geometry.instanceCount = segmentCount;
+
+    // No `computeLineDistances()`: it exists to feed the dash shader, which is
+    // compiled out while `dashed` is false, and it allocates a pair of arrays
+    // on every call.
     resources.line.visible = true;
-  }, [enabled, pose, resources, scenePositions, timeSeconds, trailColor]);
+  }, [
+    enabled,
+    pose,
+    resources,
+    sceneExtent,
+    scenePositions,
+    timeSeconds,
+    trailColor,
+  ]);
 
   useEffect(
     () => () => {
@@ -1053,6 +1148,7 @@ function TacCapGripperScene({
           color={TACCAP_TRAIL_COLOR[track.side]}
           enabled={trailEnabled}
           pose={track.pose}
+          sceneExtent={bounds.extent}
           timeSeconds={timeSeconds}
         />
       ))}
@@ -1062,6 +1158,7 @@ function TacCapGripperScene({
           color={TACCAP_HEAD_COLOR}
           enabled={trailEnabled}
           pose={headTrack.pose}
+          sceneExtent={bounds.extent}
           timeSeconds={timeSeconds}
         />
       )}
@@ -1630,76 +1727,11 @@ export default function URDFViewer({
   const selectedEpisode = data.episodeId;
   const chartData = data.flatChartData;
 
-  const [tacCapPoseSelection, setTacCapPoseSelection] =
-    useState<TacCapPoseSelection>("canonical-tcp");
-  const [tacCapMetadataState, setTacCapMetadataState] = useState<{
-    repoId: string;
-    metadata: Parameters<typeof resolveTacCapPoseProfile>[0];
-  } | null>(null);
-  useEffect(() => {
-    if (!isTacCap) {
-      setTacCapMetadataState(null);
-      return;
-    }
-    if (tacCapPoseSelection !== "tracker-to-tcp") {
-      return;
-    }
-
-    let cancelled = false;
-    loadTacCapExtrinsicsMetadata(datasetInfo.repoId)
-      .then((metadata) => {
-        if (cancelled) return;
-        setTacCapMetadataState({
-          repoId: datasetInfo.repoId,
-          metadata,
-        });
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        // Retain the recorded pose when optional metadata is malformed or
-        // temporarily unreadable. The viewport exposes a manual override.
-        console.warn(
-          "Failed to load TacCap extrinsics; measured defaults will be used if Tracker → TCP is selected",
-          error,
-        );
-        setTacCapMetadataState({
-          repoId: datasetInfo.repoId,
-          metadata: null,
-        });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [datasetInfo.repoId, isTacCap, tacCapPoseSelection]);
-  const tacCapMetadataReady =
-    tacCapMetadataState?.repoId === datasetInfo.repoId;
-  const tacCapProfileReady =
-    !isTacCap || tacCapPoseSelection === "canonical-tcp" || tacCapMetadataReady;
-  const tacCapPoseProfile = useMemo<TacCapPoseProfile | null>(() => {
-    if (!isTacCap) return null;
-    if (tacCapPoseSelection === "canonical-tcp") {
-      return resolveTacCapPoseProfile(null, selectedEpisode, "canonical-tcp");
-    }
-    if (!tacCapMetadataReady) return null;
-    return resolveTacCapPoseProfile(
-      tacCapMetadataState.metadata,
-      selectedEpisode,
-      "tracker-to-tcp",
-    );
-  }, [
-    isTacCap,
-    selectedEpisode,
-    tacCapMetadataReady,
-    tacCapMetadataState,
-    tacCapPoseSelection,
-  ]);
-  const tacCapPoseStatus = tacCapPoseProfile
-    ? t(
-        tacCapPoseProfile.mode === "tracker-to-tcp"
-          ? "urdf.tacCapPoseCorrected"
-          : "urdf.tacCapPoseCanonical",
-      )
-    : "";
+  // TacCap poses are read as canonical TCP. The viewer used to offer a
+  // Tracker -> TCP switch that re-derived them through measured extrinsics;
+  // it was removed as an unused control. `extractTacCapGripperTracks` still
+  // takes an optional profile, so the capability is one caller away if a
+  // dataset ever needs it — but episode extrinsics metadata is not read.
 
   const totalFrames = chartData.length;
 
@@ -1756,14 +1788,8 @@ export default function URDFViewer({
   );
   const tacCapTracks = useMemo(
     () =>
-      isTacCap && tacCapPoseProfile
-        ? extractTacCapGripperTracks(
-            chartData,
-            selectedGroup,
-            tacCapPoseProfile,
-          )
-        : [],
-    [chartData, isTacCap, selectedGroup, tacCapPoseProfile],
+      isTacCap ? extractTacCapGripperTracks(chartData, selectedGroup) : [],
+    [chartData, isTacCap, selectedGroup],
   );
   const tacCapHeadTrack = useMemo(
     () => (isTacCap ? extractTacCapHeadTrack(chartData, selectedGroup) : null),
@@ -1827,15 +1853,14 @@ export default function URDFViewer({
         : null,
     [replayTimeSeconds, tacCapHeadTrack],
   );
-  const tacCapDataUnavailable =
-    isTacCap && tacCapProfileReady && tacCapTracks.length === 0;
+  const tacCapDataUnavailable = isTacCap && tacCapTracks.length === 0;
   const trajectoryUnavailable = totalFrames === 0 || tacCapDataUnavailable;
 
   // URDF meshes load asynchronously. Generic robots report their joints when
   // ready; the TacCap scene reports once every required left/right model and
   // mesh has loaded from the project-local public assets.
   const urdfLoading = isTacCap
-    ? !tacCapProfileReady || (!tacCapDataUnavailable && !tacCapModelsReady)
+    ? !tacCapDataUnavailable && !tacCapModelsReady
     : urdfJointNames.length === 0;
   const playbackDisabled = !active || urdfLoading || trajectoryUnavailable;
 
@@ -1998,45 +2023,6 @@ export default function URDFViewer({
             <span className="text-blue-400">Z · {t("urdf.axisUp")}</span>
           </div>
         )}
-        {isTacCap && (
-          <div className="absolute bottom-3 right-3 z-20 rounded border border-white/10 bg-slate-950/85 px-2 py-1.5 font-mono text-[10px] shadow backdrop-blur-sm">
-            <div className="flex items-center gap-2 text-slate-300">
-              <span>{t("urdf.tacCapPoseMode")}</span>
-              <div
-                className="flex overflow-hidden rounded border border-white/10 bg-slate-900"
-                role="group"
-                aria-label={t("urdf.tacCapPoseMode")}
-                title={t("urdf.tacCapPoseModeHelp")}
-              >
-                {(
-                  [
-                    ["canonical-tcp", "urdf.tacCapPoseModeTcpShort"],
-                    ["tracker-to-tcp", "urdf.tacCapPoseModeTrackerShort"],
-                  ] as const
-                ).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    aria-pressed={tacCapPoseSelection === value}
-                    onClick={() => setTacCapPoseSelection(value)}
-                    className={`border-l border-white/10 px-2 py-1 first:border-l-0 transition-colors ${
-                      tacCapPoseSelection === value
-                        ? "bg-cyan-500 text-white"
-                        : "text-slate-300 hover:bg-white/10"
-                    }`}
-                  >
-                    {t(label)}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {tacCapPoseStatus && (
-              <div className="mt-1 text-right text-slate-400">
-                {tacCapPoseStatus}
-              </div>
-            )}
-          </div>
-        )}
         {urdfLoading && (
           <div className="absolute inset-0 z-30 flex items-center justify-center bg-[var(--bg)]/80">
             <span className="text-white text-lg animate-pulse">
@@ -2096,7 +2082,7 @@ export default function URDFViewer({
             position={[0, 3, -4]}
             intensity={0.4}
           />
-          {isTacCap && tacCapProfileReady ? (
+          {isTacCap ? (
             <TacCapGripperScene
               frames={tacCapFrames}
               headFrame={tacCapHeadFrame}

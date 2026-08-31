@@ -4,11 +4,10 @@
 
 A **local-only** LeRobot dataset visualizer (forked from huggingface/lerobot PR #1055 / @Mishig25). The Hugging Face Hub remote-loading path has been removed: every dataset is read directly from the filesystem via `/api/local-datasets/[encodedPath]/[...filePath]`. Standard robot URDF/mesh assets for the 3D replay are fetched from the public HF bucket `lerobot/robot-urdfs`; TacCap data-collection gripper assets are bundled under `public/urdf/taccap-grippers`.
 
-**Three deliberate exceptions to "local-only"**, all isolated to explicit homepage actions or dashboard history — do not let them leak into the browse path:
+**Two deliberate exceptions to "local-only"**, both added for the homepage dashboard — do not let either leak into the browse path:
 
-1. **Manual HF account/catalog checks.** The homepage account controls contact the official Hub only after an explicit account check/login or statistics refresh. Tokens are stored server-side below `<LOCAL_DATASET_ROOT>/.xense-viewer/secrets/`, never in browser storage or command arguments. Keep identity/catalog traffic on the official API (`HF_IDENTITY_ENDPOINT` / `HF_CATALOG_ENDPOINT`); a download mirror is not the token issuer. Dataset transfer itself stays in the native Source panel.
-2. **Manual HF sync.** The homepage's Sync controls download datasets from the Hub via `POST /api/local-datasets/sync` → `scripts/sync_hf_dataset.py`. They run **only** on an explicit click and always list before transferring. Rendering, parsing and playback never touch the network.
-3. **A written history file.** The homepage records a daily snapshot to `<LOCAL_DATASET_ROOT>/.xense-viewer/corpus-history.json` so it can show growth. Writes are atomic and failure-tolerant; a read-only root just means no "since last snapshot" figures.
+1. **Manual HF sync.** The homepage's per-source Sync button — and the by-id panel beside it — download datasets from the Hub via `POST /api/local-datasets/sync` → `scripts/sync_hf_dataset.py`. They run **only** on an explicit click, always list before transferring, and are the single outbound data path. Rendering, parsing and playback never touch the network.
+2. **A written history file.** The homepage records a daily snapshot to `<LOCAL_DATASET_ROOT>/.xense-viewer/corpus-history.json` so it can show growth. Writes are atomic and failure-tolerant; a read-only root just means no "since last snapshot" figures.
 
 ## Package manager
 
@@ -146,25 +145,97 @@ The **Annotations** tab edits lerobot's v3.1 language atoms (schema: [lerobot#34
 - **State** (`src/context/annotations-context.tsx`): `AnnotationsProvider` holds per-episode atoms + draw state. `EpisodeBootstrap` (in `episode-viewer.tsx`) calls `setEpisode(episodeId, { repoId }, languageAtoms, frameTimestamps)`. **Hydration precedence: unsaved sessionStorage edits → JSON sidecar (`fetchEpisodeAtoms`) → parquet atoms.** sessionStorage is the live edit buffer; `save()` writes the sidecar.
 - **Persistence** (`src/utils/annotationsClient.ts`): rewritten to be local — derives the route from `getLocalDatasetFileBase(repoId)` and `PUT`s to `…/[encodedPath]/annotations`. `isAnnotateBackendEnabled()` always returns `true` (local write is always available); `fetchFrameTimestamps` is a no-op stub (timestamps come from the parquet). **There is no `NEXT_PUBLIC_ANNOTATE_BACKEND_URL` and no `backend/` directory** — do not reintroduce them.
 - **Sidecar** `meta/lerobot_annotations.json`: `{ version: 2, episodes: { "<id>": { atoms: [...] } }, updated_at }`. The route does read-modify-write of the whole file (preserving other episodes) with an atomic `tmp`+`rename`, mirroring the tags route.
-- **UI**: `annotations-panel.tsx` (quick-add + inspector; the upstream "Save dataset"/export and "backend offline" UI were removed), `annotations-timeline.tsx` (multi-track timeline), `video-overlay-canvas.tsx` (draw bbox/keypoint on a video → VQA atom). The overlay also mounts on the Episodes tab but is inert while `drawMode === "off"`.
+- **UI**: `annotations-panel.tsx` (quick-add + inspector; the upstream "Save dataset"/export and "backend offline" UI were removed), `annotations-timeline.tsx` (multi-track timeline), `video-overlay-canvas.tsx` (draw bbox/keypoint on a video → VQA atom). The overlay mounts **only** where annotating happens: `SimpleVideosPlayer` takes an `annotationOverlay` prop, off by default, and only the Annotations tab passes it. It used to ride along on the Episodes tab, inert — all annotation UI now lives on the Annotations tab and nowhere else.
 - **Not implemented (deferred Milestone B)**: writing atoms back into `data/chunk-*/file-*.parquet`. `hyparquet` is read-only; a local parquet write would need `hyparquet-writer` in a Node route. The JSON sidecar is the source of truth.
+
+### Annotations tab layout (two panes, one screen)
+
+All annotation UI lives on this tab — nothing annotation-related renders on the
+Episodes tab any more. The tab is a **CSS grid**, not nested flex columns, and
+the reason is `position: sticky`.
+
+- DOM order is `[video] [hints + playback + timeline] [editor pane]`. At `lg`
+  the grid puts the first two in column 1 (video in an `auto` row, the rest in a
+  scrolling `minmax(0,1fr)` row) and the editor in column 2 spanning both rows,
+  so both panes scroll independently and the footage never leaves the screen.
+- Below `lg` it collapses to one column in that same DOM order, and the video
+  sticks to the top. **The video must be a direct child of the scroller for
+  that to work**: sticky is confined to its own parent's box, so a video nested
+  inside a left-hand column unsticks the moment that column scrolls past — which
+  is precisely when the editor below it comes into view. Nesting it "tidily"
+  reintroduces the bug this layout was built to fix.
+- The video wrapper is capped at `lg:max-h-[55vh]` with its own overflow: a
+  dataset with several cameras wraps into rows and would otherwise take the
+  whole column height and leave no room for the timeline.
+- The editor pane carries **sub-tabs** (`annotationEditor` state) switching
+  between `AnnotationsPanel` (v3.1 language atoms) and `SubtaskPanel` (Pi-style
+  segments). One at a time, deliberately: stacking them puts the lower one back
+  off screen, which is the problem again.
 
 ### Subtasks (Pi-style segmentation → lerobot-native `subtask_index`)
 
-Separate from the atom-based Annotations tab: the **Episodes-tab Subtask panel** (`src/components/subtask-panel.tsx`) lets you label subtasks while browsing. Type an instruction at the current frame and it starts a **contiguous frame-range segment that persists until the next subtask** — the "persist until next" model lerobot's `subtask_index` uses. This is the layer that produces the **trainable** `sample["subtask"]` (the language-atom `subtask` style does not).
+Separate from the atom-based language editor, but sharing the Annotations tab with it: the **Subtask panel** (`src/components/subtask-panel.tsx`) is the second of the tab's two editor sub-tabs. Type an instruction at the current frame and it starts a **contiguous frame-range segment that persists until the next subtask** — the "persist until next" model lerobot's `subtask_index` uses. This is the layer that produces the **trainable** `sample["subtask"]` (the language-atom `subtask` style does not).
 
 - **Model** (`src/types/subtask.types.ts`): `SubtaskSegment { segment_id, skill, instruction, paraphrases[], start_frame_index, success_frame_index, end_frame_index }` inside `EpisodeSubtaskAnnotation { episode_index, high_level_instruction, instruction_segments[], key_frames? }`. Pure, unit-tested helpers (`activeSegmentAt`, `insertSubtaskAt`, `updateSegment`, `removeSegment`, `normalizeSegments`, `timeToFrame`/`frameToTime`) work in **frame-index** space and keep segments sorted, contiguous, and renumbered.
 - **Authoring source of truth** — `meta/annotations.json` (**JSONL**, one Pi-style record per episode; the vendor format some datasets already ship). Read/written via `src/utils/subtasksClient.ts` → the `subtasks` route, which does per-episode merge (never clobbers other episodes / `key_frames`). Panel state uses a sessionStorage live buffer + explicit **Save**, mirroring the Annotations context. Not wired to `AnnotationsProvider` (the Pi model carries skill/paraphrases/success-frame the atom schema can't express).
 - **Compile to native** — `scripts/export_subtasks.py` (pandas/pyarrow; `scripts/requirements.txt`). Writes per-frame `subtask_index` into every `data/**/*.parquet` (the earliest subtask is pinned to frame 0 so annotated episodes are fully covered; an episode with no annotation falls back to its own `task` string as one whole-episode subtask), `meta/subtasks.parquet` (mirrors `tasks.parquet`: string as `__index_level_0__` index + `subtask_index` column; indices stable across runs), and adds the `subtask_index` feature + `total_subtasks` to `meta/info.json`. Uses pyarrow (not the JS writer) so the `list<float>` `action`/`observation.state` columns round-trip exactly; rewrites are verified (row count + untouched-column equality) with a `.bak` kept. Triggered by the panel's **Export** button (dataset-wide) or run standalone from the CLI.
 
+### Episode switching (in-page, cached, staged)
+
+Selecting an episode in the sidebar does **not** navigate. `EpisodeViewer` keeps
+one mount and swaps `EpisodeData` underneath it, which changes what "loading"
+means and who is allowed to keep rendering.
+
+- **`fetch-data.ts` holds three browser-side LRU caches** — parsed `EpisodeData`
+  (`MAX_EPISODE_DATA_CACHE_ENTRIES`, 8), decoded v3 episode-metadata shards, and
+  individual metadata rows — plus an in-flight map per key so overlapping
+  switches share one decode. All three go through `rememberInLru` / `touchLru`
+  in `src/utils/lruCache.ts`; do not hand-roll a fourth. The metadata shard
+  cache stores `null` for "this shard does not exist", so it is probed with
+  `has()`, never truthiness.
+- **None of these caches invalidate.** `src/lib/parquet-server.ts` re-keys on
+  `mtime + size`; these do not. A dataset rewritten underneath an open tab
+  (`export_subtasks.py`, an HF sync) keeps serving the parsed copy until it is
+  evicted. A reload is the escape hatch. Entries are **shared and must be
+  treated as read-only** — mutating a cached `EpisodeData` in place corrupts
+  every later reader.
+- **Loading is staged, not all-or-nothing.** The full-page `Loading` layer
+  guards only the _data_ transition (`episodeTransitioning`); video tiles and
+  Recharts carry their own local placeholders, and charts mount in an idle
+  callback after the media is ready. So "switch took 1 s" means the shell is
+  interactive, not that every chart is painted — don't compare that number
+  against the old all-or-nothing figure.
+- **The overlay must yield to the error panel.** A failed load leaves `data` on
+  the previous episode while `selectedEpisodeId` stays on the requested one, so
+  `episodeTransitioning` never clears. `isLoading` therefore carries
+  `&& !episodeError`; without it the z-30 spinner sits on the z-20 error panel
+  forever and the user never learns why the episode did not load.
+- **Retained `<video>` elements are the point.** v3 episodes commonly share one
+  MP4 and differ only in `segmentStart`/`segmentEnd`, so the tile key is
+  `filename:url` (no segment) and the player _seeks_ instead of reloading.
+  Putting `segmentStart` back in the key throws away the browser's buffer on
+  every switch. `SimpleVideosPlayer` takes `loading` and pauses the retained
+  media immediately, so the previous episode can't keep playing underneath.
+
 ### Viewer keyboard shortcuts
 
 `episode-viewer.tsx` binds `Space` (play/pause, routed to the 3D replay on that
 tab), `↑`/`↓` (previous/next episode) and `←`/`→` (±5 s, 3D tab only) on
-`window`. Two _separate_ guards decide when to yield, and the split matters:
+`window`. The rules live in the pure, unit-tested `src/utils/viewerShortcuts.ts`;
+the viewer only reads the DOM once per keydown via `describeShortcutTarget` and
+then asks two _separate_ questions, and the split matters:
 
-- `isKeyboardFocusInsideTextEntry` — contenteditable, `TEXTAREA`, `SELECT`, and `INPUT` **except `type=range`**. Blocks every shortcut. The scrubber is exempt because it is the thing the shortcuts drive; clicking it must not disable them.
-- `isKeyboardFocusOnActivatable` — `BUTTON` and `A[href]`. Blocks **`Space` only**. Space activates a focused button, so taking it would leave every button in the viewer un-activatable by keyboard; the arrow keys, which buttons and links don't consume, stay global — that is what keeps the shortcuts alive after clicking a sidebar episode or a 3D control.
+- `blocksAllShortcuts` — contenteditable, `TEXTAREA`, `SELECT`, and `INPUT` **except `type=range`**. Blocks every shortcut. The scrubber is exempt because it is the thing the shortcuts drive; clicking it must not disable them.
+- `yieldsSpaceShortcut` — `BUTTON`, `[role=button]` and `A[href]`. Blocks **`Space` only**. Space activates a focused button, so taking it would leave every button in the viewer un-activatable by keyboard; the arrow keys, which buttons and links don't consume, stay global — that is what keeps the shortcuts alive after clicking a sidebar episode or a 3D control.
+
+**Episode links are the one exception to the yield, and they must stay one.**
+Space does not _activate_ a native link — the browser scrolls instead. Since
+selecting an episode in-page leaves its `<Link>` focused, yielding to it made
+the next Space scroll the sidebar rather than toggle playback. Sidebar entries
+therefore carry `data-episode-link`, and `yieldsSpaceShortcut` returns false
+for anything inside one (checked before the activatable test, so a `<span>`
+child of the link is covered too). Do not "simplify" that back to a bare
+`A[href]` test.
 
 Sidebar episode entries are always `<Link href>`, even on tabs that select
 in-page: the click handler intercepts only unmodified left clicks, so
@@ -214,7 +285,9 @@ The homepage header is a tabbed dashboard: an **All sources** tab holding the co
 
 - **The tape is proportioned by recorded hours, not episode count.** An episode is an arbitrary slice; sources differ by an order of magnitude in mean episode length (see `avgEpisodeSeconds`), so episode counts are not comparable quantities and hours are. The legend deliberately shows episodes _and_ mean length beside the duration bar so the mismatch is visible.
 - **Card grids are ordered largest-first**, both levels: `compareDatasetsBySize` in `src/utils/datasetGrouping.ts` sorts on `sizeBytes` desc → `total_frames` desc → `total_episodes` desc → path, and `groupDatasetsByPrefix` ranks the category cards on the same keys summed (`totalBytes` first). **Bytes lead** — "how big is this dataset" is a storage question, and frames are only a proxy for it: on the real corpus TacVerse holds the most frames (2.9M) but 13 GB, while Vertax holds 1.6M frames and 40 GB, so the two keys genuinely disagree about which card comes first. Frames stay as the second key because `sizeBytes` is 0 for a directory that could not be walked, and those must not collapse to the bottom in path order. A group's card art is the thumbnail of its largest dataset that has one.
-- **Storage is reported at all three levels**: `totalBytes` on the All-sources tile row, `bytes` per source (tab tile + tape legend), `sizeBytes` on each dataset card. Formatting goes through the one shared `formatBytes` in `src/utils/byteSize.ts` (binary units, read against `du`). `source-panel.tsx` keeps a separate `formatTransferred` for live sync progress — that one is decimal on purpose, because it is read against what the Hub reports for the repo. Storage is also in the daily snapshot, so the source panel shows a "since last snapshot" storage delta beside hours/episodes/tasks.
+- **Two sync targets, one route.** `POST /api/local-datasets/sync` takes either `{ source }` (a whole org) or `{ repo: "owner/name" }` (one dataset), and the client's `SyncTarget` keeps them on one code path. The by-id target exists because the per-source button can only refresh a source already on disk — a dataset the machine has never held has no tab to press. Its panel (`repo-fetch-panel.tsx`) therefore sits on the homepage **outside** `CorpusDashboard`, which renders nothing when no source exists, and opens by default in exactly that case. The owner half of the id becomes the source directory, so a successful fetch is what makes a new source tab appear.
+  Its listing pass calls `dataset_info(files_metadata=True)`, so the confirmation names a size and file count rather than "1 dataset pending" — deliberately **not** done on the org path, where it would be ~188 metadata calls before anything renders. A hand-typed id that does not resolve fails the listing outright instead of being conservatively treated as work the way an unresolvable org repo is: the id came from a keyboard, so "no such dataset" is the answer, not a download attempt.
+- **Storage is reported at all three levels**: `totalBytes` on the All-sources tile row, `bytes` per source (tab tile + tape legend), `sizeBytes` on each dataset card. Formatting goes through the one shared `formatBytes` in `src/utils/byteSize.ts` (binary units, read against `du`). `sync-progress.tsx` keeps a separate `formatTransferred` for live sync progress — that one is decimal on purpose, because it is read against what the Hub reports for the repo. The progress bars and the outcome line live there too, shared by both sync entry points: once bytes are moving the report is the same report. Storage is also in the daily snapshot, so the source panel shows a "since last snapshot" storage delta beside hours/episodes/tasks.
 - `src/utils/corpusStats.ts` — pure aggregation, tape width allocation (tiny sources are floored to a hoverable minimum, with the borrowed width taken proportionally from the large ones so the bar still sums to 100), and the cyan→violet ramp. That ramp is deliberately not categorical: emerald/red/amber/orange all carry reserved status meanings, and a rainbow here would read as a health bar.
 - `src/utils/corpusHistory.ts` — daily snapshots and deltas. Deltas compare against the **most recent earlier recorded day**, not literal yesterday, because nobody opens the page daily. Negative deltas are preserved, not clamped.
   `SourceSnapshot.bytes` is **optional and stays at `version: 1`** — a version bump would make `parseHistory` discard the whole file, trading months of real history for one added column. The absence is therefore meaningful, and `SourceDelta.bytes` is `number | null`: a baseline row with no `bytes` yields `null` ("never recorded"), never `0` and never "all of it is new", which would have reported the entire corpus as one day's growth on the first render after the upgrade. One unknown source makes `total.bytes` null rather than a partial sum, `formatDeltaBytes` renders null as `"n/a"` against `"—"` for a genuine zero, and the source panel drops the column entirely while it is unknown. `isFlatDelta` ignores a null byte delta but treats a known non-zero one as change — a re-encode moves bytes without moving any count.
@@ -304,9 +377,9 @@ Every user-facing panel is translated (625 keys). To extend: add keys to both di
 | `src/utils/annotationsClient.ts`                                  | Local-only persistence client → `…/[encodedPath]/annotations` route (no FastAPI backend)                                                                           |
 | `src/components/annotations-panel.tsx`                            | Annotations editor: quick-add bar, atom list, inspector, "Save episode"                                                                                            |
 | `src/components/annotations-timeline.tsx`                         | Multi-track atom timeline (one lane per kind, click-to-seek, drag spans)                                                                                           |
-| `src/components/video-overlay-canvas.tsx`                         | Draw bbox/keypoint on a video → grounded-VQA atom; inert when `drawMode === "off"`                                                                                 |
+| `src/components/video-overlay-canvas.tsx`                         | Draw bbox/keypoint on a video → grounded-VQA atom; mounted only when `SimpleVideosPlayer` is given `annotationOverlay`                                             |
 | `src/types/subtask.types.ts`                                      | Pi-style subtask segment schema + pure helpers (`activeSegmentAt`, `insertSubtaskAt`, `normalizeSegments`, frame↔time)                                             |
-| `src/components/subtask-panel.tsx`                                | Episodes-tab subtask labeler: active-subtask banner, quick-add, segment strip, list/inspector, Save + Export                                                       |
+| `src/components/subtask-panel.tsx`                                | Annotations-tab subtask labeler: active-subtask banner, quick-add, segment strip, list/inspector, Save + Export                                                    |
 | `src/utils/subtasksClient.ts`                                     | Client for the `…/[encodedPath]/subtasks` + `/subtasks/export` routes                                                                                              |
 | `src/lib/local-dataset-paths.ts`                                  | Shared server path resolution + traversal guard for every per-dataset route                                                                                        |
 | `src/lib/python-runtime.ts`                                       | `resolvePython(modules)`: PYTHON_BIN → local venv/active env → PATH → conda-env scan, memoised, with a fix-it error                                                |
@@ -317,17 +390,22 @@ Every user-facing panel is translated (625 keys). To extend: add keys to both di
 | `src/utils/parquetBrowser.ts`                                     | Pure helpers: `toJsonSafe`, `describeCell`, `defaultColumnSelection`, `rowsToCsv`, file classify/sort                                                              |
 | `src/utils/byteSize.ts`                                           | The one `formatBytes` (binary units), shared by the parquet file picker and the homepage storage figures                                                           |
 | `src/utils/parquetBrowserClient.ts`                               | Client for the `…/[encodedPath]/parquet` + `/parquet/read` routes                                                                                                  |
+| `src/components/repo-fetch-panel.tsx`                             | Homepage "download a dataset by Hugging Face id" panel — the only way to pull a source not yet on disk                                                             |
+| `src/components/sync-progress.tsx`                                | Shared sync transfer/outcome views + `formatTransferred` (decimal, Hub-facing)                                                                                     |
 | `scripts/export_subtasks.py`                                      | pyarrow: compile `meta/annotations.json` → per-frame `subtask_index` + `meta/subtasks.parquet` + `info.json` (backup + verify)                                     |
 | `src/components/urdf-viewer.tsx`                                  | 3D viewer; loads standard URDFs from the HF bucket and bundled TacCap grippers; `autoMatchJoints` does column→joint mapping                                        |
 | `src/utils/taccapGripperReplay.ts`                                | TacCap left/right TCP + opening extraction, source selection, interpolation, and normalized finger command                                                         |
-| `src/utils/poseTrajectory3d.ts`                                   | Named xyz(+r1–r6) pose extraction from chart rows, memoised per rows array; sampling/interpolation helpers                                                         |
+| `src/utils/poseTrajectory3d.ts`                                   | Named xyz(+r1–r6) pose extraction from chart rows, memoised per rows array; sampling/interpolation; `selectTrailStartIndex` (trail window)                         |
 | `src/utils/spatialTrajectories.ts`                                | Cross-episode spatial layers: axis-group discovery, point budget, `spatialLayerFeatureKey` — pure                                                                  |
 | `src/utils/scene3d.ts`                                            | The one Z-up→Y-up `toScenePoint`, scene bounds, and grid stepping — shared by both 3D viewers                                                                      |
 | `src/components/scene3d-guides.tsx`                               | Shared `AxisGuide` / `CameraFit` (per-viewer `offset`) / `ControlsHandle`                                                                                          |
 | `src/components/spatial-trajectory-viewer.tsx`                    | Action Insights cross-episode trajectory view: layer toggles, episode legend, hover/isolate                                                                        |
 | `src/components/episode-pose-3d-viewer.tsx`                       | Episodes-tab `3D` chart mode: single-episode pose path with a video-synced marker                                                                                  |
 | `src/utils/urdfReplayVideos.ts`                                   | Groups replay cameras into left / top-center / right by `left`/`right`/`head` tokens — pure                                                                        |
+| `src/utils/videoSegments.ts`                                      | Episode-local time ↔ the shared v3 MP4's media clock, both directions, each clamped into the segment — pure                                                        |
 | `src/utils/sampling.ts`                                           | `evenlySampleIndices` / `evenlySampleArray` — unique, sorted, first-and-last-preserving downsampling                                                               |
+| `src/utils/lruCache.ts`                                           | `touchLru` / `rememberInLru` — the one insertion-ordered LRU policy, shared by the three episode caches                                                            |
+| `src/utils/viewerShortcuts.ts`                                    | Pure focus rules for the global viewer shortcuts (`describeShortcutTarget`, `blocksAllShortcuts`, `yieldsSpaceShortcut`)                                           |
 | `src/utils/versionUtils.ts`                                       | `getDatasetInfo`, `getDatasetVersionAndInfo`, `buildVersionedUrl` (local-only)                                                                                     |
 | `src/utils/datasetRoute.ts`                                       | `local:` repoId wrapper, base64url encode, route ↔ repoId conversion                                                                                               |
 | `src/utils/stringFormatting.ts`                                   | `buildV3DataPath`, `buildV3VideoPath`, `buildV3EpisodesMetadataPath`, padding helpers                                                                              |
@@ -335,6 +413,30 @@ Every user-facing panel is translated (625 keys). To extend: add keys to both di
 | `src/utils/dataProcessing.ts`                                     | Chart grouping pipeline: `buildSuffixGroupsMap` → `computeGroupStats` → `groupByScale` → `flattenScaleGroups` → `processChartDataGroups`                           |
 | `src/utils/typeGuards.ts`                                         | `bigIntToNumber`, `isNumeric`, `isValidTaskIndex`, etc.                                                                                                            |
 | `src/utils/constants.ts`                                          | `PADDING`, `EXCLUDED_COLUMNS`, `CHART_CONFIG`, `THRESHOLDS`                                                                                                        |
+
+## Time context: state vs controls
+
+`src/context/time-context.tsx` exposes **two** contexts, and the split is a
+performance contract. `TimeStateContext` (`currentTime`, `externalSeekVersion`,
+`isPlaying`, `duration`) changes on every throttled tick (~12.5/s during
+playback); `TimeControlsContext` (`seek`, `subscribe`, `setIsPlaying`,
+`setDuration`) is memoised and effectively never changes.
+
+- A component that only issues commands must use `useTimeControls()`. Reaching
+  for `useTime()` there re-subscribes it to the clock and puts it back in the
+  playback render path — which is what made a Recharts tree of thousands of SVG
+  nodes rebuild 12.5 times a second.
+- `useTime()` survives as a compatibility wrapper that spreads both. It is fine
+  for components that genuinely need `currentTime` _and_ `seek`
+  (`playback-bar`, `annotations-timeline`, `subtask-panel`), and wrong anywhere
+  else.
+- The chart playhead follows the same rule structurally: `SingleDataGraph` is
+  not subscribed to time at all. `GraphPlayhead` is a tiny leaf that reads the
+  clock and moves one absolutely-positioned `<div>`. Its inset is derived from
+  `CHART_MARGIN` / `CHART_Y_AXIS_WIDTH` / `CHART_X_AXIS_HEIGHT`, the same
+  constants passed to `<LineChart>` and the axes — Recharts computes its plot
+  box as `margin + axis size`, so hardcoding the offset silently misaligns the
+  playhead from the data the moment a margin changes.
 
 ## Chart data pipeline
 
@@ -372,11 +474,16 @@ Reserved/bookkeeping columns from lerobot — see `EXCLUDED_COLUMNS` in `src/uti
 
 - URDFs and meshes are hosted in the HF bucket `lerobot/robot-urdfs` — base URL `https://huggingface.co/buckets/lerobot/robot-urdfs/resolve` (no `/main` segment; buckets are unbranched). Override with `NEXT_PUBLIC_URDF_BASE_URL` for local development.
 - Asset layout under the bucket: `g1/`, `openarm/`, `so101/` (both SO-100 and SO-101 live here).
-- TacCap is the exception: `bi_taccap_gripper` loads the project-local left/right assets from `public/urdf/taccap-grippers`. Treat recorded `left_tcp` / `right_tcp` poses as canonical TCP by default. Only when the user selects `Tracker → TCP` should `taccapPoseSemantics` apply the measured side-specific tracker-to-TCP transform (or a non-identity transform from episode metadata). Do not infer this rigid-frame semantic from trajectory smoothness alone. Recover the model root from the measured `base_link -> link4` translation; both bundled URDFs define link4 with the same canonical X/Y orientation. The left link4 STL's SolidWorks `-90°` Z correction belongs on its `<visual>` origin, never on `joint4`, so it cannot rotate the TCP frame. Drive `joint2` in `[-1, 0]`; URDF mimic drives `joint1` with multiplier `-1`. Prefer `action`, with `observation.state` available as a source toggle. If the selected source contains a complete `head.xyz+r1-r6` group, render its yellow trajectory, playback point, and local axes; video keys containing `head` alone are not pose data. The TCP/Tracker switch applies only to the two gripper tracks, not to head.
+- TacCap is the exception: `bi_taccap_gripper` loads the project-local left/right assets from `public/urdf/taccap-grippers`. Recorded `left_tcp` / `right_tcp` poses are read as canonical TCP, full stop. The viewport used to carry a `Already TCP` / `Tracker → TCP` switch that re-derived them through measured extrinsics; it was removed as an unused control that read as leftover debug UI. `extractTacCapGripperTracks` still takes an optional `TacCapPoseProfile` and `taccapPoseSemantics` still holds the measured side-specific transforms and their tests, so the capability is one caller away — but **episode extrinsics metadata is no longer read**, and a dataset recording tracker-frame poses would now render uncorrected. Do not infer this rigid-frame semantic from trajectory smoothness alone. Recover the model root from the measured `base_link -> link4` translation; both bundled URDFs define link4 with the same canonical X/Y orientation. The left link4 STL's SolidWorks `-90°` Z correction belongs on its `<visual>` origin, never on `joint4`, so it cannot rotate the TCP frame. Drive `joint2` in `[-1, 0]`; URDF mimic drives `joint1` with multiplier `-1`. Prefer `action`, with `observation.state` available as a source toggle. If the selected source contains a complete `head.xyz+r1-r6` group, render its yellow trajectory, playback point, and local axes; video keys containing `head` alone are not pose data.
 - `getRobotConfig` defaults to **`so101_new_calib.urdf`** for any `robot_type` that doesn't match G1/OpenArm. The legacy `so100.urdf` is only used when `robot_type` is literally `so100` / `so_100` / contains `so100_arm`. **This means `so100_follower` (lerobot 0.4+ catch-all term) goes through SO-101.**
 - `autoMatchJoints` tolerates `.pos` / `.position` / `.q` suffixes on column names, so SO-101 features like `shoulder_pan.pos` auto-match the URDF joint `shoulder_pan`.
 - **Replay advances rows, not frames.** `chartData` is the _downsampled_ row set (`MAX_EPISODE_POINTS`), so one row is not one 1/fps frame — a 6000-frame 30 fps episode arrives as 4000 rows spanning the same 200 s. `rowsPerSecond` is derived from the first and last real timestamps (falling back to `fps` only when they are unusable) and drives `PlaybackDriver`, the playback-bar clock, the seek fallbacks and `replayTimeSeconds` alike. Don't reintroduce a bare `fps` divisor: it runs playback ~1.5x fast and drags `UrdfVideoOverlay`, which seeks each MP4 from that value, along with it.
 - **A warm STL cache still has to be announced.** `loadCachedStlGeometry` calls `manager.itemStart(url)` on a cache or in-flight hit and defers `itemEnd` by a macrotask. Without it, a remount with everything cached leaves the LoadingManager tracking only the `.urdf`, so `manager.onLoad` — and `reportReady()` — fire over an empty scene. Same ordering hazard as the STLLoader note below.
+- **The trail window is a time window with a size floor, and the floor is measured as a bounding box.** A fixed `TACCAP_TRAIL_DURATION` alone is unreadable on real data: on `TacVerse/taccap-g1-fold-garment-0819` ep0 the distance covered in 3 s ranges from 0.75 cm to 28 cm against a 45 cm scene — 38x — so the same three seconds is a legible arc or a dot depending only on where you paused, and landing at frame 0 (2.6 cm) looks like a single point. `selectTrailStartIndex` in `poseTrajectory3d.ts` therefore walks back from the head until it has both `TACCAP_TRAIL_DURATION` of history **and** `TACCAP_TRAIL_MIN_SPAN_FRACTION` of the scene extent across, capped at `TACCAP_TRAIL_MAX_DURATION` so a stationary gripper cannot drag in the whole episode. The colour ramp spans the window actually drawn, not the nominal 3 s, or a stretched window would bottom out early and read as truncated.
+  The floor is the **bounding-box diagonal, never accumulated path length**. Arc length is inflated by jitter — at t=40 s in that episode a gripper holding position racks up 5.4 cm of path while occupying 2.9 cm of screen, so an arc-length test declares the floor met and stops on exactly the case the floor exists to catch. There is a unit test for this (`poseTrailWindow.test.ts`); don't "simplify" it back to a running sum.
+  Frame 0 is still a single point, and no floor can change that: there is no history behind it yet.
+- **The trail geometry is allocated at a capacity and refilled; never resized per frame.** `WebGLRenderer` latches an instanced geometry's draw count the first time it draws it — `if (geometry._maxInstanceCount === undefined) geometry._maxInstanceCount = data.meshPerAttribute * data.count`, then every draw uses `Math.min(geometry.instanceCount, maxInstanceCount)` — and only `dispose()` clears it. The trail's geometry was created on the first frame that had two points to draw, so the latch froze at **one segment** and stayed there: `setPositions` kept raising `instanceCount` to 90, 178, … and the renderer kept drawing one. The surviving segment is the oldest pair in the window, so the trail collapsed to a dot that followed the gripper a whole window behind — the "single lagging point" bug. Sizing in `TRAIL_CAPACITY_STEP` blocks and writing through the interleaved buffers keeps the latch at the capacity. Do not go back to calling `setPositions` per frame: besides re-arming this bug, it allocates a fresh `InstancedInterleavedBuffer` every call, so it was never the in-place update its old comment claimed.
+  `computeLineDistances()` is deliberately absent — it feeds the dash shader, which is compiled out while `dashed` is false, and it allocates two arrays per call.
 - **`TacCapPoseTrail` reuses its buffers.** Scratch `Float32Array`s are grown on demand and sliced per frame, and the `LineGeometry` is replaced only on the first build (Line2 compiles its vertex-colour shader from the attributes present then — the code detects this by checking for `instanceColorStart`, so it self-corrects if the resources are rebuilt). This effect runs once per frame per track; allocating there was the scene's largest source of GC pressure.
 - **`isTacCapRobot` is the single TacCap predicate** — `getRobotConfig` calls it rather than matching its own substring. Two matchers that disagree hide the 3D tab for a robot type the config still handles, or hand back an empty `urdfUrl` to a robot mounted through another branch.
 - **URDFLoader gotcha**: after our `loadMeshCb` returns, `URDFLoader.js` does `if (obj instanceof THREE.Mesh) obj.material = <urdf-material>`, overwriting any material we set. Workaround: wrap the loaded mesh in a `THREE.Group` so the `instanceof Mesh` check fails. DAE returns a Group already; STL must be wrapped explicitly.

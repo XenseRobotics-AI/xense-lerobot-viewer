@@ -13,10 +13,8 @@ import {
 import { useT } from "@/context/locale-context";
 import type { VideoInfo } from "@/types";
 import { THRESHOLDS } from "@/utils/constants";
-import {
-  groupUrdfReplayVideos,
-  urdfReplayMediaTime,
-} from "@/utils/urdfReplayVideos";
+import { groupUrdfReplayVideos } from "@/utils/urdfReplayVideos";
+import { mediaTimeFromEpisodeTime } from "@/utils/videoSegments";
 
 function fallbackLabel(filename: string): string {
   const tail = filename.split(/[./]/).at(-1) ?? filename;
@@ -39,7 +37,7 @@ function ReplayVideoTile({
   video: VideoInfo;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const targetTime = urdfReplayMediaTime(video, episodeTimeSeconds);
+  const targetTime = mediaTimeFromEpisodeTime(video, episodeTimeSeconds);
   const targetTimeRef = useRef(targetTime);
   const shouldPlayRef = useRef(active && playing);
   targetTimeRef.current = targetTime;
@@ -139,7 +137,10 @@ function SideVideoGroup({
   return (
     <div className="space-y-1.5">
       <ReplayVideoTile
-        key={`${primary.filename}:${primary.url}:${primary.segmentStart ?? 0}`}
+        // Episodes in a v3 shard only change the segment window. Keep the
+        // media element alive for the same camera/file and let the tile seek
+        // to the new segment instead of restarting metadata/decode loading.
+        key={`${primary.filename}:${primary.url}`}
         active={active}
         episodeTimeSeconds={episodeTimeSeconds}
         playing={playing}
@@ -150,7 +151,7 @@ function SideVideoGroup({
         <div className="grid grid-cols-2 gap-1.5">
           {secondary.map((video) => (
             <ReplayVideoTile
-              key={`${video.filename}:${video.url}:${video.segmentStart ?? 0}`}
+              key={`${video.filename}:${video.url}`}
               active={active}
               compact
               episodeTimeSeconds={episodeTimeSeconds}
@@ -434,7 +435,7 @@ export default function UrdfVideoOverlay({
         >
           {groups.center.map((video) => (
             <ReplayVideoTile
-              key={`${video.filename}:${video.url}:${video.segmentStart ?? 0}`}
+              key={`${video.filename}:${video.url}`}
               {...shared}
               video={video}
             />
