@@ -99,6 +99,7 @@ describe("zh translation coverage", () => {
     // Tool names the user also meets as a tab, a CLI and a file extension.
     "viewer.tab.doctor",
     "viewer.tab.parquet",
+    "viewer.tab.workbench",
     // Pure formula — symbols and units only, nothing to translate.
     "doctor.speedFormula",
     // Value + unit, and units render in English in both languages (see the

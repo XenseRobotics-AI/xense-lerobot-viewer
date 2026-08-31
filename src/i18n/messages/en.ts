@@ -246,6 +246,9 @@ export const en = {
   "viewer.tab.parquet": "Parquet",
   "viewer.tab.parquetTitle":
     "Browse the raw contents of any parquet file in this dataset",
+  "viewer.tab.workbench": "Workbench",
+  "viewer.tab.workbenchTitle":
+    "Workbench-style dataset statistics and custom quality checks",
   "viewer.home": "Home",
 
   // ── episode viewer: body ────────────────────────────────────────────────

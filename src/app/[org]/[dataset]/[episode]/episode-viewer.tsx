@@ -27,6 +27,7 @@ import {
 import { AnnotationsPanel } from "@/components/annotations-panel";
 import { AnnotationsTimeline } from "@/components/annotations-timeline";
 import { SubtaskPanel } from "@/components/subtask-panel";
+import DatasetReviewErrorBoundary from "@/components/dataset-review-error-boundary";
 import Sidebar from "@/components/side-nav";
 import LanguageSwitcher from "@/components/language-switcher";
 import { useLocale, useT } from "@/context/locale-context";
@@ -71,6 +72,9 @@ const FilteringPanel = lazy(() => import("@/components/filtering-panel"));
 const DoctorPanel = lazy(() => import("@/components/doctor-panel"));
 const ParquetTablePanel = lazy(
   () => import("@/components/parquet-table-panel"),
+);
+const DatasetReviewPanel = lazy(
+  () => import("@/components/dataset-review-panel"),
 );
 // Recharts is ~150KB gz and not above-the-fold (videos render first on the
 // Episodes tab). Lazy-load it so the initial chunk can ship faster and
@@ -120,7 +124,8 @@ type ActiveTab =
   | "doctor"
   | "filtering"
   | "urdf"
-  | "parquet";
+  | "parquet"
+  | "workbench";
 
 // Subscribes to `currentTime` so its parent doesn't have to. Keeping this
 // in a leaf component means the throttled time ticks (~12.5/s during
@@ -438,6 +443,7 @@ function EpisodeViewerInner({
           "filtering",
           "urdf",
           "parquet",
+          "workbench",
         ].includes(stored)
       ) {
         return stored as ActiveTab;
@@ -592,6 +598,7 @@ function EpisodeViewerInner({
   const [episodeLengthStats, setEpisodeLengthStats] =
     useState<EpisodeLengthStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState<string | null>(null);
   const statsLoadedRef = useRef(false);
   const [episodeFramesData, setEpisodeFramesData] =
     useState<EpisodeFramesData | null>(null);
@@ -625,6 +632,7 @@ function EpisodeViewerInner({
     framesLoadedRef.current = false;
     insightsLoadedRef.current = false;
     setEpisodeLengthStats(null);
+    setStatsError(null);
     setEpisodeFramesData(null);
     setCrossEpData(null);
   }, [datasetInfo.repoId]);
@@ -653,6 +661,7 @@ function EpisodeViewerInner({
     if (statsLoadedRef.current) return;
     statsLoadedRef.current = true;
     setStatsLoading(true);
+    setStatsError(null);
     setColumnMinMax(computeColumnMinMax(data.chartDataGroups));
     if (repoId) {
       getDatasetVersionAndInfo(repoId)
@@ -664,7 +673,10 @@ function EpisodeViewerInner({
           if (!mountedRef.current) return;
           setEpisodeLengthStats(result);
         })
-        .catch(() => {})
+        .catch((error) => {
+          if (!mountedRef.current) return;
+          setStatsError(error instanceof Error ? error.message : String(error));
+        })
         .finally(() => {
           if (mountedRef.current) setStatsLoading(false);
         });
@@ -725,6 +737,7 @@ function EpisodeViewerInner({
   useEffect(() => {
     if (activeTab === "statistics") loadStats();
     if (activeTab === "doctor") loadStats();
+    if (activeTab === "workbench") loadStats();
     if (activeTab === "frames") loadFrames();
     if (activeTab === "insights") loadInsights();
     if (activeTab === "filtering") {
@@ -738,6 +751,7 @@ function EpisodeViewerInner({
     setActiveTab(tab);
     if (tab === "statistics") loadStats();
     if (tab === "doctor") loadStats();
+    if (tab === "workbench") loadStats();
     if (tab === "frames") loadFrames();
     if (tab === "insights") loadInsights();
     if (tab === "filtering") {
@@ -1006,6 +1020,11 @@ function EpisodeViewerInner({
           "parquet",
           t("viewer.tab.parquet"),
           t("viewer.tab.parquetTitle"),
+        )}
+        {renderTab(
+          "workbench",
+          t("viewer.tab.workbench"),
+          t("viewer.tab.workbenchTitle"),
         )}
         <div className="ml-auto flex shrink-0 items-center gap-2 pr-3">
           <Link
@@ -1382,6 +1401,22 @@ function EpisodeViewerInner({
                 episodeId={episodeId}
               />
             </Suspense>
+          )}
+
+          {activeTab === "workbench" && (
+            <DatasetReviewErrorBoundary>
+              <Suspense fallback={<Loading />}>
+                <DatasetReviewPanel
+                  datasetInfo={datasetInfo}
+                  episodeLengthStats={episodeLengthStats}
+                  episodeLengthStatsLoading={statsLoading}
+                  episodeLengthStatsError={statsError}
+                  onRetryEpisodeStats={loadStats}
+                  encodedPath={encodedDatasetPath}
+                  datasetName={datasetDisplayName}
+                />
+              </Suspense>
+            </DatasetReviewErrorBoundary>
           )}
         </div>
       </div>
