@@ -40,8 +40,9 @@ function headPoseRow(
   timestamp: number,
   source: "action" | "observation.state",
   x: number,
+  label = "head",
 ): Record<string, number> {
-  const prefix = `${source} | head`;
+  const prefix = `${source} | ${label}`;
   return {
     timestamp,
     [`${prefix}.x`]: x,
@@ -117,6 +118,20 @@ describe("TacCap gripper replay", () => {
     expect(extractTacCapHeadTrack(rows, "observation.state")?.source).toBe(
       "observation.state",
     );
+  });
+
+  test("accepts any complete pose label containing head", () => {
+    for (const label of ["head_camera", "camera_head"]) {
+      const rows = [0, 1].map((timestamp) => ({
+        ...poseRow(timestamp, "action", "left", timestamp),
+        ...headPoseRow(timestamp, "action", timestamp, label),
+      }));
+
+      const track = extractTacCapHeadTrack(rows, "action");
+      expect(track?.source).toBe("action");
+      expect(track?.pose.label).toBe(label);
+      expect(track?.pose.points).toEqual([0, 2, 3, 1, 2, 3]);
+    }
   });
 
   test("does not invent a head trajectory when only gripper poses exist", () => {
