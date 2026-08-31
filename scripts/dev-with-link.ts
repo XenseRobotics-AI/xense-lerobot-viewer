@@ -2,11 +2,15 @@
 import { spawn } from "node:child_process";
 import { discoverLocalDatasets } from "../src/lib/local-datasets-discovery";
 
-const child = spawn(process.execPath, ["x", "next", "dev", ...process.argv.slice(2)], {
-  cwd: process.cwd(),
-  env: process.env,
-  stdio: ["inherit", "pipe", "pipe"],
-});
+const child = spawn(
+  process.execPath,
+  ["x", "next", "dev", ...process.argv.slice(2)],
+  {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: ["inherit", "pipe", "pipe"],
+  },
+);
 
 let announced = false;
 const workbenchLinkPromise = discoverWorkbenchLink();
