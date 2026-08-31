@@ -46,6 +46,11 @@ import {
   tacCapRecordedTcpSceneMatrix,
   tacCapRecordedTcpToRootMatrix,
 } from "@/utils/taccapGripperTransforms";
+import {
+  isGripperDriveJoint,
+  mapNormalizedGripperToJoint,
+  type UrdfJointLimit,
+} from "@/utils/urdfGripperMapping";
 
 const SERIES_DELIM = CHART_CONFIG.SERIES_NAME_DELIMITER;
 const DEG2RAD = Math.PI / 180;
@@ -382,8 +387,12 @@ function applyTacCapGripperFrame(
   recordedTcpToRoot: THREE.Matrix4,
   frame: TacCapGripperFrame,
 ) {
-  // joint1 mimics joint2 with multiplier -1 in both supplied URDFs.
-  robot.setJointValue("joint2", -frame.opening);
+  // joint2 mimics joint1 with multiplier -1 in both bundled URDFs.
+  const driveJoint = robot.joints.joint1;
+  robot.setJointValue(
+    "joint1",
+    mapNormalizedGripperToJoint(frame.opening, driveJoint.limit),
+  );
   robot.matrix.copy(tacCapLink4SceneMatrix(frame)).multiply(recordedTcpToRoot);
   robot.matrixWorldNeedsUpdate = true;
   robot.updateMatrixWorld(true);
@@ -1202,7 +1211,9 @@ function RobotScene({
 }: {
   urdfUrl: string;
   jointValues: Record<string, number>;
-  onJointsLoaded: (names: string[]) => void;
+  onJointsLoaded: (
+    joints: Array<{ name: string; limit: UrdfJointLimit }>,
+  ) => void;
   trailEnabled: boolean;
   trailResetKey: string;
   scale: number;
@@ -1551,7 +1562,10 @@ function RobotScene({
               j.jointType === "continuous" ||
               j.jointType === "prismatic",
           )
-          .map((j) => j.name);
+          .map((j) => ({
+            name: j.name,
+            limit: { lower: j.limit.lower, upper: j.limit.upper },
+          }));
         onJointsLoaded(movable);
       },
       undefined,
@@ -1751,11 +1765,23 @@ export default function URDFViewer({
     return (totalFrames - 1) / span;
   }, [chartData, totalFrames, fps]);
 
-  // URDF joint names
-  const [urdfJointNames, setUrdfJointNames] = useState<string[]>([]);
+  // URDF joint names and limits
+  const [urdfJoints, setUrdfJoints] = useState<
+    Array<{ name: string; limit: UrdfJointLimit }>
+  >([]);
   const onJointsLoaded = useCallback(
-    (names: string[]) => setUrdfJointNames(names),
+    (joints: Array<{ name: string; limit: UrdfJointLimit }>) =>
+      setUrdfJoints(joints),
     [],
+  );
+  const urdfJointNames = useMemo(
+    () => urdfJoints.map((joint) => joint.name),
+    [urdfJoints],
+  );
+  const urdfJointLimits = useMemo(
+    () =>
+      new Map(urdfJoints.map((joint) => [joint.name, joint.limit] as const)),
+    [urdfJoints],
   );
 
   // Feature groups
@@ -1947,27 +1973,6 @@ export default function URDFViewer({
     [urdfJointNames],
   );
 
-  // Auto-detect gripper column range for linear mapping to 0-0.044m
-  const gripperRanges = useMemo(() => {
-    const ranges: Record<string, { min: number; max: number }> = {};
-    for (const jn of urdfJointNames) {
-      if (!jn.toLowerCase().includes("finger_joint1")) continue;
-      const col = mapping[jn];
-      if (!col) continue;
-      let min = Infinity,
-        max = -Infinity;
-      for (const row of chartData) {
-        const v = row[col];
-        if (typeof v === "number") {
-          if (v < min) min = v;
-          if (v > max) max = v;
-        }
-      }
-      if (min < max) ranges[jn] = { min, max };
-    }
-    return ranges;
-  }, [chartData, mapping, urdfJointNames]);
-
   // Compute joint values for current frame
   const jointValues = useMemo(() => {
     if (totalFrames === 0 || urdfJointNames.length === 0) return {};
@@ -1982,15 +1987,13 @@ export default function URDFViewer({
       if (!col || typeof row[col] !== "number") continue;
       const raw = row[col];
 
-      if (jn.toLowerCase().includes("finger_joint1")) {
-        // Map gripper range → 0-0.044m using auto-detected min/max
-        const range = gripperRanges[jn];
-        if (range) {
-          const t = (raw - range.min) / (range.max - range.min);
-          values[jn] = t * 0.044;
-        } else {
-          values[jn] = (raw / 100) * 0.044; // fallback: assume 0-100
-        }
+      if (isGripperDriveJoint(jn)) {
+        // Dataset gripper commands are normalized to [0, 1]. Map that unit
+        // opening directly to the URDF's maximum signed opening limit.
+        const limit = urdfJointLimits.get(jn);
+        values[jn] = limit
+          ? mapNormalizedGripperToJoint(raw, limit)
+          : Math.max(0, Math.min(1, raw));
       } else {
         revoluteValues.push(raw);
         revoluteNames.push(jn);
@@ -2010,7 +2013,7 @@ export default function URDFViewer({
       }
     }
     return values;
-  }, [chartData, frame, gripperRanges, mapping, totalFrames, urdfJointNames]);
+  }, [chartData, frame, mapping, totalFrames, urdfJointLimits, urdfJointNames]);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
