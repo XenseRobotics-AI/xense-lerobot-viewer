@@ -16,6 +16,8 @@ import {
   type SourceDelta,
 } from "@/utils/corpusHistory";
 import {
+  SYNC_DISABLED,
+  SYNC_DISABLED_REASON,
   listSyncCandidates,
   runSync,
   type SyncProgress,
@@ -314,12 +316,19 @@ function SyncBlock({
         <button
           type="button"
           onClick={onList}
-          className="rounded-md bg-[var(--accent)] px-3.5 py-1.5 text-xs font-semibold text-slate-950 transition-opacity hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
+          // Sync is off while the corpus layout is being reorganised (see
+          // SYNC_DISABLED in `@/utils/syncClient`). The route enforces it with
+          // a 503; disabling here just avoids offering a dead button.
+          disabled={SYNC_DISABLED}
+          title={SYNC_DISABLED ? SYNC_DISABLED_REASON : undefined}
+          className="rounded-md bg-[var(--accent)] px-3.5 py-1.5 text-xs font-semibold text-slate-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
         >
           {t("source.syncButton")}
         </button>
         <span className="text-[11px] text-[var(--text-faint)]">
-          {t("source.syncHint", { source })}
+          {SYNC_DISABLED
+            ? SYNC_DISABLED_REASON
+            : t("source.syncHint", { source })}
         </span>
         {state.kind === "error" && (
           <p className="w-full text-xs text-red-300">{state.message}</p>

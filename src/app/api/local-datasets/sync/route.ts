@@ -54,6 +54,34 @@ const REPO_PATTERN = new RegExp(
 const HF_MIRROR = "https://hf-mirror.com";
 const LIST_TIMEOUT_MS = 120_000;
 
+/**
+ * Sync is switched off (2026-09-01, by decision).
+ *
+ * The local corpus was reorganised from sibling directories (`TacVerse`,
+ * `TacVerse-RAW`, `TacVerse-Failed`) into `TacVerse/{merged,raw,failed,
+ * released,in-processing}/…`. That breaks the contract this path is built on:
+ * `scripts/sync_hf_dataset.py:repo_target()` writes to `<root>/<org>/<name>`,
+ * and `TacVerse` is *both* the Hugging Face org slug and the new container
+ * directory. A sync would therefore recreate `TacVerse/<name>` beside
+ * `TacVerse/merged/<name>` and re-fetch roughly 500 GB — silently, as a
+ * duplication rather than an error.
+ *
+ * The machinery below is deliberately left intact. Re-enabling means fixing
+ * `repo_target()` to target the right sub-directory — and `sync_fast.py` in
+ * the engine's work tree, which documents itself as sharing that contract —
+ * not just deleting this flag.
+ */
+// Annotated `boolean` rather than inferred: a literal `true` narrows the type
+// and makes everything past the guard unreachable code to the compiler, which
+// is exactly the machinery we are deliberately keeping compilable.
+const SYNC_DISABLED: boolean = true;
+const SYNC_DISABLED_REASON =
+  "Hugging Face sync is disabled. The local corpus moved to " +
+  "TacVerse/{merged,raw,failed,released,in-processing}/…, and the " +
+  "<root>/<org>/<name> layout this sync writes to would recreate the old " +
+  "paths and re-download the corpus. Re-enable only together with a fix to " +
+  "sync_hf_dataset.py:repo_target().";
+
 /** One sync at a time, process-wide: concurrent runs would write the same files. */
 let activeSync: { source: string; startedAt: number } | null = null;
 
@@ -314,6 +342,12 @@ function resolveTarget(body: {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
+  // Refuse before parsing anything: the listing pass transfers no data, but a
+  // caller who gets a listing back reasonably expects the confirm step to work.
+  if (SYNC_DISABLED) {
+    return Response.json({ error: SYNC_DISABLED_REASON }, { status: 503 });
+  }
+
   let body: {
     source?: unknown;
     repo?: unknown;
