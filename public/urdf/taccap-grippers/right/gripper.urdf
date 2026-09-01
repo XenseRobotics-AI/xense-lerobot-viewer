@@ -28,7 +28,7 @@
     <parent link="base_link" />
     <child link="link1" />
     <axis xyz="0 0 -1" />
-    <limit lower="0" upper="0.5102470068205421" effort="1" velocity="1" />
+    <limit lower="0" upper="0.5047492196767601" effort="1" velocity="1" />
   </joint>
 
   <link name="link2">
@@ -42,7 +42,7 @@
     <parent link="base_link" />
     <child link="link2" />
     <axis xyz="0 0 -1" />
-    <limit lower="-0.5102470068205421" upper="0" effort="1" velocity="1" />
+    <limit lower="-0.5047492196767601" upper="0" effort="1" velocity="1" />
     <mimic joint="joint1" multiplier="-1" offset="0" />
   </joint>
 

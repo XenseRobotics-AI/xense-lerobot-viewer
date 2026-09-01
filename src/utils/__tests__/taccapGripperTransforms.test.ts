@@ -8,12 +8,12 @@ import {
   tacCapRecordedTcpToRootMatrix,
 } from "@/utils/taccapGripperTransforms";
 
-const TACCAP_MAX_FINGER_ANGLE_DEGREES = 29.235;
+const TACCAP_MAX_FINGER_ANGLE_DEGREES = 28.92;
 const TACCAP_MAX_FINGER_ANGLE_RADIANS =
   (TACCAP_MAX_FINGER_ANGLE_DEGREES * Math.PI) / 180;
 
 describe("TacCap replay coordinate transforms", () => {
-  test("uses joint1 as the drive joint and gives both fingers a 29.235 degree range", () => {
+  test("uses joint1 as the drive joint and gives both fingers a 28.92 degree range", () => {
     for (const side of ["left", "right"] as const) {
       const urdf = readFileSync(
         resolve(`public/urdf/taccap-grippers/${side}/gripper.urdf`),

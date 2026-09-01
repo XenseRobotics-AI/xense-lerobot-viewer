@@ -15,6 +15,6 @@ These local assets power the `3D Replay` view for datasets whose
   translation. Both bundled URDFs define link4 with the same canonical X/Y
   orientation. The left link4 STL keeps its SolidWorks `-90°` Z correction on
   the `<visual>` origin only, so it does not rotate the link4 coordinate frame.
-- `joint1` is driven from `0` to `29.235°` (`0.5102470068205421 rad`);
+- `joint1` is driven from `0` to `28.92°` (`0.5047492196767601 rad`);
   `joint2` mimics it with multiplier `-1`, so both fingers move through the
   same range in opposite directions.
