@@ -45,6 +45,11 @@ describe("shapeAnomalyOf", () => {
     expect(shapeAnomalyOf(20, 8)).toBe(true);
     expect(shapeAnomalyOf(29, 6)).toBe(true);
   });
+
+  test("accepts the XTac-UMI 29-dim + 8-stream shape", () => {
+    expect(shapeAnomalyOf(29, 8, "xtac-umi-g1")).toBe(false);
+    expect(shapeAnomalyOf(20, 8, "xtac-umi-g1")).toBe(true);
+  });
 });
 
 describe("isAfterCutoff", () => {

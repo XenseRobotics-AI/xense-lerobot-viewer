@@ -21,7 +21,11 @@ export function isG1Robot(robotType: string | null): boolean {
 
 export function isTacCapRobot(robotType: string | null): boolean {
   if (!robotType) return false;
-  return robotType.toLowerCase().includes("bi_taccap_gripper");
+  const lower = robotType.toLowerCase();
+  // XTac-UMI is a G1-mounted UMI gripper. Its type name contains `g1`, but
+  // it must use the project-local UMI gripper scene rather than Unitree's
+  // full-body URDF. Keep the explicit legacy TacCap spelling as well.
+  return lower.includes("bi_taccap_gripper") || lower.includes("xtac-umi");
 }
 
 export function hasURDFSupport(robotType: string | null): boolean {

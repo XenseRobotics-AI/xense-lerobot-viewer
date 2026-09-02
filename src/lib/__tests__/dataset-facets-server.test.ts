@@ -81,17 +81,22 @@ describe("computeFacets", () => {
   test("counts video streams and head streams from features", async () => {
     const dir = path.join(await scratch(), "taccap-g1-x-0822");
     await fs.mkdir(dir, { recursive: true });
-    const facets = await computeFacets(dir, "TacVerse/raw/taccap-g1-x-0822", {
-      "observation.state": { shape: [20] },
-      "observation.images.left_wrist": {},
-      "observation.images.right_wrist": {},
-      "observation.images.left_head": {},
-      "observation.images.right_head": {},
-      "observation.images.left_tactile_left": {},
-      "observation.images.left_tactile_right": {},
-      "observation.images.right_tactile_left": {},
-      "observation.images.right_tactile_right": {},
-    });
+    const facets = await computeFacets(
+      dir,
+      "TacVerse/raw/taccap-g1-x-0822",
+      {
+        "observation.state": { shape: [20] },
+        "observation.images.left_wrist": {},
+        "observation.images.right_wrist": {},
+        "observation.images.left_head": {},
+        "observation.images.right_head": {},
+        "observation.images.left_tactile_left": {},
+        "observation.images.left_tactile_right": {},
+        "observation.images.right_tactile_left": {},
+        "observation.images.right_tactile_right": {},
+      },
+      "bi_taccap_gripper",
+    );
     expect(facets.bucket).toBe("raw");
     expect(facets.videoStreams).toBe(8);
     expect(facets.headStreams).toBe(2);
@@ -108,5 +113,34 @@ describe("computeFacets", () => {
     expect(facets.videoStreams).toBe(0);
     // 0 streams differs from the norm, so it is flagged rather than passed over.
     expect(facets.shapeAnomaly).toBe(true);
+  });
+
+  test("recognises the XTac-UMI 29-dim + 8-stream shape", async () => {
+    const dir = path.join(await scratch(), "xtac-umi-g1-0822");
+    await fs.mkdir(dir, { recursive: true });
+    const features: Record<string, { shape?: number[] }> = {
+      "observation.state": { shape: [29] },
+    };
+    for (const key of [
+      "left_wrist",
+      "right_wrist",
+      "left_head",
+      "right_head",
+      "left_tactile_left",
+      "left_tactile_right",
+      "right_tactile_left",
+      "right_tactile_right",
+    ]) {
+      features[`observation.images.${key}`] = {};
+    }
+    const facets = await computeFacets(
+      dir,
+      "TacVerse/raw/xtac-umi-g1-0822",
+      features,
+      "xtac-umi-g1",
+    );
+    expect(facets.videoStreams).toBe(8);
+    expect(facets.stateDim).toBe(29);
+    expect(facets.shapeAnomaly).toBe(false);
   });
 });
