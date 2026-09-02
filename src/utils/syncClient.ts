@@ -15,6 +15,23 @@ import { tStandalone } from "@/i18n/standalone";
 
 const SYNC_URL = "/api/local-datasets/sync";
 
+/**
+ * Sync is switched off (2026-09-01, by decision). The flag that actually
+ * enforces it lives in `src/app/api/local-datasets/sync/route.ts`; this one
+ * exists so the UI can disable its entry points rather than offer a button
+ * whose only possible outcome is a 503.
+ *
+ * The corpus moved to `TacVerse/{merged,raw,failed,released,in-processing}/…`,
+ * while `scripts/sync_hf_dataset.py:repo_target()` writes to
+ * `<root>/<org>/<name>` — and `TacVerse` is *also* the Hugging Face org slug.
+ * A sync would therefore recreate the old paths beside the new ones and
+ * re-fetch the corpus. Re-enable both flags only together with a fix to that
+ * layout.
+ */
+export const SYNC_DISABLED = true;
+export const SYNC_DISABLED_REASON =
+  "Sync is disabled while the local corpus layout is being reorganised.";
+
 /** A whole Hugging Face org, or a single `owner/name` dataset. */
 export type SyncTarget = { source: string } | { repo: string };
 

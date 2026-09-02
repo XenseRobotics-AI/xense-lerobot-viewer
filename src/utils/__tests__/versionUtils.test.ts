@@ -203,6 +203,28 @@ describe("local dataset route helpers", () => {
       getLinkedHubDatasetRepoId(makeLocalRepoId("/tmp/lerobot-root")),
     ).toBe(null);
   });
+
+  test("skips the bucket segment for a corpus dataset", () => {
+    // Since 2026-09-01 TacVerse is stored as `TacVerse/<bucket>/<name>`. The
+    // bucket is local bookkeeping with no counterpart on the Hub, so the repo
+    // id is first + last. A strict two-segment rule would return null for the
+    // whole corpus — and null is also the legitimate "not from the Hub"
+    // answer, so every back-link would vanish with nothing to notice.
+    expect(
+      getLinkedHubDatasetRepoId(
+        makeLocalRepoId(
+          "/tmp/lerobot-root/TacVerse/merged/taccap-g1-wipe-mirror",
+        ),
+      ),
+    ).toBe("TacVerse/taccap-g1-wipe-mirror");
+    expect(
+      getLinkedHubDatasetRepoId(
+        makeLocalRepoId(
+          "/tmp/lerobot-root/TacVerse/raw/taccap-g1-wipe-mirror-0822",
+        ),
+      ),
+    ).toBe("TacVerse/taccap-g1-wipe-mirror-0822");
+  });
 });
 
 // ---------------------------------------------------------------------------

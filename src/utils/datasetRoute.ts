@@ -175,11 +175,33 @@ export function getDisplayNameForRepoId(repoId: string): string {
   return getLocalDatasetRelativePath(datasetPath) ?? datasetPath;
 }
 
+/**
+ * The Hugging Face `owner/name` a local dataset came from, or null when the
+ * path cannot name one.
+ *
+ * The relative path used to be exactly `<org>/<name>`, so a two-segment test
+ * was the whole rule. Since 2026-09-01 the TacVerse corpus is bucketed —
+ * `TacVerse/merged/<name>`, `TacVerse/raw/<name>`, … — and the middle segment
+ * is a local storage detail that has no counterpart on the Hub. A strict
+ * two-segment test would return null for every dataset in the corpus, and
+ * because null is also the legitimate answer for "not from the Hub", every
+ * back-link would simply vanish with nothing to notice.
+ *
+ * So: first and last segment, ignoring whatever buckets sit between them.
+ */
 export function getLinkedHubDatasetRepoId(repoId: string): string | null {
   if (!isLocalRepoId(repoId)) return repoId;
 
   const displayName = getDisplayNameForRepoId(repoId).trim();
-  return /^[^/\s]+\/[^/\s]+$/.test(displayName) ? displayName : null;
+  // `getDisplayNameForRepoId` falls back to the absolute path when the dataset
+  // is not under the root — `/tmp/lerobot-root` must not become the repo id
+  // `tmp/lerobot-root`. A leading separator is the tell.
+  if (displayName.startsWith("/")) return null;
+  const segments = displayName.split("/");
+  if (segments.length < 2 || segments.some((s) => !s || /\s/.test(s))) {
+    return null;
+  }
+  return `${segments[0]}/${segments[segments.length - 1]}`;
 }
 
 export function isAbsoluteDatasetPath(value: string): boolean {
