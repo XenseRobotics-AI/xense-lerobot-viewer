@@ -108,6 +108,8 @@ export const zh: Record<MessageKey, string> = {
   "grid.datePresetCutoff": "{date} 起",
   "grid.datePresetCutoffHint": "首发口径:{date} 及以后采集的",
   "grid.anomalyOnly": "只看形态异常（{count}）",
+  "grid.anomalyOnlyHint":
+    "正常形态：20 维 + 6 路，或 29 维 + 8 路；仅其他组合会标记为异常。",
   "grid.shapeBadge": "{dim} 维 + {streams} 路",
   "grid.bucketMerged": "已合并",
   "grid.bucketRaw": "按天原始",

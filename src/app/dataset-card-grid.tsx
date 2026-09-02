@@ -620,6 +620,7 @@ export default function DatasetCardGrid({
             <button
               type="button"
               onClick={() => setAnomalyOnly((v) => !v)}
+              title={t("grid.anomalyOnlyHint")}
               className={`ml-2 rounded-md border px-3 py-2 transition-colors ${
                 anomalyOnly
                   ? "border-amber-400/40 bg-amber-500/20 text-amber-100"

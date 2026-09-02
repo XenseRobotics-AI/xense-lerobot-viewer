@@ -101,6 +101,8 @@ export const en = {
   "grid.datePresetCutoffHint":
     "First-release rule: captured on or after {date}",
   "grid.anomalyOnly": "Odd shape only ({count})",
+  "grid.anomalyOnlyHint":
+    "Normal shapes: 20-dim + 6 streams or 29-dim + 8 streams. Only other combinations are flagged.",
   "grid.shapeBadge": "{dim}-dim + {streams} streams",
   "grid.bucketMerged": "merged",
   "grid.bucketRaw": "raw",
