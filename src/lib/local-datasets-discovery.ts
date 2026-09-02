@@ -217,7 +217,7 @@ async function walkForDatasets(
         probeIntegrity(currentDir, info),
         readDatasetTags(currentDir),
         directorySizeBytes(currentDir),
-        computeFacets(currentDir, relativePath, info.features, info.robot_type),
+        computeFacets(currentDir, relativePath, info.features),
       ]);
       const thumbnailPath =
         integrity.status === "ok" ? pickThumbnailVideoPath(info) : null;

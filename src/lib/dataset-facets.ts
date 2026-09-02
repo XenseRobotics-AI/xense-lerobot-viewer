@@ -48,8 +48,9 @@ export type DatasetFacets = {
   capturedTo: string | null;
   dateEvidence: DateEvidence;
   /**
-   * True when the dataset's shape deviates from the corpus norm (20-dim state,
-   * 6 video streams). The numbers themselves are `stateDim` / `videoStreams`
+   * True when the dataset's shape is neither supported corpus combination
+   * (20-dim + 6 streams or 29-dim + 8 streams). The numbers themselves are
+   * `stateDim` / `videoStreams`
    * below — this stays a plain flag so the badge text can be built in the UI
    * through i18n rather than baked into one language here.
    *
@@ -74,9 +75,11 @@ export const EMPTY_FACETS: DatasetFacets = {
   headStreams: 0,
 };
 
-/** Default shape for non-UMI datasets; XTac-UMI has its own 29/8 norm below. */
+/** Supported corpus shapes. Either complete combination is considered normal. */
 export const NORMAL_STATE_DIM = 20;
 export const NORMAL_VIDEO_STREAMS = 6;
+export const XTAC_UMI_STATE_DIM = 29;
+export const XTAC_UMI_VIDEO_STREAMS = 8;
 
 /** First release requires captures on or after this date. */
 export const CAPTURE_CUTOFF = "2026-08-15";
@@ -99,9 +102,8 @@ export function dateFromName(name: string): string | null {
 }
 
 /**
- * Flags a dataset whose state dimension or camera count departs from its
- * robot-specific norm. XTac-UMI uses 29 state dimensions and 8 video streams;
- * the remaining supported corpus uses the historical 20/6 shape.
+ * Flags a dataset whose state/video shape is not one of the two supported
+ * corpus combinations: the historical 20/6 shape or XTac-UMI's 29/8 shape.
  *
  * Both directions matter and neither is a superset of the other: the corpus
  * holds three datasets with head *video* but only 20 state dims, and one with
@@ -111,14 +113,12 @@ export function dateFromName(name: string): string | null {
 export function shapeAnomalyOf(
   stateDim: number | null,
   videoStreams: number,
-  robotType?: string | null,
 ): boolean {
-  const isXtacUmi = robotType?.toLowerCase().includes("xtac-umi") ?? false;
-  const expectedStateDim = isXtacUmi ? 29 : NORMAL_STATE_DIM;
-  const expectedVideoStreams = isXtacUmi ? 8 : NORMAL_VIDEO_STREAMS;
-  const dimOdd = stateDim !== null && stateDim !== expectedStateDim;
-  const streamsOdd = videoStreams !== expectedVideoStreams;
-  return dimOdd || streamsOdd;
+  if (stateDim === null) return true;
+  return !(
+    (stateDim === NORMAL_STATE_DIM && videoStreams === NORMAL_VIDEO_STREAMS) ||
+    (stateDim === XTAC_UMI_STATE_DIM && videoStreams === XTAC_UMI_VIDEO_STREAMS)
+  );
 }
 
 /** True when any part of the capture span is on or after the cutoff. */

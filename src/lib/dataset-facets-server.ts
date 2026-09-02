@@ -103,7 +103,6 @@ export async function computeFacets(
   datasetDir: string,
   relativePath: string,
   features: Record<string, { shape?: number[] }> | undefined,
-  robotType?: string | null,
 ): Promise<DatasetFacets> {
   const stateShape = features?.["observation.state"]?.shape;
   const stateDim =
@@ -118,7 +117,7 @@ export async function computeFacets(
   return {
     bucket: bucketOf(relativePath),
     ...(await readCaptureDates(datasetDir)),
-    shapeAnomaly: shapeAnomalyOf(stateDim, videoKeys.length, robotType),
+    shapeAnomaly: shapeAnomalyOf(stateDim, videoKeys.length),
     stateDim,
     videoStreams: videoKeys.length,
     headStreams,

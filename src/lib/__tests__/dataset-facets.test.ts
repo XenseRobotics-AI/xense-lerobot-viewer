@@ -34,8 +34,12 @@ describe("dateFromName", () => {
 });
 
 describe("shapeAnomalyOf", () => {
-  test("the corpus norm is not flagged", () => {
+  test("the supported 20-dim + 6-stream shape is not flagged", () => {
     expect(shapeAnomalyOf(20, 6)).toBe(false);
+  });
+
+  test("the supported 29-dim + 8-stream shape is not flagged", () => {
+    expect(shapeAnomalyOf(29, 8)).toBe(false);
   });
 
   test("flags both half-configured directions", () => {
@@ -46,9 +50,10 @@ describe("shapeAnomalyOf", () => {
     expect(shapeAnomalyOf(29, 6)).toBe(true);
   });
 
-  test("accepts the XTac-UMI 29-dim + 8-stream shape", () => {
-    expect(shapeAnomalyOf(29, 8, "xtac-umi-g1")).toBe(false);
-    expect(shapeAnomalyOf(20, 8, "xtac-umi-g1")).toBe(true);
+  test("flags every other complete shape", () => {
+    expect(shapeAnomalyOf(29, 6)).toBe(true);
+    expect(shapeAnomalyOf(20, 8)).toBe(true);
+    expect(shapeAnomalyOf(21, 6)).toBe(true);
   });
 });
 
