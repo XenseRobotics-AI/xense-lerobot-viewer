@@ -10,7 +10,9 @@ import {
   getWorkbenchOkrAchievementRate,
   workbenchDatasetName,
   workbenchGroupDatasetNames,
+  workbenchGroupSourceRepoIds,
   getWorkbenchDefaultDateRange,
+  getWorkbenchDefaultDateTimeRange,
   getWorkbenchLeftSnWorkstation,
   getWorkbenchLeftSnTargetHours,
   getWorkbenchOkrRewardAmount,
@@ -88,6 +90,17 @@ describe("getWorkbenchDefaultDateRange", () => {
       startDate: "2026-08-25",
       endDate: "2026-08-26",
     });
+  });
+});
+
+describe("getWorkbenchDefaultDateTimeRange", () => {
+  test("defaults to the previous local day 00:00 through today 00:00", () => {
+    expect(getWorkbenchDefaultDateTimeRange(new Date(2026, 7, 26, 12))).toEqual(
+      {
+        startDateTime: "2026-08-25T00:00",
+        endDateTime: "2026-08-26T00:00",
+      },
+    );
   });
 });
 
@@ -314,6 +327,47 @@ describe("normalizeWorkbenchDateRange", () => {
         "2026-08-20",
       ]),
     ).toEqual({ startDate: "2026-08-01", endDate: "2026-09-01" });
+  });
+});
+
+describe("workbench source repo ids", () => {
+  test("returns sorted relative paths for each robot_id group", () => {
+    const repos = workbenchGroupSourceRepoIds(
+      [
+        dataset("TacVerse/z-last", {
+          robotId: "robot-a",
+          dailyAdditions: [
+            { day: "2026-08-28", episodes: 1, frames: 3600, hours: 0.1 },
+          ],
+        }),
+        dataset("TacVerse/a-first", {
+          robotId: "robot-a",
+          dailyAdditions: [
+            { day: "2026-08-28", episodes: 2, frames: 7200, hours: 0.2 },
+          ],
+        }),
+        dataset("TacVerse/robot-b", {
+          robotId: "robot-b",
+          dailyAdditions: [
+            { day: "2026-08-28", episodes: 3, frames: 10800, hours: 0.3 },
+          ],
+        }),
+        dataset("TacVerse/out-of-range", {
+          robotId: "robot-a",
+          dailyAdditions: [
+            { day: "2026-08-27", episodes: 4, frames: 14400, hours: 0.4 },
+          ],
+        }),
+      ],
+      "robot_id",
+      { startDate: "2026-08-28", endDate: "2026-08-29" },
+    );
+
+    expect(repos.get("robot-a")).toEqual([
+      "TacVerse/a-first",
+      "TacVerse/z-last",
+    ]);
+    expect(repos.get("robot-b")).toEqual(["TacVerse/robot-b"]);
   });
 });
 

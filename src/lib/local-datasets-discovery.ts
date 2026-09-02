@@ -46,15 +46,18 @@ type LocalDatasetInfoJson = {
 type LocalDatasetHardwareUnit = {
   side?: unknown;
   gripper_sn?: unknown;
+  robot_id?: unknown;
   [key: string]: unknown;
 };
 
 type LocalDatasetHardwareEpoch = {
   units?: LocalDatasetHardwareUnit[];
+  robot_id?: unknown;
   [key: string]: unknown;
 };
 
 type LocalDatasetHardwareJson = {
+  robot_id?: unknown;
   units?: LocalDatasetHardwareUnit[];
   epochs?: LocalDatasetHardwareEpoch[];
   [key: string]: unknown;
@@ -65,6 +68,7 @@ export type LocalDatasetSummary = {
   encodedPath: string;
   codebase_version: string;
   robot_type: string | null;
+  robotId: string | null;
   leftGripperSn: string | null;
   total_episodes: number;
   total_frames: number;
@@ -107,14 +111,49 @@ async function readDatasetTags(datasetDir: string): Promise<DatasetTags> {
   }
 }
 
+function cleanString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function extractRobotId(input: unknown): string | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const parsed = input as LocalDatasetHardwareJson;
+  const topLevel = cleanString(parsed.robot_id);
+  if (topLevel) return topLevel;
+
+  const topLevelUnits = Array.isArray(parsed.units) ? parsed.units : [];
+  for (const unit of topLevelUnits) {
+    if (!unit || typeof unit !== "object") continue;
+    const nested = cleanString((unit as LocalDatasetHardwareUnit).robot_id);
+    if (nested) return nested;
+  }
+
+  const epochs = Array.isArray(parsed.epochs) ? parsed.epochs : [];
+  for (let index = epochs.length - 1; index >= 0; index -= 1) {
+    const epoch = epochs[index];
+    if (!epoch || typeof epoch !== "object") continue;
+    const candidate = epoch as LocalDatasetHardwareEpoch;
+    const value = cleanString(candidate.robot_id);
+    if (value) return value;
+    const units = Array.isArray(candidate.units) ? candidate.units : [];
+    for (const unit of units) {
+      if (!unit || typeof unit !== "object") continue;
+      const nested = cleanString((unit as LocalDatasetHardwareUnit).robot_id);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
 function extractLeftGripperSn(units: unknown): string | null {
   if (!Array.isArray(units)) return null;
   for (const unit of units) {
     if (!unit || typeof unit !== "object") continue;
     const record = unit as LocalDatasetHardwareUnit;
     if (record.side !== "left") continue;
-    if (typeof record.gripper_sn !== "string") continue;
-    const value = record.gripper_sn.trim();
+    const value = cleanString(record.gripper_sn);
     if (value) return value;
   }
   return null;
@@ -138,13 +177,27 @@ export function readDatasetHardwareValue(input: unknown): string | null {
   return null;
 }
 
-async function readDatasetHardware(datasetDir: string): Promise<string | null> {
+export function readDatasetHardwareRobotId(input: unknown): string | null {
+  return extractRobotId(input);
+}
+
+async function readDatasetHardware(datasetDir: string): Promise<{
+  robotId: string | null;
+  leftGripperSn: string | null;
+}> {
   const hardwarePath = path.join(datasetDir, "meta", "hardware.json");
   try {
     const raw = await fs.readFile(hardwarePath, "utf-8");
-    return readDatasetHardwareValue(JSON.parse(raw));
+    const parsed = JSON.parse(raw);
+    return {
+      robotId: extractRobotId(parsed),
+      leftGripperSn: readDatasetHardwareValue(parsed),
+    };
   } catch {
-    return null;
+    return {
+      robotId: null,
+      leftGripperSn: null,
+    };
   }
 }
 
@@ -269,7 +322,7 @@ async function walkForDatasets(
       .join("/");
     if (relativePath) {
       const encodedPath = encodeLocalDatasetPath(relativePath);
-      const [integrity, tags, leftGripperSn, sizeBytes] = await Promise.all([
+      const [integrity, tags, hardware, sizeBytes] = await Promise.all([
         probeIntegrity(currentDir, info),
         readDatasetTags(currentDir),
         readDatasetHardware(currentDir),
@@ -286,7 +339,8 @@ async function walkForDatasets(
         encodedPath,
         codebase_version: info.codebase_version,
         robot_type: info.robot_type ?? null,
-        leftGripperSn,
+        robotId: hardware.robotId,
+        leftGripperSn: hardware.leftGripperSn,
         total_episodes: info.total_episodes ?? 0,
         total_frames: info.total_frames ?? 0,
         total_tasks: info.total_tasks ?? 0,

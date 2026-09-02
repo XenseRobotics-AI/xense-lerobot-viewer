@@ -1,0 +1,36 @@
+{
+  "TacVerse": {
+    "enabled": true,
+    "dailyTargetHours": 6,
+    "levels": [
+      {
+        "id": "below-80",
+        "label": "不达标",
+        "minPercent": 0,
+        "maxPercent": 80,
+        "amount": -160
+      },
+      {
+        "id": "80-90",
+        "label": "接近",
+        "minPercent": 80,
+        "maxPercent": 90,
+        "amount": -60
+      },
+      {
+        "id": "90-100",
+        "label": "临界",
+        "minPercent": 90,
+        "maxPercent": 100,
+        "amount": 0
+      },
+      {
+        "id": "100-plus",
+        "label": "达标",
+        "minPercent": 100,
+        "maxPercent": null,
+        "amount": 200
+      }
+    ]
+  }
+}

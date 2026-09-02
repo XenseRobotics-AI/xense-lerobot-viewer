@@ -3,6 +3,12 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { resolveLocalDatasetRoot } from "@/lib/local-datasets-discovery";
 import {
+  resolveHfCatalogEndpoint,
+  resolveHfSyncEndpoint,
+} from "@/lib/hf-endpoints";
+import { resolveHfToken } from "@/lib/hf-token-store";
+import { addHfMirrorProxyBypass } from "@/lib/proxy-bypass";
+import {
   PythonUnavailableError,
   pythonSpawnEnv,
   resolvePython,
@@ -16,7 +22,8 @@ export const dynamic = "force-dynamic";
  * Manual Hugging Face sync — the viewer's only outbound network path.
  *
  * Browsing stays entirely local; this runs when someone presses Sync and
- * nowhere else. Transfers go through hf-mirror (see `scripts/sync_hf_dataset.py`).
+ * nowhere else. Bulk transfers go through hf-mirror (see `scripts/sync_hf_dataset.py`);
+ * metadata refreshes reuse the sync endpoint unless `HF_CATALOG_ENDPOINT` overrides it.
  *
  * Two targets, each in two steps:
  *   POST { source }                → list a whole org, transfer nothing
@@ -51,7 +58,8 @@ const REPO_PATTERN = new RegExp(
   `^${SOURCE_PATTERN.source.slice(1, -1)}/${SOURCE_PATTERN.source.slice(1, -1)}$`,
 );
 
-const HF_MIRROR = "https://hf-mirror.com";
+const HF_SYNC_ENDPOINT = resolveHfSyncEndpoint();
+const HF_CATALOG_ENDPOINT = resolveHfCatalogEndpoint();
 const LIST_TIMEOUT_MS = 120_000;
 
 /** One sync at a time, process-wide: concurrent runs would write the same files. */
@@ -80,22 +88,38 @@ type SyncRepoDetail = {
   error: string | null;
 };
 
-function scriptPath(): string {
-  return path.join(process.cwd(), "scripts", "sync_hf_dataset.py");
+function scriptPath(scriptName: string): string {
+  return path.join(process.cwd(), "scripts", scriptName);
+}
+
+function syncScriptPath(): string {
+  return scriptPath("sync_hf_dataset.py");
+}
+
+function statsScriptPath(): string {
+  return scriptPath("sync_hf_dataset_stats.py");
 }
 
 function spawnScript(
+  scriptFile: string,
   pythonBin: string,
   args: string[],
+  endpoint: string,
+  token: string | null,
 ): ChildProcessWithoutNullStreams {
-  return spawn(pythonBin, [scriptPath(), ...args], {
-    cwd: process.cwd(),
-    env: {
+  const env = addHfMirrorProxyBypass(
+    {
       ...pythonSpawnEnv(),
       // Belt and braces: the script also defaults this, but setting it here
       // means the mirror holds even if the script is run through a wrapper.
-      HF_ENDPOINT: process.env.HF_ENDPOINT || HF_MIRROR,
-    },
+      HF_ENDPOINT: endpoint,
+      ...(token ? { HF_TOKEN: token } : {}),
+    } as NodeJS.ProcessEnv,
+    endpoint,
+  );
+  return spawn(pythonBin, [scriptFile, ...args], {
+    cwd: process.cwd(),
+    env,
   });
 }
 
@@ -110,8 +134,11 @@ function syncPython(): Promise<ResolvedPython> {
 
 /** Run the script to completion, returning its parsed `result` event. */
 async function runToCompletion(
+  scriptFile: string,
   args: string[],
   timeoutMs: number,
+  endpoint: string,
+  token: string | null,
 ): Promise<{ result: SyncResult | null; error: string | null }> {
   let python: ResolvedPython;
   try {
@@ -129,7 +156,7 @@ async function runToCompletion(
   return new Promise((resolve) => {
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = spawnScript(python.bin, args);
+      child = spawnScript(scriptFile, python.bin, args, endpoint, token);
     } catch (err) {
       resolve({ result: null, error: `Failed to launch Python: ${err}` });
       return;
@@ -185,7 +212,13 @@ async function runToCompletion(
 }
 
 /** Pipe the script's NDJSON straight through to the client as it arrives. */
-function streamDownload(args: string[], pythonBin: string): Response {
+function streamDownload(
+  scriptFile: string,
+  args: string[],
+  pythonBin: string,
+  endpoint: string,
+  token: string | null,
+): Response {
   const encoder = new TextEncoder();
   return new Response(
     new ReadableStream<Uint8Array>({
@@ -211,7 +244,7 @@ function streamDownload(args: string[], pythonBin: string): Response {
 
         let child: ChildProcessWithoutNullStreams;
         try {
-          child = spawnScript(pythonBin, args);
+          child = spawnScript(scriptFile, pythonBin, args, endpoint, token);
         } catch (err) {
           send({ type: "error", error: `Failed to launch Python: ${err}` });
           activeSync = null;
@@ -319,6 +352,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     repo?: unknown;
     confirm?: unknown;
     force?: unknown;
+    metadataOnly?: unknown;
   };
   try {
     body = await request.json();
@@ -345,13 +379,54 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
+  let token: string | null = null;
+  try {
+    token = (await resolveHfToken(root)).token;
+  } catch {
+    token = null;
+  }
+
   const baseArgs = [...target.args, "--root", root];
+
+  if (body.metadataOnly === true) {
+    if (target.args[0] !== "--org") {
+      return Response.json(
+        { error: "Metadata-only sync requires an organization target." },
+        { status: 400 },
+      );
+    }
+
+    let python: ResolvedPython;
+    try {
+      python = await syncPython();
+    } catch (err) {
+      return Response.json(
+        {
+          error:
+            err instanceof PythonUnavailableError ? err.message : String(err),
+        },
+        { status: 502 },
+      );
+    }
+
+    activeSync = { source: target.label, startedAt: Date.now() };
+    return streamDownload(
+      statsScriptPath(),
+      body.force === true ? [...baseArgs, "--force"] : baseArgs,
+      python.bin,
+      HF_CATALOG_ENDPOINT,
+      token,
+    );
+  }
 
   // Listing pass — cheap, transfers nothing, and always runs first.
   if (body.confirm !== true) {
     const { result, error } = await runToCompletion(
+      syncScriptPath(),
       [...baseArgs, "--list-only"],
       LIST_TIMEOUT_MS,
+      HF_SYNC_ENDPOINT,
+      token,
     );
     if (!result) {
       return Response.json(
@@ -390,7 +465,10 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   activeSync = { source: target.label, startedAt: Date.now() };
   return streamDownload(
+    syncScriptPath(),
     body.force === true ? [...baseArgs, "--force"] : baseArgs,
     python.bin,
+    HF_SYNC_ENDPOINT,
+    token,
   );
 }

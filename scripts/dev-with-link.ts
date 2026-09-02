@@ -2,6 +2,9 @@
 import { spawn } from "node:child_process";
 import { discoverLocalDatasets } from "../src/lib/local-datasets-discovery";
 
+const WORKBENCH_ORG = "TacVerse";
+const WORKBENCH_URL = "http://192.168.200.11:3000";
+
 const child = spawn(
   process.execPath,
   ["x", "next", "dev", ...process.argv.slice(2)],
@@ -18,9 +21,8 @@ const workbenchLinkPromise = discoverWorkbenchLink();
 async function discoverWorkbenchLink(): Promise<string | null> {
   try {
     const { datasets } = await discoverLocalDatasets();
-    const dataset = datasets[0];
-    if (!dataset) return null;
-    return `http://localhost:3000/_local/${dataset.encodedPath}/episode_0?tab=workbench`;
+    if (datasets.length === 0) return null;
+    return `${WORKBENCH_URL}/?org=${encodeURIComponent(WORKBENCH_ORG)}`;
   } catch {
     return null;
   }
@@ -31,9 +33,9 @@ function maybeAnnounce(text: string): void {
   announced = true;
   void workbenchLinkPromise.then((link) => {
     if (link) {
-      console.log(`Workbench: ${link}`);
+      console.log(`TacVerse: ${link}`);
     } else {
-      console.log("Workbench: no local dataset found.");
+      console.log("TacVerse: no local dataset found.");
     }
   });
 }

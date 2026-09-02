@@ -1,16 +1,16 @@
 import path from "node:path";
 import { readCorpusHistory } from "@/lib/corpus-history-store";
 import { readDatasetTasks } from "@/lib/dataset-quality-loader";
-import {
-  readHfCatalog,
-  readHfChangeHistory,
-  type HfCatalogEntry,
-} from "@/lib/hf-catalog-cache";
+import { readHfCatalog, type HfCatalogEntry } from "@/lib/hf-catalog-cache";
 import { discoverLocalDatasets } from "@/lib/local-datasets-discovery";
 import {
   defaultWorkbenchWorkstationMappings,
   readWorkbenchWorkstationMappings,
 } from "@/lib/workbench-config-store";
+import {
+  defaultWorkbenchRewardRules,
+  readWorkbenchRewardRules,
+} from "@/lib/workbench-reward-store";
 import { computeCorpusStats } from "@/utils/corpusStats";
 import {
   computeDailyDelta,
@@ -43,6 +43,11 @@ type WorkbenchDatasetSummary = Awaited<
   uploaderDisplayName?: string | null;
   durationHours?: number | null;
   dailyAdditions?: WorkbenchDailyAddition[];
+};
+
+type NormalizedWorkbenchMappings = {
+  mappings: Record<string, string>;
+  legacyMappings: Record<string, string>;
 };
 
 function metadataFromCatalogEntry(
@@ -130,14 +135,13 @@ function dailyAdditionsForDataset(
     ReturnType<typeof discoverLocalDatasets>
   >["datasets"][number],
   remote: HfCatalogEntry | undefined,
-  changeHistoryAdditions: WorkbenchDailyAddition[] = [],
 ): WorkbenchDailyAddition[] {
   const suffixDay = datasetSuffixDay(
     dataset.relativePath,
     remote?.lastModified,
   );
-  if (!suffixDay) return changeHistoryAdditions;
-  if (!dataset.leftGripperSn) return [];
+  if (!suffixDay) return [];
+  if (!dataset.robotId && !dataset.leftGripperSn) return [];
   return [
     {
       day: suffixDay,
@@ -178,6 +182,45 @@ function applyCatalogMetadata(
     uploader: metadata.uploader,
     uploaderDisplayName: metadata.uploaderDisplayName,
     dailyAdditions,
+  };
+}
+
+function normalizeWorkbenchMappingsForResponse(
+  rawMappings: Record<string, string>,
+  datasets: readonly WorkbenchDatasetSummary[],
+): NormalizedWorkbenchMappings {
+  const robotIds = new Set(
+    datasets
+      .map((dataset) => dataset.robotId?.trim())
+      .filter(Boolean) as string[],
+  );
+  const leftSnToRobotId = new Map<string, string>();
+  for (const dataset of datasets) {
+    const leftSn = dataset.leftGripperSn?.trim();
+    const robotId = dataset.robotId?.trim();
+    if (leftSn && robotId) {
+      leftSnToRobotId.set(leftSn, robotId);
+    }
+  }
+
+  const normalized = new Map<string, string>();
+  const legacy = new Map<string, string>();
+  for (const [key, value] of Object.entries(rawMappings)) {
+    const robotId = robotIds.has(key)
+      ? key
+      : (leftSnToRobotId.get(key) ?? null);
+    if (robotId) {
+      normalized.set(robotId, value);
+      if (robotId !== key) legacy.set(key, value);
+      continue;
+    }
+    normalized.set(key, value);
+    legacy.set(key, value);
+  }
+
+  return {
+    mappings: Object.fromEntries(normalized.entries()),
+    legacyMappings: Object.fromEntries(legacy.entries()),
   };
 }
 
@@ -223,11 +266,11 @@ export async function GET(request: Request): Promise<Response> {
       organization,
       discovery.root,
     );
-    const catalog = await readCatalogByRepo(discovery.root, organization);
-    const changeHistory = await readHfChangeHistory(
-      discovery.root,
+    const rewardRules = await readWorkbenchRewardRules(
       organization,
+      discovery.root,
     );
+    const catalog = await readCatalogByRepo(discovery.root, organization);
     const workbenchDatasets: WorkbenchDatasetSummary[] = await Promise.all(
       datasets.map(async (dataset) => {
         const remote = catalog.get(dataset.relativePath)?.entry;
@@ -240,11 +283,7 @@ export async function GET(request: Request): Promise<Response> {
         return applyCatalogMetadata(
           withTasks,
           remote,
-          dailyAdditionsForDataset(
-            withTasks,
-            remote,
-            changeHistory.get(dataset.relativePath) ?? [],
-          ),
+          dailyAdditionsForDataset(withTasks, remote),
         );
       }),
     );
@@ -287,14 +326,27 @@ export async function GET(request: Request): Promise<Response> {
     };
     const delta = computeDailyDelta(scopedHistory, today, dayKey(now));
 
+    const normalizedStoredMappings = normalizeWorkbenchMappingsForResponse(
+      workstationMappings.mappings,
+      workbenchDatasets,
+    );
+    const normalizedDefaultMappings = normalizeWorkbenchMappingsForResponse(
+      defaultWorkbenchWorkstationMappings(organization),
+      workbenchDatasets,
+    );
     return Response.json({
       datasets: workbenchDatasets,
       errors,
       delta,
       workstationMappings: {
         ...workstationMappings,
-        defaults: defaultWorkbenchWorkstationMappings(organization),
+        mappings: normalizedStoredMappings.mappings,
+        legacyMappings: normalizedStoredMappings.legacyMappings,
+        defaults: normalizedDefaultMappings.mappings,
+        legacyDefaults: normalizedDefaultMappings.legacyMappings,
       },
+      rewardRules,
+      rewardRuleDefaults: defaultWorkbenchRewardRules(organization),
     });
   } catch (error) {
     return Response.json(

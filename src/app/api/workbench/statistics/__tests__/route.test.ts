@@ -86,16 +86,32 @@ describe("Workbench statistics route", () => {
             from_episode: 0,
             to_episode: 20,
             units: [
-              { side: "right", gripper_sn: "TCGU-right" },
-              { side: "left", gripper_sn: "TCGU01A28Z0041m" },
+              {
+                side: "right",
+                gripper_sn: "TCGU-right",
+                robot_id: "robot-older",
+              },
+              {
+                side: "left",
+                gripper_sn: "TCGU01A28Z0041m",
+                robot_id: "robot-older",
+              },
             ],
           },
           {
             from_episode: 20,
             to_episode: 40,
             units: [
-              { side: "right", gripper_sn: "TCGU-right" },
-              { side: "left", gripper_sn: "TCGU01A28Z0069m" },
+              {
+                side: "right",
+                gripper_sn: "TCGU-right",
+                robot_id: "robot-newer",
+              },
+              {
+                side: "left",
+                gripper_sn: "TCGU01A28Z0069m",
+                robot_id: "robot-newer",
+              },
             ],
           },
         ],
@@ -220,6 +236,7 @@ describe("Workbench statistics route", () => {
         uploader: string | null;
         uploaderDisplayName: string | null;
         leftGripperSn: string | null;
+        robotId: string | null;
         dailyAdditions: Array<{
           day: string;
           episodes: number;
@@ -237,7 +254,8 @@ describe("Workbench statistics route", () => {
     expect(response.status).toBe(200);
     expect(payload.workstationMappings).toMatchObject({
       source: "stored",
-      mappings: { TCGU01A28Z0069m: "D2" },
+      mappings: { "robot-newer": "D2" },
+      legacyMappings: { TCGU01A28Z0069m: "D2" },
     });
     expect(payload.workstationMappings.defaults.TCGU01A28Z0033m).toBe("N0");
     expect(payload.datasets.map((dataset) => dataset.relativePath)).toEqual([
@@ -259,6 +277,7 @@ describe("Workbench statistics route", () => {
       uploader: "alice",
       uploaderDisplayName: "Alice",
       leftGripperSn: "TCGU01A28Z0069m",
+      robotId: "robot-newer",
       dailyAdditions: [
         {
           day: "2026-08-18",
@@ -287,5 +306,147 @@ describe("Workbench statistics route", () => {
       uploader: "XR-Bot3",
       uploaderDisplayName: "洪锐",
     });
+  });
+  test("includes legacy left-SN-only datasets in daily additions", async () => {
+    await writeDataset(
+      "TacVerse/taccap-g1-insert-hook-assembly-0901",
+      {
+        total_episodes: 7,
+        total_frames: 25_200,
+        fps: 10,
+      },
+      {
+        units: [{ side: "left", gripper_sn: "TCGU01A28Z0041m" }],
+      },
+    );
+
+    const cacheDir = path.join(root, ".xense-viewer", "hf-catalog");
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(
+      path.join(cacheDir, "TacVerse.json"),
+      JSON.stringify({
+        org: "TacVerse",
+        datasets: [
+          {
+            repoId: "TacVerse/taccap-g1-insert-hook-assembly-0901",
+            lastModified: "2026-09-01T12:00:00Z",
+          },
+        ],
+      }),
+    );
+
+    const response = await GET(
+      new Request("http://localhost/api/workbench/statistics?org=TacVerse"),
+    );
+    const payload = (await response.json()) as {
+      datasets: Array<{
+        relativePath: string;
+        leftGripperSn: string | null;
+        robotId: string | null;
+        lastModified: string | null;
+        dailyAdditions: Array<{
+          day: string;
+          episodes: number;
+          frames: number;
+          hours: number;
+        }>;
+      }>;
+    };
+
+    const legacy = payload.datasets.find(
+      (dataset) =>
+        dataset.relativePath === "TacVerse/taccap-g1-insert-hook-assembly-0901",
+    );
+    expect(legacy).toBeDefined();
+    expect(legacy).toMatchObject({
+      lastModified: "2026-09-01T12:00:00Z",
+      leftGripperSn: "TCGU01A28Z0041m",
+      robotId: null,
+      dailyAdditions: [
+        {
+          day: "2026-09-01",
+          episodes: 7,
+          frames: 25_200,
+          hours: 0.7,
+        },
+      ],
+    });
+  });
+
+  test("does not date-bind datasets without an MMDD suffix", async () => {
+    await writeDataset(
+      "TacVerse/taccap-g1-wipe-mirror",
+      {
+        total_episodes: 9,
+        total_frames: 32_400,
+        fps: 10,
+      },
+      {
+        units: [
+          {
+            side: "left",
+            gripper_sn: "TCGU01A28Z0071m",
+            robot_id: "bi_taccap_8",
+          },
+        ],
+      },
+    );
+
+    const cacheDir = path.join(root, ".xense-viewer", "hf-catalog");
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(
+      path.join(cacheDir, "TacVerse.json"),
+      JSON.stringify({
+        org: "TacVerse",
+        datasets: [
+          {
+            repoId: "TacVerse/taccap-g1-wipe-mirror",
+            lastModified: "2026-09-01T12:00:00Z",
+          },
+        ],
+      }),
+    );
+    const changeHistoryPath = path.join(root, "hf_change_history.local.json");
+    process.env.TACVERSE_WORKBENCH_CHANGE_HISTORY = changeHistoryPath;
+    await fs.writeFile(
+      changeHistoryPath,
+      JSON.stringify({
+        version: 1,
+        repos: {
+          "TacVerse/taccap-g1-wipe-mirror": {
+            changes: [
+              {
+                dataset_name: "TacVerse/taccap-g1-wipe-mirror",
+                created_at: "2026-09-01T10:00:00Z",
+                episodes: 9,
+                frames: 32_400,
+                hours: 0.9,
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const response = await GET(
+      new Request("http://localhost/api/workbench/statistics?org=TacVerse"),
+    );
+    const payload = (await response.json()) as {
+      datasets: Array<{
+        relativePath: string;
+        dailyAdditions: Array<{
+          day: string;
+          episodes: number;
+          frames: number;
+          hours: number;
+        }>;
+      }>;
+    };
+
+    const datasetWithoutSuffix = payload.datasets.find(
+      (dataset) => dataset.relativePath === "TacVerse/taccap-g1-wipe-mirror",
+    );
+    expect(datasetWithoutSuffix).toBeDefined();
+    expect(datasetWithoutSuffix?.dailyAdditions).toEqual([]);
   });
 });

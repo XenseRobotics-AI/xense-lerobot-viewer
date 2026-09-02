@@ -6,6 +6,7 @@ export type WorkbenchRollupDimension =
   | "uploader"
   | "task"
   | "robot_type"
+  | "robot_id"
   | "left_gripper_sn"
   | "source";
 
@@ -13,6 +14,7 @@ export type WorkbenchRollupDataset = Pick<
   LocalDatasetSummary,
   "relativePath" | "total_episodes" | "total_frames" | "fps" | "robot_type"
 > & {
+  robotId?: string | null;
   leftGripperSn?: string | null;
   uploader?: string | null;
   uploaderName?: string | null;
@@ -34,6 +36,11 @@ export type WorkbenchRollupRow = {
 export type WorkbenchRollupDateRange = {
   startDate: string | null;
   endDate: string | null;
+};
+
+export type WorkbenchDateTimeRange = {
+  startDateTime: string;
+  endDateTime: string;
 };
 
 export type WorkbenchRollupDailyRow = {
@@ -173,11 +180,18 @@ export function formatWorkbenchRewardCoins(value: number): string {
   return WORKBENCH_LEFT_SN_REWARD_LABEL.repeat(coins);
 }
 
+export function getWorkbenchRobotIdWorkstation(
+  robotId: string,
+  mappings: Record<string, string> = {},
+): string {
+  return mappings[robotId] ?? "—";
+}
+
 export function getWorkbenchLeftSnWorkstation(
   leftSn: string,
   mappings: Record<string, string> = {},
 ): string {
-  return mappings[leftSn] ?? "—";
+  return getWorkbenchRobotIdWorkstation(leftSn, mappings);
 }
 
 function nonNegativeCount(value: number): number {
@@ -242,6 +256,37 @@ export function workbenchDatasetName(relativePath: string): string {
   return relativePath.split("/").filter(Boolean).at(-1) ?? relativePath;
 }
 
+function padWorkbenchDateTime(value: number): string {
+  return value.toString().padStart(2, "0");
+}
+
+function formatWorkbenchDateTimeLocal(value: Date): string {
+  return (
+    [
+      value.getFullYear(),
+      padWorkbenchDateTime(value.getMonth() + 1),
+      padWorkbenchDateTime(value.getDate()),
+    ].join("-") +
+    "T" +
+    padWorkbenchDateTime(value.getHours()) +
+    ":" +
+    padWorkbenchDateTime(value.getMinutes())
+  );
+}
+
+export function getWorkbenchDefaultDateTimeRange(
+  now: Date = new Date(),
+): WorkbenchDateTimeRange {
+  const end = new Date(now);
+  end.setHours(0, 0, 0, 0);
+  const start = new Date(end);
+  start.setDate(start.getDate() - 1);
+  return {
+    startDateTime: formatWorkbenchDateTimeLocal(start),
+    endDateTime: formatWorkbenchDateTimeLocal(end),
+  };
+}
+
 export function workbenchRollupLabel(
   dataset: WorkbenchRollupDataset,
   dimension: WorkbenchRollupDimension,
@@ -257,6 +302,7 @@ export function workbenchRollupLabel(
   }
   if (dimension === "task") return workbenchTaskPrefix(dataset.relativePath);
   if (dimension === "robot_type") return dataset.robot_type || "—";
+  if (dimension === "robot_id") return dataset.robotId || "—";
   if (dimension === "left_gripper_sn") return dataset.leftGripperSn || "—";
   return getDatasetPrefix(dataset.relativePath);
 }
@@ -290,6 +336,38 @@ export function workbenchGroupDatasetNames(
     Array.from(groups.entries()).map(([group, names]) => [
       group,
       Array.from(names).sort((left, right) => left.localeCompare(right)),
+    ]),
+  );
+}
+
+export function workbenchGroupSourceRepoIds(
+  datasets: readonly WorkbenchRollupDataset[],
+  dimension: WorkbenchRollupDimension,
+  options: {
+    startDate?: string | null;
+    endDate?: string | null;
+  } = {},
+): Map<string, string[]> {
+  const availableDays = workbenchAdditionAvailableDays(datasets);
+  const range = normalizeWorkbenchDateRange(
+    options.startDate,
+    options.endDate,
+    availableDays,
+  );
+  const groups = new Map<string, Set<string>>();
+
+  for (const dataset of datasets) {
+    if (additionsInRange(dataset, range).length === 0) continue;
+    const group = workbenchRollupLabel(dataset, dimension);
+    const repos = groups.get(group) ?? new Set<string>();
+    repos.add(dataset.relativePath);
+    groups.set(group, repos);
+  }
+
+  return new Map(
+    Array.from(groups.entries()).map(([group, repos]) => [
+      group,
+      Array.from(repos).sort((left, right) => left.localeCompare(right)),
     ]),
   );
 }

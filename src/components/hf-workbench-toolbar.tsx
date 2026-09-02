@@ -141,7 +141,7 @@ export default function HfWorkbenchToolbar({
         message:
           catalogCount === null
             ? "统计缓存已刷新。"
-            : `统计缓存已刷新：${catalogCount} 个数据集。`,
+            : `统计缓存已刷新：${catalogCount} 个数据集（当前凭据可见）。`,
       });
     } catch (err) {
       if (!controller.signal.aborted) {

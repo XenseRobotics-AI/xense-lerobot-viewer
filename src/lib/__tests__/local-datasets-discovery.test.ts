@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   directorySizeBytes,
+  readDatasetHardwareRobotId,
   readDatasetHardwareValue,
 } from "@/lib/local-datasets-discovery";
 
@@ -55,6 +56,35 @@ describe("readDatasetHardwareValue", () => {
   });
 });
 
+describe("readDatasetHardwareRobotId", () => {
+  test("reads the top-level robot_id field", () => {
+    expect(
+      readDatasetHardwareRobotId({
+        robot_id: "TacVerse-A01",
+        units: [{ side: "left", gripper_sn: "TCGU01A28Z0033m" }],
+      }),
+    ).toBe("TacVerse-A01");
+  });
+
+  test("reads the top-level units robot_id field", () => {
+    expect(
+      readDatasetHardwareRobotId({
+        units: [{ side: "left", robot_id: "TacVerse-units" }],
+      }),
+    ).toBe("TacVerse-units");
+  });
+
+  test("falls back to the latest epoch robot_id field", () => {
+    expect(
+      readDatasetHardwareRobotId({
+        epochs: [
+          { robot_id: "TacVerse-epoch-1" },
+          { robot_id: "TacVerse-epoch-2" },
+        ],
+      }),
+    ).toBe("TacVerse-epoch-2");
+  });
+});
 describe("directorySizeBytes", () => {
   test("sums files across nested directories", async () => {
     const root = await tempTree();

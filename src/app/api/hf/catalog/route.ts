@@ -3,6 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { resolveLocalDatasetRoot } from "@/lib/local-datasets-discovery";
+import { resolveHfCatalogEndpoint } from "@/lib/hf-endpoints";
 import {
   PythonUnavailableError,
   pythonSpawnEnv,
@@ -16,13 +17,14 @@ import {
 } from "@/lib/hf-catalog-cache";
 import { resolveHfToken } from "@/lib/hf-token-store";
 import { redactHfSecrets } from "@/lib/hf-identity";
+import { addHfMirrorProxyBypass } from "@/lib/proxy-bypass";
 import { isSameOriginRequest } from "@/lib/request-security";
 import { normalizeHfSource } from "@/utils/hfValidation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const DEFAULT_ENDPOINT = "https://huggingface.co";
+const CATALOG_ENDPOINT = resolveHfCatalogEndpoint();
 const CATALOG_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const MAX_ERROR_LENGTH = 4_000;
 
@@ -46,10 +48,13 @@ function spawnCatalog(
   force: boolean,
   token: string | null,
 ): ChildProcessWithoutNullStreams {
-  const env = {
-    ...pythonSpawnEnv(),
-    HF_ENDPOINT: process.env.HF_CATALOG_ENDPOINT || DEFAULT_ENDPOINT,
-  } as NodeJS.ProcessEnv;
+  const env = addHfMirrorProxyBypass(
+    {
+      ...pythonSpawnEnv(),
+      HF_ENDPOINT: CATALOG_ENDPOINT,
+    } as NodeJS.ProcessEnv,
+    CATALOG_ENDPOINT,
+  );
   if (token) env.HF_TOKEN = token;
   const args = [scriptPath(), "--org", org, "--root", root, "--cache", cache];
   if (force) args.push("--force");

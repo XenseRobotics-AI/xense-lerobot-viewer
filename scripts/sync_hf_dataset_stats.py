@@ -24,6 +24,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Stats sync is metadata-only; use the authoritative Hub endpoint by default.
+os.environ.setdefault("HF_ENDPOINT", "https://huggingface.co")
+
 from sync_hf_dataset import (
     emit,
     fail,
@@ -32,11 +35,6 @@ from sync_hf_dataset import (
     progress,
     repo_target,
 )
-
-# Keep the stats-only route on the same mirror defaults as the full sync.
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-if "hf-mirror" in os.environ.get("HF_ENDPOINT", ""):
-    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 STATS_MARKER = os.path.join(".cache", "huggingface", "viewer_stats.json")
 STATS_MARKER_VERSION = 2
@@ -223,7 +221,7 @@ def main() -> int:
     progress(phase="listing", endpoint=endpoint, org=args.org, percent=0)
 
     try:
-        repos = list_org_repos(args.org, None)
+        repos = list_org_repos(args.org, None, token)
     except Exception as exc:
         return fail(f"Could not list stats files for {args.org}: {safe_error(exc, token)}")
 

@@ -87,7 +87,11 @@ def missing_dependency() -> str | None:
     )
 
 
-def list_org_repos(org: str, limit: int | None) -> list[tuple[str, str | None]]:
+def list_org_repos(
+    org: str,
+    limit: int | None,
+    token: str | None = None,
+) -> list[tuple[str, str | None]]:
     """Every dataset in the org as `(repo_id, remote_commit_sha)`.
 
     `expand=["sha"]` costs nothing extra on the listing call and is what lets
@@ -102,12 +106,20 @@ def list_org_repos(org: str, limit: int | None) -> list[tuple[str, str | None]]:
     # returns newest-first. Passing it would raise on the installed version.
     repos = [
         (d.id, getattr(d, "sha", None))
-        for d in list_datasets(author=org, sort="lastModified", expand=["sha"])
+        for d in list_datasets(
+            author=org,
+            sort="lastModified",
+            expand=["sha"],
+            token=token,
+        )
     ]
     return repos[:limit] if limit else repos
 
 
-def fetch_repo_details(repo_ids: list[str]) -> list[dict]:
+def fetch_repo_details(
+    repo_ids: list[str],
+    token: str | None = None,
+) -> list[dict]:
     """Per-repo commit and size, for the explicit `--repo` path that never lists.
 
     `files_metadata=True` costs one extra round trip per repo but returns the
@@ -127,7 +139,7 @@ def fetch_repo_details(repo_ids: list[str]) -> list[dict]:
     out: list[dict] = []
     for repo_id in repo_ids:
         try:
-            info = api.dataset_info(repo_id, files_metadata=True)
+            info = api.dataset_info(repo_id, files_metadata=True, token=token)
             siblings = list(getattr(info, "siblings", None) or [])
             sizes = [getattr(s, "size", None) for s in siblings]
             out.append({
@@ -284,7 +296,7 @@ def make_reporter(repo_id: str, index: int, total: int):
     return Reporter
 
 
-def preflight(repo_id: str) -> str | None:
+def preflight(repo_id: str, token: str | None = None) -> str | None:
     """Resolve one small file before committing to the whole org.
 
     Without this the endpoint problem only surfaces after the first repo has
@@ -301,6 +313,7 @@ def preflight(repo_id: str) -> str | None:
                 repo_id=repo_id,
                 filename="meta/info.json",
                 repo_type="dataset",
+                token=token,
                 local_dir=tmp,
             )
         return None
@@ -345,6 +358,8 @@ def main() -> int:
     if blocker:
         return fail(blocker)
 
+    token = os.environ.get("HF_TOKEN") or None
+
     # The org is a directory under the root (`repo_target`), so with explicit
     # repos it comes from the repo ids rather than being asked for twice and
     # allowed to disagree with them.
@@ -367,10 +382,10 @@ def main() -> int:
     details: list[dict] | None = None
     try:
         if args.repo:
-            details = fetch_repo_details(args.repo)
+            details = fetch_repo_details(args.repo, token)
             listed = [(d["id"], d["sha"]) for d in details]
         else:
-            listed = list_org_repos(org, args.limit)
+            listed = list_org_repos(org, args.limit, token)
     except Exception as exc:  # network down, bad token, unknown org
         return fail(f"Could not list datasets for {org}: {exc}")
 
@@ -427,7 +442,7 @@ def main() -> int:
     # Fail fast and legibly rather than once per repo with a library message
     # that names neither the endpoint nor the fix.
     progress(phase="preflight", percent=0)
-    blocker = preflight(work[0])
+    blocker = preflight(work[0], token)
     if blocker:
         return fail(blocker)
 
@@ -450,6 +465,7 @@ def main() -> int:
             snapshot_download(
                 repo_id=repo_id,
                 repo_type="dataset",
+                token=token,
                 local_dir=target,
                 # Resumes partial transfers and skips files already identical,
                 # so re-running after an interruption is cheap.

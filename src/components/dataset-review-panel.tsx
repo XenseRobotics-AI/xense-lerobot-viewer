@@ -384,7 +384,7 @@ export default function DatasetReviewPanel({
       const catalogMessage =
         catalogCount === null
           ? "Catalog refreshed."
-          : `Catalog refreshed: ${catalogCount.toLocaleString()} datasets.`;
+          : `Catalog refreshed: ${catalogCount.toLocaleString()} datasets visible to the current credential.`;
       const syncMessage =
         result.failed.length === 0
           ? result.downloaded === 0
@@ -461,9 +461,9 @@ export default function DatasetReviewPanel({
       <div className="flex flex-wrap gap-1 border-b border-white/10 pb-1">
         {(
           [
+            ["grouping", "Grouped statistics"],
             ["dataset-statistics", "Dataset statistics"],
             ["checks", "Current dataset checks"],
-            ["grouping", "Grouped statistics"],
           ] as const
         ).map(([value, label]) => (
           <button
