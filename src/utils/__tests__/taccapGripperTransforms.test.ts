@@ -8,7 +8,45 @@ import {
   tacCapRecordedTcpToRootMatrix,
 } from "@/utils/taccapGripperTransforms";
 
+const TACCAP_MAX_FINGER_ANGLE_DEGREES = 28.92;
+const TACCAP_MAX_FINGER_ANGLE_RADIANS =
+  (TACCAP_MAX_FINGER_ANGLE_DEGREES * Math.PI) / 180;
+
 describe("TacCap replay coordinate transforms", () => {
+  test("uses joint1 as the drive joint and gives both fingers a 28.92 degree range", () => {
+    for (const side of ["left", "right"] as const) {
+      const urdf = readFileSync(
+        resolve(`public/urdf/taccap-grippers/${side}/gripper.urdf`),
+        "utf8",
+      );
+      const joint1 = urdf.match(/<joint name="joint1"[\s\S]*?<\/joint>/)?.[0];
+      const joint2 = urdf.match(/<joint name="joint2"[\s\S]*?<\/joint>/)?.[0];
+      const joint1Limit = joint1?.match(
+        /<limit lower="([^"]+)" upper="([^"]+)"/,
+      );
+      const joint2Limit = joint2?.match(
+        /<limit lower="([^"]+)" upper="([^"]+)"/,
+      );
+
+      expect(joint1).toBeDefined();
+      expect(joint2).toBeDefined();
+      expect(Number(joint1Limit?.[1])).toBe(0);
+      expect(Number(joint1Limit?.[2])).toBeCloseTo(
+        TACCAP_MAX_FINGER_ANGLE_RADIANS,
+        14,
+      );
+      expect(joint1).not.toContain("<mimic");
+      expect(Number(joint2Limit?.[1])).toBeCloseTo(
+        -TACCAP_MAX_FINGER_ANGLE_RADIANS,
+        14,
+      );
+      expect(Number(joint2Limit?.[2])).toBe(0);
+      expect(joint2).toContain(
+        '<mimic joint="joint1" multiplier="-1" offset="0" />',
+      );
+    }
+  });
+
   test("defines matching link4 X/Y axes in both bundled URDFs", () => {
     for (const side of ["left", "right"] as const) {
       const urdf = readFileSync(

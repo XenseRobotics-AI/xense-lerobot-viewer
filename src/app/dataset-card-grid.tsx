@@ -20,6 +20,19 @@ import {
   getDatasetTaskName,
 } from "@/utils/datasetGrouping";
 import { formatBytes } from "@/utils/byteSize";
+import {
+  BUCKET_ORDER,
+  CAPTURE_CUTOFF,
+  DATE_FILTER_ALL,
+  DATE_FILTER_AFTER_CUTOFF,
+  countFacets,
+  countMatchingDate,
+  matchesAnomalyOnly,
+  matchesBucket,
+  matchesDate,
+  type BucketFilter,
+  type DateFilter,
+} from "@/utils/corpusFilters";
 import { useLocale } from "@/context/locale-context";
 import type { MessageKey } from "@/i18n/messages";
 
@@ -31,7 +44,22 @@ type DatasetCardGridProps = {
 };
 
 type HealthFilter = "all" | "ok" | "issues";
+
 type TaskFilter = "all" | "untagged" | string;
+
+/**
+ * Bucket directory name → message key. The directory names are English by
+ * necessity (they are paths on disk), but the chips they label are read by
+ * people using either language, so the display name goes through i18n like
+ * every other label in this grid.
+ */
+const BUCKET_LABEL_KEYS = {
+  merged: "grid.bucketMerged",
+  raw: "grid.bucketRaw",
+  failed: "grid.bucketFailed",
+  released: "grid.bucketReleased",
+  "in-processing": "grid.bucketInProcessing",
+} as const satisfies Record<(typeof BUCKET_ORDER)[number], MessageKey>;
 
 function buildEpisodeRoute(encodedPath: string, episode: number = 0): string {
   return `/_local/${encodedPath}/episode_${Math.max(0, Math.floor(episode))}`;
@@ -94,6 +122,9 @@ export default function DatasetCardGrid({
   const [selectedRobot, setSelectedRobot] = useState<string>("all");
   const [healthFilter, setHealthFilter] = useState<HealthFilter>("all");
   const [taskFilter, setTaskFilter] = useState<TaskFilter>("all");
+  const [bucketFilter, setBucketFilter] = useState<BucketFilter>("all");
+  const [dateFilter, setDateFilter] = useState<DateFilter>(DATE_FILTER_ALL);
+  const [anomalyOnly, setAnomalyOnly] = useState(false);
   const [episodeOverrides, setEpisodeOverrides] = useState<
     Record<string, string>
   >({});
@@ -166,11 +197,28 @@ export default function DatasetCardGrid({
     [taskCounts],
   );
 
+  // Bucket / capture-date / shape-anomaly counts for the facet chips. Computed
+  // over the whole category so a chip's number does not change as you filter.
+  const facetCounts = useMemo(
+    () => countFacets(datasetsWithLiveTags),
+    [datasetsWithLiveTags],
+  );
+
+  // How many the current range would keep, shown on the range button so an
+  // empty result is visibly the filter's doing rather than a broken page.
+  const dateMatchCount = useMemo(
+    () => countMatchingDate(datasetsWithLiveTags, dateFilter),
+    [datasetsWithLiveTags, dateFilter],
+  );
+
   // Biggest first (frames, then episodes), so the top-left card is always the
   // most substantial task in the category and the order survives filtering.
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     const matches = datasetsWithLiveTags.filter((ds) => {
+      if (!matchesBucket(ds, bucketFilter)) return false;
+      if (!matchesDate(ds, dateFilter)) return false;
+      if (!matchesAnomalyOnly(ds, anomalyOnly)) return false;
       if (selectedRobot !== "all" && ds.robot_type !== selectedRobot) {
         return false;
       }
@@ -194,7 +242,16 @@ export default function DatasetCardGrid({
       );
     });
     return matches.sort(compareDatasetsBySize);
-  }, [datasetsWithLiveTags, query, selectedRobot, healthFilter, taskFilter]);
+  }, [
+    datasetsWithLiveTags,
+    query,
+    selectedRobot,
+    healthFilter,
+    taskFilter,
+    bucketFilter,
+    dateFilter,
+    anomalyOnly,
+  ]);
 
   const editingDataset = editingDatasetKey
     ? (datasetsWithLiveTags.find((d) => d.encodedPath === editingDatasetKey) ??
@@ -427,6 +484,155 @@ export default function DatasetCardGrid({
         </div>
       </div>
 
+      {/* Corpus facets. Rendered only where they mean something: a category
+          whose datasets carry no bucket has nothing to slice by, and showing
+          three dead chip rows there would be worse than showing none. */}
+      {facetCounts.unbucketed < datasetsWithLiveTags.length && (
+        <div className="mb-6 flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-slate-400">{t("grid.sourceLabel")}</span>
+          <div className="inline-flex overflow-hidden rounded-md border border-white/10">
+            {(
+              [
+                { key: "all" as BucketFilter, label: t("grid.sourceAll") },
+                ...BUCKET_ORDER.filter(
+                  (b) => (facetCounts.buckets[b] ?? 0) > 0,
+                ).map((b) => ({
+                  key: b as BucketFilter,
+                  label: `${t(BUCKET_LABEL_KEYS[b])} ${facetCounts.buckets[b]}`,
+                })),
+              ] as { key: BucketFilter; label: string }[]
+            ).map((opt) => (
+              <button
+                key={opt.key}
+                type="button"
+                onClick={() => setBucketFilter(opt.key)}
+                className={`px-3 py-2 transition-colors ${
+                  bucketFilter === opt.key
+                    ? "bg-cyan-500/20 text-cyan-100"
+                    : "bg-[var(--surface-1)]/60 text-slate-300 hover:text-slate-100"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          <span className="ml-2 text-slate-400">{t("grid.dateLabel")}</span>
+          <div className="inline-flex overflow-hidden rounded-md border border-white/10">
+            <button
+              type="button"
+              onClick={() => setDateFilter(DATE_FILTER_ALL)}
+              className={`px-3 py-2 transition-colors ${
+                dateFilter.mode === "all"
+                  ? "bg-cyan-500/20 text-cyan-100"
+                  : "bg-[var(--surface-1)]/60 text-slate-300 hover:text-slate-100"
+              }`}
+            >
+              {t("grid.dateAll")}
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setDateFilter((f) =>
+                  f.mode === "range" ? f : { ...f, mode: "range" },
+                )
+              }
+              className={`px-3 py-2 transition-colors ${
+                dateFilter.mode === "range"
+                  ? "bg-cyan-500/20 text-cyan-100"
+                  : "bg-[var(--surface-1)]/60 text-slate-300 hover:text-slate-100"
+              }`}
+            >
+              {t("grid.dateRange")}{" "}
+              {dateFilter.mode === "range" ? dateMatchCount : ""}
+            </button>
+            {/* Its own mode, never a corner of the range: a seventh of the
+                corpus has no date evidence at all. Sweeping them into a range
+                would misreport them; dropping them with no way to ask would
+                hide them. */}
+            <button
+              type="button"
+              onClick={() =>
+                setDateFilter({ mode: "unknown", from: "", to: "" })
+              }
+              className={`px-3 py-2 transition-colors ${
+                dateFilter.mode === "unknown"
+                  ? "bg-cyan-500/20 text-cyan-100"
+                  : "bg-[var(--surface-1)]/60 text-slate-300 hover:text-slate-100"
+              }`}
+            >
+              {t("grid.dateUnknown", { count: facetCounts.unknown })}
+            </button>
+          </div>
+
+          {dateFilter.mode === "range" && (
+            <span className="inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-[var(--surface-1)]/60 px-2 py-1">
+              <input
+                type="date"
+                aria-label={t("grid.dateFrom")}
+                value={dateFilter.from}
+                min={facetCounts.earliest ?? undefined}
+                max={facetCounts.latest ?? undefined}
+                onChange={(e) =>
+                  setDateFilter((f) => ({ ...f, from: e.target.value }))
+                }
+                className="bg-transparent text-slate-200 outline-none [color-scheme:dark]"
+              />
+              <span className="text-slate-500">→</span>
+              <input
+                type="date"
+                aria-label={t("grid.dateTo")}
+                value={dateFilter.to}
+                min={facetCounts.earliest ?? undefined}
+                max={facetCounts.latest ?? undefined}
+                onChange={(e) =>
+                  setDateFilter((f) => ({ ...f, to: e.target.value }))
+                }
+                className="bg-transparent text-slate-200 outline-none [color-scheme:dark]"
+              />
+              {/* Both sides are optional — an empty box means "open on this
+                  side", which is what makes "everything since the cutoff"
+                  expressible without a second control. */}
+              <button
+                type="button"
+                onClick={() => setDateFilter(DATE_FILTER_AFTER_CUTOFF)}
+                title={t("grid.datePresetCutoffHint", { date: CAPTURE_CUTOFF })}
+                className="ml-1 rounded border border-white/10 px-1.5 py-0.5 text-[11px] text-slate-300 hover:text-slate-100"
+              >
+                {t("grid.datePresetCutoff", { date: CAPTURE_CUTOFF })}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setDateFilter((f) => ({ ...f, from: "", to: "" }))
+                }
+                className="rounded border border-white/10 px-1.5 py-0.5 text-[11px] text-slate-400 hover:text-slate-200"
+              >
+                {t("grid.dateClear")}
+              </button>
+            </span>
+          )}
+
+          {/* A shortcut, not a facet: 538 of 542 datasets share one shape, so a
+              dropdown would be single-valued noise. The handful it isolates are
+              the half-configured captures. */}
+          {facetCounts.anomalies > 0 && (
+            <button
+              type="button"
+              onClick={() => setAnomalyOnly((v) => !v)}
+              title={t("grid.anomalyOnlyHint")}
+              className={`ml-2 rounded-md border px-3 py-2 transition-colors ${
+                anomalyOnly
+                  ? "border-amber-400/40 bg-amber-500/20 text-amber-100"
+                  : "border-white/10 bg-[var(--surface-1)]/60 text-slate-300 hover:text-slate-100"
+              }`}
+            >
+              {t("grid.anomalyOnly", { count: facetCounts.anomalies })}
+            </button>
+          )}
+        </div>
+      )}
+
       <TrashStrip refreshKey={trashVersion} />
 
       {filtered.length === 0 ? (
@@ -527,6 +733,19 @@ export default function DatasetCardGrid({
                     {t("grid.deleteButton")}
                   </button>
                 </div>
+
+                {/* Shape anomaly — sits under the health badge rather than
+                    beside it, because the two are independent: a
+                    half-configured capture is perfectly healthy on disk, which
+                    is exactly why it needs saying out loud. */}
+                {ds.facets.shapeAnomaly && (
+                  <div className="absolute right-2 top-9 z-20 rounded-full bg-amber-400/90 px-2 py-0.5 text-[10px] font-semibold text-slate-900 shadow">
+                    {t("grid.shapeBadge", {
+                      dim: ds.facets.stateDim ?? "?",
+                      streams: ds.facets.videoStreams,
+                    })}
+                  </div>
+                )}
 
                 {/* Health corner badge — top-right */}
                 <div

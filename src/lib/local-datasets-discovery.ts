@@ -10,6 +10,8 @@ import {
   EMPTY_TAGS,
   normalizeTags,
 } from "@/lib/dataset-tags";
+import type { DatasetFacets } from "@/lib/dataset-facets";
+import { computeFacets } from "@/lib/dataset-facets-server";
 import { pickThumbnailVideoKey } from "@/lib/thumbnail-camera";
 import type { DatasetQualityTask } from "@/utils/datasetQualityChecks";
 
@@ -81,6 +83,12 @@ export type LocalDatasetSummary = {
   tags: DatasetTags;
   /** Prompt rows loaded by the Workbench-only statistics route. */
   tasks?: DatasetQualityTask[];
+  /**
+   * Derived browsing facets — bucket, capture dates, shape anomaly. Computed
+   * here rather than on the detail page so the homepage can filter the list
+   * without opening 542 datasets a second time. See `dataset-facets.ts`.
+   */
+  facets: DatasetFacets;
 };
 
 export type LocalDatasetsResponse = {
@@ -322,11 +330,12 @@ async function walkForDatasets(
       .join("/");
     if (relativePath) {
       const encodedPath = encodeLocalDatasetPath(relativePath);
-      const [integrity, tags, hardware, sizeBytes] = await Promise.all([
+      const [integrity, tags, hardware, sizeBytes, facets] = await Promise.all([
         probeIntegrity(currentDir, info),
         readDatasetTags(currentDir),
         readDatasetHardware(currentDir),
         directorySizeBytes(currentDir),
+        computeFacets(currentDir, relativePath, info.features),
       ]);
       const thumbnailPath =
         integrity.status === "ok" ? pickThumbnailVideoPath(info) : null;
@@ -349,6 +358,7 @@ async function walkForDatasets(
         thumbnailVideoUrl,
         integrity,
         tags,
+        facets,
       });
       return;
     }

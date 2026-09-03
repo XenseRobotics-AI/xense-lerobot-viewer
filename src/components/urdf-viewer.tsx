@@ -46,6 +46,11 @@ import {
   tacCapRecordedTcpSceneMatrix,
   tacCapRecordedTcpToRootMatrix,
 } from "@/utils/taccapGripperTransforms";
+import {
+  isGripperDriveJoint,
+  mapNormalizedGripperToJoint,
+  type UrdfJointLimit,
+} from "@/utils/urdfGripperMapping";
 
 const SERIES_DELIM = CHART_CONFIG.SERIES_NAME_DELIMITER;
 const DEG2RAD = Math.PI / 180;
@@ -327,13 +332,29 @@ const TACCAP_TRAIL_COLOR: Record<TacCapSide, string> = {
 };
 const TACCAP_HEAD_COLOR = "#facc15";
 const TACCAP_HEADSET = {
-  // Approximate physical dimensions in metres. The recorded head pose remains
-  // the model origin; no unmeasured tracker -> headset offset is introduced.
-  bodyDepth: 0.072,
-  bodyWidth: 0.19,
-  bodyHeight: 0.095,
-  rearX: -0.145,
+  // Pico 4 Ultra Enterprise, approximate exterior in metres. Pico publishes a
+  // weight and a 165 mm facebox but not a width/height/depth triple, so the
+  // shell is proportioned from product photography around that one measured
+  // figure. The recorded head pose remains the model origin; no unmeasured
+  // tracker -> headset offset is introduced.
+  visorWidth: 0.195,
+  visorHeight: 0.098,
+  // Pancake optics: the front unit is notably thin, which is the silhouette
+  // that reads as "Pico 4 Ultra" rather than a generic HMD box.
+  visorDepth: 0.05,
+  gasketWidth: 0.165,
+  gasketHeight: 0.088,
+  gasketDepth: 0.055,
+  // Semi-rigid halo strap with the battery as a rear counterweight.
+  haloRadius: 0.104,
+  haloTube: 0.0075,
+  haloCenterX: -0.085,
+  haloZ: 0.018,
+  batteryX: -0.168,
 } as const;
+// Front opening of the halo ring, so the strap clears the visor instead of
+// passing through it.
+const TACCAP_HALO_GAP_HALF = 0.62;
 const TACCAP_LOCAL_POSE_AXES = [
   { label: "X", direction: [1, 0, 0] as const, color: "#ef4444" },
   { label: "Y", direction: [0, 1, 0] as const, color: "#22c55e" },
@@ -382,8 +403,12 @@ function applyTacCapGripperFrame(
   recordedTcpToRoot: THREE.Matrix4,
   frame: TacCapGripperFrame,
 ) {
-  // joint1 mimics joint2 with multiplier -1 in both supplied URDFs.
-  robot.setJointValue("joint2", -frame.opening);
+  // joint2 mimics joint1 with multiplier -1 in both bundled URDFs.
+  const driveJoint = robot.joints.joint1;
+  robot.setJointValue(
+    "joint1",
+    mapNormalizedGripperToJoint(frame.opening, driveJoint.limit),
+  );
   robot.matrix.copy(tacCapLink4SceneMatrix(frame)).multiply(recordedTcpToRoot);
   robot.matrixWorldNeedsUpdate = true;
   robot.updateMatrixWorld(true);
@@ -954,92 +979,217 @@ function TacCapPoseTrail({
 }
 
 /**
- * Lightweight, project-local HMD representation. It intentionally uses only
- * Three.js primitives so 3D Replay never depends on another downloadable
- * model. Local +X is the visor/front direction, +Y is left, and +Z is up.
+ * Pico 4 Ultra Enterprise, the headset these datasets are recorded with.
+ *
+ * Built from Three.js primitives on purpose: 3D Replay must not depend on a
+ * downloadable model, and Pico's own asset is not redistributable. The shape
+ * carries the features that identify the device -- slim pancake front unit,
+ * full-face black visor glass, the central colour-camera pair with the iToF
+ * depth sensor between them, four peripheral tracking cameras, and the halo
+ * strap with its rear battery counterweight.
+ *
+ * Local +X is the visor/front direction, +Y is left, and +Z is up.
  */
 function TacCapHeadsetModel({ originRadius }: { originRadius: number }) {
-  const { bodyDepth, bodyHeight, bodyWidth, rearX } = TACCAP_HEADSET;
+  const {
+    batteryX,
+    gasketDepth,
+    gasketHeight,
+    gasketWidth,
+    haloCenterX,
+    haloRadius,
+    haloTube,
+    haloZ,
+    visorDepth,
+    visorHeight,
+    visorWidth,
+  } = TACCAP_HEADSET;
+  const glassX = visorDepth / 2 + 0.003;
 
   return (
     <group>
-      {/* Main headset shell and dark front visor. */}
+      {/* White-grey front shell. */}
       <RoundedBox
-        args={[bodyDepth, bodyWidth, bodyHeight]}
-        radius={0.016}
+        args={[visorDepth, visorWidth, visorHeight]}
+        radius={0.015}
         smoothness={4}
         castShadow
         receiveShadow
       >
         <meshStandardMaterial
-          color="#cbd5e1"
-          metalness={0.12}
-          roughness={0.38}
+          color="#e2e8f0"
+          metalness={0.08}
+          roughness={0.45}
         />
       </RoundedBox>
+
+      {/* Opaque black glass covering the whole face of the visor. */}
       <RoundedBox
-        args={[0.012, bodyWidth - 0.016, bodyHeight - 0.016]}
-        position={[bodyDepth / 2 + 0.004, 0, 0]}
-        radius={0.004}
+        args={[0.012, visorWidth - 0.007, visorHeight - 0.007]}
+        position={[glassX, 0, 0]}
+        radius={0.005}
         smoothness={4}
         castShadow
       >
         <meshStandardMaterial
-          color="#0f172a"
-          metalness={0.55}
-          roughness={0.2}
+          color="#0b1120"
+          metalness={0.65}
+          roughness={0.08}
         />
       </RoundedBox>
 
-      {/* Two front tracking cameras make the forward direction unambiguous. */}
+      {/* Central array: two colour passthrough cameras with the iToF depth
+          sensor between them. */}
       {([-1, 1] as const).map((side) => (
         <group
-          key={`camera:${side}`}
-          position={[bodyDepth / 2 + 0.012, side * 0.046, -0.002]}
+          key={`passthrough:${side}`}
+          position={[glassX + 0.007, side * 0.035, 0.002]}
           rotation={[0, 0, -Math.PI / 2]}
         >
           <mesh castShadow>
-            <cylinderGeometry args={[0.014, 0.014, 0.01, 24]} />
+            <cylinderGeometry args={[0.0135, 0.0135, 0.005, 24]} />
             <meshStandardMaterial
-              color="#1e293b"
-              metalness={0.6}
-              roughness={0.2}
+              color="#111827"
+              metalness={0.5}
+              roughness={0.25}
             />
           </mesh>
-          <mesh position={[0, 0.0055, 0]}>
-            <cylinderGeometry args={[0.008, 0.008, 0.002, 24]} />
+          <mesh position={[0, 0.003, 0]}>
+            <cylinderGeometry args={[0.0085, 0.0085, 0.002, 24]} />
             <meshStandardMaterial
-              color="#38bdf8"
-              emissive="#075985"
-              emissiveIntensity={0.45}
-              metalness={0.25}
-              roughness={0.12}
+              color="#1e293b"
+              emissive="#0c4a6e"
+              emissiveIntensity={0.35}
+              metalness={0.3}
+              roughness={0.1}
             />
           </mesh>
         </group>
       ))}
+      <group
+        position={[glassX + 0.006, 0, 0.002]}
+        rotation={[0, 0, -Math.PI / 2]}
+      >
+        <mesh castShadow>
+          <cylinderGeometry args={[0.0085, 0.0085, 0.004, 20]} />
+          <meshStandardMaterial
+            color="#1f2937"
+            metalness={0.45}
+            roughness={0.3}
+          />
+        </mesh>
+        <mesh position={[0, 0.0025, 0]}>
+          <cylinderGeometry args={[0.005, 0.005, 0.002, 20]} />
+          <meshStandardMaterial
+            color="#450a0a"
+            emissive="#7f1d1d"
+            emissiveIntensity={0.3}
+            roughness={0.2}
+          />
+        </mesh>
+      </group>
 
-      {/* Side and rear bands indicate how the display is worn. */}
+      {/* Cooling vents above and below the central array. */}
+      {([-1, 1] as const).map((side) => (
+        <mesh key={`vent:${side}`} position={[glassX + 0.003, 0, side * 0.028]}>
+          <boxGeometry args={[0.005, 0.088, 0.006]} />
+          <meshStandardMaterial color="#1e293b" roughness={0.6} />
+        </mesh>
+      ))}
+
+      {/* Four peripheral tracking cameras. */}
+      {([-1, 1] as const).flatMap((ySide) =>
+        ([-1, 1] as const).map((zSide) => (
+          <mesh
+            key={`tracking:${ySide}:${zSide}`}
+            position={[
+              glassX + 0.005,
+              ySide * (visorWidth / 2 - 0.019),
+              zSide * (visorHeight / 2 - 0.017),
+            ]}
+            rotation={[0, 0, -Math.PI / 2]}
+          >
+            <cylinderGeometry args={[0.0065, 0.0065, 0.003, 16]} />
+            <meshStandardMaterial
+              color="#0f172a"
+              metalness={0.5}
+              roughness={0.22}
+            />
+          </mesh>
+        )),
+      )}
+
+      {/* Face gasket behind the shell, sized from the published 165 mm
+          facebox. */}
+      <RoundedBox
+        args={[gasketDepth, gasketWidth, gasketHeight]}
+        position={[-(visorDepth / 2 + gasketDepth / 2 - 0.006), 0, -0.002]}
+        radius={0.012}
+        smoothness={3}
+        castShadow
+        receiveShadow
+      >
+        <meshStandardMaterial color="#1f2937" roughness={0.92} />
+      </RoundedBox>
+
+      {/* Halo strap, open at the front so it clears the visor. */}
+      <mesh
+        position={[haloCenterX, 0, haloZ]}
+        rotation={[0, 0, TACCAP_HALO_GAP_HALF]}
+        castShadow
+      >
+        <torusGeometry
+          args={[
+            haloRadius,
+            haloTube,
+            12,
+            64,
+            Math.PI * 2 - TACCAP_HALO_GAP_HALF * 2,
+          ]}
+        />
+        <meshStandardMaterial
+          color="#cbd5e1"
+          metalness={0.1}
+          roughness={0.55}
+        />
+      </mesh>
+
+      {/* Arms joining the visor to the halo ring. */}
       {([-1, 1] as const).map((side) => (
         <RoundedBox
-          key={`side-strap:${side}`}
-          args={[0.17, 0.012, 0.022]}
-          position={[-0.065, side * (bodyWidth / 2 + 0.002), 0.004]}
+          key={`halo-arm:${side}`}
+          args={[0.052, 0.013, 0.017]}
+          position={[-0.03, side * (visorWidth / 2 + 0.003), haloZ - 0.004]}
           radius={0.005}
           smoothness={3}
           castShadow
         >
-          <meshStandardMaterial color="#64748b" roughness={0.72} />
+          <meshStandardMaterial color="#cbd5e1" roughness={0.6} />
         </RoundedBox>
       ))}
+
+      {/* Rear battery pack: the counterweight that balances the front unit. */}
       <RoundedBox
-        args={[0.025, bodyWidth + 0.004, 0.028]}
-        position={[rearX, 0, 0.004]}
-        radius={0.007}
-        smoothness={3}
+        args={[0.048, 0.112, 0.054]}
+        position={[batteryX, 0, haloZ - 0.004]}
+        radius={0.014}
+        smoothness={4}
         castShadow
+        receiveShadow
       >
-        <meshStandardMaterial color="#475569" roughness={0.75} />
+        <meshStandardMaterial
+          color="#e2e8f0"
+          metalness={0.08}
+          roughness={0.5}
+        />
+      </RoundedBox>
+      <RoundedBox
+        args={[0.014, 0.098, 0.046]}
+        position={[batteryX + 0.03, 0, haloZ - 0.004]}
+        radius={0.006}
+        smoothness={3}
+      >
+        <meshStandardMaterial color="#334155" roughness={0.9} />
       </RoundedBox>
 
       {/* Preserve the exact sampled pose origin inside the schematic model. */}
@@ -1202,7 +1352,9 @@ function RobotScene({
 }: {
   urdfUrl: string;
   jointValues: Record<string, number>;
-  onJointsLoaded: (names: string[]) => void;
+  onJointsLoaded: (
+    joints: Array<{ name: string; limit: UrdfJointLimit }>,
+  ) => void;
   trailEnabled: boolean;
   trailResetKey: string;
   scale: number;
@@ -1551,7 +1703,10 @@ function RobotScene({
               j.jointType === "continuous" ||
               j.jointType === "prismatic",
           )
-          .map((j) => j.name);
+          .map((j) => ({
+            name: j.name,
+            limit: { lower: j.limit.lower, upper: j.limit.upper },
+          }));
         onJointsLoaded(movable);
       },
       undefined,
@@ -1751,11 +1906,23 @@ export default function URDFViewer({
     return (totalFrames - 1) / span;
   }, [chartData, totalFrames, fps]);
 
-  // URDF joint names
-  const [urdfJointNames, setUrdfJointNames] = useState<string[]>([]);
+  // URDF joint names and limits
+  const [urdfJoints, setUrdfJoints] = useState<
+    Array<{ name: string; limit: UrdfJointLimit }>
+  >([]);
   const onJointsLoaded = useCallback(
-    (names: string[]) => setUrdfJointNames(names),
+    (joints: Array<{ name: string; limit: UrdfJointLimit }>) =>
+      setUrdfJoints(joints),
     [],
+  );
+  const urdfJointNames = useMemo(
+    () => urdfJoints.map((joint) => joint.name),
+    [urdfJoints],
+  );
+  const urdfJointLimits = useMemo(
+    () =>
+      new Map(urdfJoints.map((joint) => [joint.name, joint.limit] as const)),
+    [urdfJoints],
   );
 
   // Feature groups
@@ -1947,27 +2114,6 @@ export default function URDFViewer({
     [urdfJointNames],
   );
 
-  // Auto-detect gripper column range for linear mapping to 0-0.044m
-  const gripperRanges = useMemo(() => {
-    const ranges: Record<string, { min: number; max: number }> = {};
-    for (const jn of urdfJointNames) {
-      if (!jn.toLowerCase().includes("finger_joint1")) continue;
-      const col = mapping[jn];
-      if (!col) continue;
-      let min = Infinity,
-        max = -Infinity;
-      for (const row of chartData) {
-        const v = row[col];
-        if (typeof v === "number") {
-          if (v < min) min = v;
-          if (v > max) max = v;
-        }
-      }
-      if (min < max) ranges[jn] = { min, max };
-    }
-    return ranges;
-  }, [chartData, mapping, urdfJointNames]);
-
   // Compute joint values for current frame
   const jointValues = useMemo(() => {
     if (totalFrames === 0 || urdfJointNames.length === 0) return {};
@@ -1982,15 +2128,13 @@ export default function URDFViewer({
       if (!col || typeof row[col] !== "number") continue;
       const raw = row[col];
 
-      if (jn.toLowerCase().includes("finger_joint1")) {
-        // Map gripper range → 0-0.044m using auto-detected min/max
-        const range = gripperRanges[jn];
-        if (range) {
-          const t = (raw - range.min) / (range.max - range.min);
-          values[jn] = t * 0.044;
-        } else {
-          values[jn] = (raw / 100) * 0.044; // fallback: assume 0-100
-        }
+      if (isGripperDriveJoint(jn)) {
+        // Dataset gripper commands are normalized to [0, 1]. Map that unit
+        // opening directly to the URDF's maximum signed opening limit.
+        const limit = urdfJointLimits.get(jn);
+        values[jn] = limit
+          ? mapNormalizedGripperToJoint(raw, limit)
+          : Math.max(0, Math.min(1, raw));
       } else {
         revoluteValues.push(raw);
         revoluteNames.push(jn);
@@ -2010,7 +2154,7 @@ export default function URDFViewer({
       }
     }
     return values;
-  }, [chartData, frame, gripperRanges, mapping, totalFrames, urdfJointNames]);
+  }, [chartData, frame, mapping, totalFrames, urdfJointLimits, urdfJointNames]);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">

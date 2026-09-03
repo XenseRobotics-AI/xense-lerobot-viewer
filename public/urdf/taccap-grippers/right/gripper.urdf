@@ -3,11 +3,11 @@
   <material name="shell">
     <color rgba="0.58 0.64 0.72 1" />
   </material>
-  <material name="finger_primary">
+  <!-- Both fingers carry the side colour (cyan left / pink right),
+       matching TACCAP_TRAIL_COLOR so a gripper reads as the same
+       object as its trajectory trail. -->
+  <material name="finger">
     <color rgba="0.96 0.45 0.71 1" />
-  </material>
-  <material name="finger_secondary">
-    <color rgba="0.82 0.88 0.94 1" />
   </material>
 
   <link name="base_link">
@@ -20,7 +20,7 @@
   <link name="link1">
     <visual>
       <geometry><mesh filename="meshes/link1.STL" /></geometry>
-      <material name="finger_primary" />
+      <material name="finger" />
     </visual>
   </link>
   <joint name="joint1" type="revolute">
@@ -28,14 +28,13 @@
     <parent link="base_link" />
     <child link="link1" />
     <axis xyz="0 0 -1" />
-    <limit lower="0" upper="1" effort="1" velocity="1" />
-    <mimic joint="joint2" multiplier="-1" offset="0" />
+    <limit lower="0" upper="0.5047492196767601" effort="1" velocity="1" />
   </joint>
 
   <link name="link2">
     <visual>
       <geometry><mesh filename="meshes/link2.STL" /></geometry>
-      <material name="finger_secondary" />
+      <material name="finger" />
     </visual>
   </link>
   <joint name="joint2" type="revolute">
@@ -43,7 +42,8 @@
     <parent link="base_link" />
     <child link="link2" />
     <axis xyz="0 0 -1" />
-    <limit lower="-1" upper="0" effort="1" velocity="1" />
+    <limit lower="-0.5047492196767601" upper="0" effort="1" velocity="1" />
+    <mimic joint="joint1" multiplier="-1" offset="0" />
   </joint>
 
   <link name="link3">

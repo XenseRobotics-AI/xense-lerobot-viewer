@@ -209,8 +209,13 @@ export function extractTacCapGripperTracks(
 }
 
 /**
- * Pick the complete `head.xyz+r1-r6` trajectory that belongs to the selected
- * source. Video keys containing "head" do not imply that a head pose exists.
+ * Pick the complete head trajectory that belongs to the selected source.
+ *
+ * Dataset producers use several names for this pose (`head`, `head_camera`,
+ * `head_tcp`, ...). The name is intentionally treated as a semantic marker:
+ * any trajectory label containing "head" is eligible as long as the generic
+ * extractor found complete xyz + r1-r6 samples. Video keys are not inspected
+ * here, so a head video without pose data still cannot create a trajectory.
  */
 export function extractTacCapHeadTrack(
   rows: Record<string, number>[],
@@ -219,7 +224,7 @@ export function extractTacCapHeadTrack(
   const pose = extractEpisodePoseTrajectories(rows)
     .filter(
       (trajectory) =>
-        trajectory.label.toLowerCase() === "head" &&
+        trajectory.label.toLowerCase().includes("head") &&
         trajectory.rotationValues?.some((rotation) => rotation !== null),
     )
     .sort((a, b) => {

@@ -2,6 +2,8 @@
 
 import React, { useCallback, useRef, useState } from "react";
 import {
+  SYNC_DISABLED,
+  SYNC_DISABLED_REASON,
   listSyncCandidates,
   runSync,
   type SyncProgress,
@@ -146,7 +148,12 @@ export default function RepoFetchPanel({
                 <button
                   type="button"
                   onClick={check}
-                  disabled={!valid}
+                  // Sync is off while the corpus layout is being reorganised
+                  // (see SYNC_DISABLED in `@/utils/syncClient`). The route
+                  // enforces it with a 503; this stops the button from
+                  // promising something it cannot deliver.
+                  disabled={!valid || SYNC_DISABLED}
+                  title={SYNC_DISABLED ? SYNC_DISABLED_REASON : undefined}
                   className="rounded-md bg-[var(--accent)] px-3.5 py-1.5 text-xs font-semibold text-slate-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
                 >
                   {t("repofetch.check")}
