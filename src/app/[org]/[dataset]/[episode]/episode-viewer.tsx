@@ -76,6 +76,7 @@ const ParquetTablePanel = lazy(
 const DatasetReviewPanel = lazy(
   () => import("@/components/dataset-review-panel"),
 );
+const TacFlowPanel = lazy(() => import("@/components/tacflow-panel"));
 // Recharts is ~150KB gz and not above-the-fold (videos render first on the
 // Episodes tab). Lazy-load it so the initial chunk can ship faster and
 // videos start downloading in parallel with the chart bundle.
@@ -125,7 +126,8 @@ type ActiveTab =
   | "filtering"
   | "urdf"
   | "parquet"
-  | "workbench";
+  | "workbench"
+  | "tacflow";
 
 // Subscribes to `currentTime` so its parent doesn't have to. Keeping this
 // in a leaf component means the throttled time ticks (~12.5/s during
@@ -444,6 +446,7 @@ function EpisodeViewerInner({
           "urdf",
           "parquet",
           "workbench",
+          "tacflow",
         ].includes(stored)
       ) {
         return stored as ActiveTab;
@@ -1026,6 +1029,11 @@ function EpisodeViewerInner({
           t("viewer.tab.workbench"),
           t("viewer.tab.workbenchTitle"),
         )}
+        {renderTab(
+          "tacflow",
+          t("viewer.tab.tacflow"),
+          t("viewer.tab.tacflowTitle"),
+        )}
         <div className="ml-auto flex shrink-0 items-center gap-2 pr-3">
           <Link
             href="/"
@@ -1417,6 +1425,12 @@ function EpisodeViewerInner({
                 />
               </Suspense>
             </DatasetReviewErrorBoundary>
+          )}
+
+          {activeTab === "tacflow" && (
+            <Suspense fallback={<Loading />}>
+              <TacFlowPanel />
+            </Suspense>
           )}
         </div>
       </div>

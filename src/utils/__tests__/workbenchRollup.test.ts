@@ -17,8 +17,11 @@ import {
   getWorkbenchLeftSnTargetHours,
   getWorkbenchOkrRewardAmount,
   getWorkbenchOkrSymbol,
+  hasWorkbenchDatasetDateSuffix,
+  isWorkbenchIgnoredRobotId,
   normalizeWorkbenchDateRange,
   workbenchAdditionAvailableDays,
+  workbenchDatasetSuffixDay,
   workbenchDayKey,
   workbenchGroupAdditionDatasetNames,
   workbenchRollupLabel,
@@ -58,6 +61,44 @@ describe("workbenchDatasetName", () => {
     expect(
       workbenchDatasetName("TacVerse/taccap-g1-arrange-tabletop-items-0826"),
     ).toBe("taccap-g1-arrange-tabletop-items-0826");
+  });
+});
+
+describe("workbench dataset date suffix", () => {
+  test("accepts repo leaves ending in a valid MMDD date", () => {
+    expect(
+      workbenchDatasetSuffixDay(
+        "TacVerse/taccap-g1-arrange-tabletop-items-0826",
+        "2026-08-27T10:00:00Z",
+      ),
+    ).toBe("2026-08-26");
+    expect(
+      hasWorkbenchDatasetDateSuffix(
+        "TacVerse/taccap-g1-arrange-tabletop-items-0826",
+        "2026-08-27T10:00:00Z",
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects repair outputs and invalid date suffixes", () => {
+    expect(
+      workbenchDatasetSuffixDay(
+        "TacVerse/taccap-g1-fold-garment-0819-repair-tactile",
+        "2026-08-27T10:00:00Z",
+      ),
+    ).toBeNull();
+    expect(
+      hasWorkbenchDatasetDateSuffix("TacVerse/taccap-g1-bad-date-1399"),
+    ).toBe(false);
+  });
+});
+
+describe("isWorkbenchIgnoredRobotId", () => {
+  test("ignores the legacy default robot id", () => {
+    expect(isWorkbenchIgnoredRobotId("bi_taccap_0")).toBe(true);
+    expect(isWorkbenchIgnoredRobotId(" bi_taccap_0 ")).toBe(true);
+    expect(isWorkbenchIgnoredRobotId("bi_taccap_8")).toBe(false);
+    expect(isWorkbenchIgnoredRobotId(null)).toBe(false);
   });
 });
 
@@ -331,28 +372,34 @@ describe("normalizeWorkbenchDateRange", () => {
 });
 
 describe("workbench source repo ids", () => {
-  test("returns sorted relative paths for each robot_id group", () => {
+  test("returns sorted dated relative paths for each robot_id group", () => {
     const repos = workbenchGroupSourceRepoIds(
       [
-        dataset("TacVerse/z-last", {
+        dataset("TacVerse/z-last-0828", {
           robotId: "robot-a",
           dailyAdditions: [
             { day: "2026-08-28", episodes: 1, frames: 3600, hours: 0.1 },
           ],
         }),
-        dataset("TacVerse/a-first", {
+        dataset("TacVerse/a-first-0828", {
           robotId: "robot-a",
           dailyAdditions: [
             { day: "2026-08-28", episodes: 2, frames: 7200, hours: 0.2 },
           ],
         }),
-        dataset("TacVerse/robot-b", {
+        dataset("TacVerse/taccap-g1-fold-garment-0819-repair-tactile", {
+          robotId: "robot-a",
+          dailyAdditions: [
+            { day: "2026-08-28", episodes: 2, frames: 7200, hours: 0.2 },
+          ],
+        }),
+        dataset("TacVerse/robot-b-0828", {
           robotId: "robot-b",
           dailyAdditions: [
             { day: "2026-08-28", episodes: 3, frames: 10800, hours: 0.3 },
           ],
         }),
-        dataset("TacVerse/out-of-range", {
+        dataset("TacVerse/out-of-range-0827", {
           robotId: "robot-a",
           dailyAdditions: [
             { day: "2026-08-27", episodes: 4, frames: 14400, hours: 0.4 },
@@ -364,10 +411,10 @@ describe("workbench source repo ids", () => {
     );
 
     expect(repos.get("robot-a")).toEqual([
-      "TacVerse/a-first",
-      "TacVerse/z-last",
+      "TacVerse/a-first-0828",
+      "TacVerse/z-last-0828",
     ]);
-    expect(repos.get("robot-b")).toEqual(["TacVerse/robot-b"]);
+    expect(repos.get("robot-b")).toEqual(["TacVerse/robot-b-0828"]);
   });
 });
 

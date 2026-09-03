@@ -100,6 +100,7 @@ describe("zh translation coverage", () => {
     "viewer.tab.doctor",
     "viewer.tab.parquet",
     "viewer.tab.workbench",
+    "viewer.tab.tacflow",
     // Pure formula — symbols and units only, nothing to translate.
     "doctor.speedFormula",
     // Value + unit, and units render in English in both languages (see the

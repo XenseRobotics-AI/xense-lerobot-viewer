@@ -249,6 +249,8 @@ export const en = {
   "viewer.tab.workbench": "Workbench",
   "viewer.tab.workbenchTitle":
     "Workbench-style dataset statistics and custom quality checks",
+  "viewer.tab.tacflow": "TacFlow",
+  "viewer.tab.tacflowTitle": "Run the fixed TacFlow tactile repair pipeline",
   "viewer.home": "Home",
 
   // ── episode viewer: body ────────────────────────────────────────────────

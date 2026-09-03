@@ -21,7 +21,10 @@ import {
   getDatasetPrefix,
   groupDatasetsByPrefix,
 } from "@/utils/datasetGrouping";
-import type { WorkbenchDailyAddition } from "@/utils/workbenchRollup";
+import {
+  workbenchDatasetSuffixDay,
+  type WorkbenchDailyAddition,
+} from "@/utils/workbenchRollup";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -103,40 +106,13 @@ function datasetHours(
   return frames > 0 && fps > 0 ? frames / fps / 3600 : 0;
 }
 
-function suffixYear(lastModified: string | null | undefined): number {
-  const parsed = Date.parse(lastModified ?? "");
-  if (Number.isFinite(parsed)) return new Date(parsed).getUTCFullYear();
-  return new Date().getUTCFullYear();
-}
-
-function datasetSuffixDay(
-  relativePath: string,
-  lastModified: string | null | undefined,
-): string | null {
-  const leaf = relativePath.split("/").filter(Boolean).at(-1) ?? relativePath;
-  const match = /-(\d{2})(\d{2})$/u.exec(leaf);
-  if (!match) return null;
-  const year = suffixYear(lastModified);
-  const month = Number(match[1]);
-  const day = Number(match[2]);
-  const candidate = new Date(Date.UTC(year, month - 1, day));
-  if (
-    candidate.getUTCFullYear() !== year ||
-    candidate.getUTCMonth() !== month - 1 ||
-    candidate.getUTCDate() !== day
-  ) {
-    return null;
-  }
-  return candidate.toISOString().slice(0, 10);
-}
-
 function dailyAdditionsForDataset(
   dataset: Awaited<
     ReturnType<typeof discoverLocalDatasets>
   >["datasets"][number],
   remote: HfCatalogEntry | undefined,
 ): WorkbenchDailyAddition[] {
-  const suffixDay = datasetSuffixDay(
+  const suffixDay = workbenchDatasetSuffixDay(
     dataset.relativePath,
     remote?.lastModified,
   );

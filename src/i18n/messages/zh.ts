@@ -246,6 +246,8 @@ export const zh: Record<MessageKey, string> = {
   "viewer.tab.parquetTitle": "浏览本数据集中任意 parquet 文件的原始内容",
   "viewer.tab.workbench": "Workbench",
   "viewer.tab.workbenchTitle": "Workbench 风格的数据集统计与自定义质量检查",
+  "viewer.tab.tacflow": "TacFlow",
+  "viewer.tab.tacflowTitle": "运行固定的 TacFlow 触觉修复流水线",
   "viewer.home": "首页",
 
   // ── episode viewer: body ────────────────────────────────────────────────

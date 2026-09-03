@@ -76,6 +76,7 @@ export type WorkbenchDailyAddition = {
 export const WORKBENCH_LEFT_SN_DAILY_TARGET_HOURS = 6;
 export const WORKBENCH_LEFT_SN_REWARD_AMOUNT = 20;
 export const WORKBENCH_LEFT_SN_REWARD_LABEL = "🪙";
+export const WORKBENCH_IGNORED_ROBOT_IDS = new Set(["bi_taccap_0"]);
 
 export type WorkbenchOkrSymbol = "✅" | "❌" | "…" | "—";
 
@@ -93,6 +94,12 @@ function parseDayKey(value: string): number | null {
 
 function dayKeyFromUtc(value: number): string {
   return new Date(value).toISOString().slice(0, 10);
+}
+
+function suffixYear(lastModified: string | null | undefined): number {
+  const parsed = Date.parse(lastModified ?? "");
+  if (Number.isFinite(parsed)) return new Date(parsed).getUTCFullYear();
+  return new Date().getUTCFullYear();
 }
 
 function nextDayKey(value: string): string {
@@ -256,6 +263,41 @@ export function workbenchDatasetName(relativePath: string): string {
   return relativePath.split("/").filter(Boolean).at(-1) ?? relativePath;
 }
 
+export function isWorkbenchIgnoredRobotId(
+  robotId: string | null | undefined,
+): boolean {
+  const value = robotId?.trim();
+  return Boolean(value && WORKBENCH_IGNORED_ROBOT_IDS.has(value));
+}
+
+export function workbenchDatasetSuffixDay(
+  relativePath: string,
+  lastModified?: string | null,
+): string | null {
+  const leaf = workbenchDatasetName(relativePath);
+  const match = /-(\d{2})(\d{2})$/u.exec(leaf);
+  if (!match) return null;
+  const year = suffixYear(lastModified);
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  const candidate = new Date(Date.UTC(year, month - 1, day));
+  if (
+    candidate.getUTCFullYear() !== year ||
+    candidate.getUTCMonth() !== month - 1 ||
+    candidate.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return candidate.toISOString().slice(0, 10);
+}
+
+export function hasWorkbenchDatasetDateSuffix(
+  relativePath: string,
+  lastModified?: string | null,
+): boolean {
+  return workbenchDatasetSuffixDay(relativePath, lastModified) !== null;
+}
+
 function padWorkbenchDateTime(value: number): string {
   return value.toString().padStart(2, "0");
 }
@@ -358,6 +400,11 @@ export function workbenchGroupSourceRepoIds(
 
   for (const dataset of datasets) {
     if (additionsInRange(dataset, range).length === 0) continue;
+    if (
+      !hasWorkbenchDatasetDateSuffix(dataset.relativePath, dataset.lastModified)
+    ) {
+      continue;
+    }
     const group = workbenchRollupLabel(dataset, dimension);
     const repos = groups.get(group) ?? new Set<string>();
     repos.add(dataset.relativePath);

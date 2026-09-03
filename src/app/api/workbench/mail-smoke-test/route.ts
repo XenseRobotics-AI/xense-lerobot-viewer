@@ -3,6 +3,7 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 import { isSameOriginRequest } from "@/lib/request-security";
 import { pythonSpawnEnv } from "@/lib/python-runtime";
+import { workbenchSmtpPasswordFilePath } from "@/lib/workbench-mail-runtime";
 import {
   validateWorkbenchMailDraft,
   WORKBENCH_MAIL_SENDER,
@@ -12,7 +13,6 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const DEFAULT_SMTP_PASSWORD_FILE = "/tmp/qq_smtp_password";
 const SCRIPT_TIMEOUT_MS = 45_000;
 const MAX_ERROR_LENGTH = 2_000;
 
@@ -99,7 +99,7 @@ function mailSpawnEnv(draft: WorkbenchMailDraft): NodeJS.ProcessEnv {
   } as NodeJS.ProcessEnv;
 
   if (!env.SMTP_PASSWORD?.trim() && !env.SMTP_PASSWORD_FILE?.trim()) {
-    env.SMTP_PASSWORD_FILE = DEFAULT_SMTP_PASSWORD_FILE;
+    env.SMTP_PASSWORD_FILE = workbenchSmtpPasswordFilePath();
   }
 
   return env;

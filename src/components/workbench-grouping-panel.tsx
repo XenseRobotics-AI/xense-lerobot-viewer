@@ -19,6 +19,7 @@ import {
   countHalfOpenDays,
   getWorkbenchDefaultDateTimeRange,
   getWorkbenchOkrAchievementRate,
+  isWorkbenchIgnoredRobotId,
   normalizeWorkbenchDateRange,
   workbenchAdditionAvailableDays,
   workbenchGroupAdditionDatasetNames,
@@ -36,18 +37,12 @@ import {
   type WorkbenchRewardRulesConfig,
 } from "@/utils/workbenchRewards";
 import WorkbenchMailComposer from "@/components/workbench-mail-composer";
+import type { WorkbenchDashboardMailInput } from "@/lib/workbench-mail-draft";
 
 const DIMENSIONS: Array<{
   value: WorkbenchRollupDimension;
   label: string;
-}> = [
-  { value: "robot_id", label: "Robot ID" },
-  { value: "uploader", label: "上传者" },
-  { value: "task", label: "任务" },
-  { value: "robot_type", label: "robot_type" },
-  { value: "left_gripper_sn", label: "Left SN (legacy)" },
-  { value: "source", label: "source" },
-];
+}> = [{ value: "robot_id", label: "Robot ID" }];
 
 type WorkbenchDataset = LocalDatasetSummary & {
   hf?: {
@@ -278,24 +273,92 @@ function dayKeyFromDateTimeInput(value: string): string | null {
   return match?.[1] ?? null;
 }
 
-function sourceRepoTitle(repoIds: readonly string[]): string | undefined {
-  if (repoIds.length === 0) return undefined;
-  return "Source repos:\n" + repoIds.join("\n");
+function shortRepoName(repoId: string): string {
+  const parts = repoId.split("/").filter(Boolean);
+  return parts.at(-1) ?? repoId;
 }
 
-function titleCaseStatus(status: string): string {
-  switch (status) {
-    case "mapped":
-      return "Mapped";
-    case "unmapped":
-      return "Unmapped";
-    case "legacy":
-      return "Legacy";
-    case "alerts":
-      return "Alerts";
-    default:
-      return "All";
+function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
+  const [open, setOpen] = useState(false);
+  const repos = useMemo(
+    () => repoIds.map((repoId) => repoId.trim()).filter(Boolean),
+    [repoIds],
+  );
+
+  if (repos.length === 0) {
+    return <span className="text-slate-500">—</span>;
   }
+
+  if (repos.length === 1) {
+    return (
+      <span
+        className="block max-w-[16rem] truncate font-mono text-[11px] text-slate-300"
+        aria-label={`Source repo: ${repos[0]}`}
+      >
+        {shortRepoName(repos[0])}
+      </span>
+    );
+  }
+
+  return (
+    <div
+      className="relative max-w-[18rem]"
+      onBlur={(event) => {
+        const nextTarget = event.relatedTarget;
+        if (!(nextTarget instanceof Node)) {
+          setOpen(false);
+          return;
+        }
+        if (!event.currentTarget.contains(nextTarget)) setOpen(false);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") setOpen(false);
+      }}
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="shrink-0 text-slate-100 tabular-nums">
+          {repos.length} repos
+        </span>
+        <span
+          className="min-w-0 max-w-[9rem] truncate font-mono text-[11px] text-slate-400"
+          aria-label={`First source repo: ${repos[0]}`}
+        >
+          {shortRepoName(repos[0])}
+        </span>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-label={`View ${repos.length} source repos`}
+          onClick={() => setOpen((value) => !value)}
+          className="shrink-0 rounded border border-white/10 px-2 py-0.5 text-[10px] text-cyan-200 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/10"
+        >
+          View
+        </button>
+      </div>
+      {open && (
+        <div
+          className="absolute left-0 top-full z-30 mt-1 max-h-64 w-[min(28rem,calc(100vw-2rem))] overflow-y-auto rounded-md border border-white/10 bg-[var(--surface-2)] p-2 shadow-xl shadow-black/50"
+          role="dialog"
+          aria-label="Source repos"
+        >
+          <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
+            {repos.length} source repos
+          </div>
+          <ul className="space-y-1">
+            {repos.map((repoId) => (
+              <li
+                key={repoId}
+                className="truncate rounded bg-white/[0.03] px-2 py-1 font-mono text-[11px] text-slate-200"
+                aria-label={repoId}
+              >
+                {repoId}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function WorkbenchGroupingPanel({
@@ -320,7 +383,6 @@ export default function WorkbenchGroupingPanel({
   const [endDateTime, setEndDateTime] = useState(
     defaultDateTimeRange.endDateTime,
   );
-  const [selectedStatus, setSelectedStatus] = useState("all");
   const [workstationMappings, setWorkstationMappings] = useState<
     Record<string, string>
   >({});
@@ -447,9 +509,19 @@ export default function WorkbenchGroupingPanel({
     [datasets],
   );
 
-  const availableDays = useMemo(
-    () => Array.from(new Set(workbenchAdditionAvailableDays(rollupDatasets))),
+  const workstationRollupDatasets = useMemo<WorkbenchRollupDataset[]>(
+    () =>
+      rollupDatasets.filter(
+        (dataset) => !isWorkbenchIgnoredRobotId(dataset.robotId),
+      ),
     [rollupDatasets],
+  );
+  const availableDays = useMemo(
+    () =>
+      Array.from(
+        new Set(workbenchAdditionAvailableDays(workstationRollupDatasets)),
+      ),
+    [workstationRollupDatasets],
   );
   const range = useMemo(
     () =>
@@ -468,43 +540,43 @@ export default function WorkbenchGroupingPanel({
   const targetLabel = targetHours === null ? "—" : formatHours(targetHours);
   const totalTimeline = useMemo(
     () =>
-      computeWorkbenchAdditionTimeline(rollupDatasets, {
+      computeWorkbenchAdditionTimeline(workstationRollupDatasets, {
         startDate: range.startDate,
         endDate: range.endDate,
       }),
-    [range.endDate, range.startDate, rollupDatasets],
+    [range.endDate, range.startDate, workstationRollupDatasets],
   );
   const robotRows = useMemo(
     () =>
-      computeWorkbenchAdditionRollup(rollupDatasets, "robot_id", {
+      computeWorkbenchAdditionRollup(workstationRollupDatasets, "robot_id", {
         startDate: range.startDate,
         endDate: range.endDate,
       }),
-    [range.endDate, range.startDate, rollupDatasets],
+    [range.endDate, range.startDate, workstationRollupDatasets],
   );
   const selectedRows = useMemo(
     () =>
-      computeWorkbenchAdditionRollup(rollupDatasets, dimension, {
+      computeWorkbenchAdditionRollup(workstationRollupDatasets, dimension, {
         startDate: range.startDate,
         endDate: range.endDate,
       }),
-    [dimension, range.endDate, range.startDate, rollupDatasets],
+    [dimension, range.endDate, range.startDate, workstationRollupDatasets],
   );
   const rowNames = useMemo(
     () =>
-      workbenchGroupAdditionDatasetNames(rollupDatasets, dimension, {
+      workbenchGroupAdditionDatasetNames(workstationRollupDatasets, dimension, {
         startDate: range.startDate,
         endDate: range.endDate,
       }),
-    [dimension, range.endDate, range.startDate, rollupDatasets],
+    [dimension, range.endDate, range.startDate, workstationRollupDatasets],
   );
   const robotSourceRepoMap = useMemo(
     () =>
-      workbenchGroupSourceRepoIds(rollupDatasets, "robot_id", {
+      workbenchGroupSourceRepoIds(workstationRollupDatasets, "robot_id", {
         startDate: range.startDate,
         endDate: range.endDate,
       }),
-    [range.endDate, range.startDate, rollupDatasets],
+    [range.endDate, range.startDate, workstationRollupDatasets],
   );
   const visibleDays = useMemo(
     () =>
@@ -515,8 +587,9 @@ export default function WorkbenchGroupingPanel({
   );
   const heatmapRows = useMemo<HeatmapRow[]>(() => {
     const rows = new Map<string, HeatmapRow>();
-    for (const dataset of rollupDatasets) {
+    for (const dataset of workstationRollupDatasets) {
       const robotId = dataset.robotId?.trim() || "—";
+      if (robotId === "—") continue;
       const row = rows.get(robotId) ?? {
         robotId,
         leftGripperSn: dataset.leftGripperSn ?? null,
@@ -559,7 +632,7 @@ export default function WorkbenchGroupingPanel({
   }, [
     range.endDate,
     range.startDate,
-    rollupDatasets,
+    workstationRollupDatasets,
     workstationDefaults,
     workstationDraft,
     workstationMappings,
@@ -581,7 +654,7 @@ export default function WorkbenchGroupingPanel({
     const grouped = new Map<string, WorkbenchDashboardRow>();
     for (const row of robotRows) {
       const repos = sourceRepoIds.get(row.group) ?? [];
-      const sourceDataset = rollupDatasets.find(
+      const sourceDataset = workstationRollupDatasets.find(
         (dataset) => (dataset.robotId?.trim() || "—") === row.group,
       );
       const workstation =
@@ -597,7 +670,7 @@ export default function WorkbenchGroupingPanel({
             workstationDefaults[row.group] ??
             "—");
       const dailyHours: Record<string, number> = {};
-      for (const dataset of rollupDatasets) {
+      for (const dataset of workstationRollupDatasets) {
         const key = dataset.robotId?.trim() || "—";
         if (key !== row.group) continue;
         for (const addition of dataset.dailyAdditions ?? []) {
@@ -630,7 +703,7 @@ export default function WorkbenchGroupingPanel({
     rewardDraft,
     robotRows,
     robotSourceRepoMap,
-    rollupDatasets,
+    workstationRollupDatasets,
     targetHours,
     workstationDefaults,
     workstationDraft,
@@ -702,7 +775,10 @@ export default function WorkbenchGroupingPanel({
         detail: rewardValidationError,
       });
     }
-    if ((totalTimeline.rows.length ?? 0) === 0 && rollupDatasets.length > 0) {
+    if (
+      (totalTimeline.rows.length ?? 0) === 0 &&
+      workstationRollupDatasets.length > 0
+    ) {
       items.push({
         kind: "info",
         title: "No daily additions in range",
@@ -713,12 +789,58 @@ export default function WorkbenchGroupingPanel({
   }, [
     legacyRows.length,
     rewardValidationError,
-    rollupDatasets.length,
+    workstationRollupDatasets.length,
     totalTimeline.rows.length,
     unmappedRows.length,
     workstationLegacyDefaults,
     workstationLegacyMappings,
   ]);
+
+  const mailDashboardInput = useMemo<WorkbenchDashboardMailInput>(
+    () => ({
+      organization,
+      dateRange: range,
+      summary: {
+        totalHours,
+        episodes: totalEpisodes,
+        targetHours,
+        projectedReward: projectedRewardAmount,
+        mappedWorkstations: mappedRows.length,
+        unmappedRobotIds: unmappedRows.length,
+        legacyRows: legacyRows.length,
+        daysInRange: rangeDays,
+      },
+      rows: robotDashboardRows.map((row) => ({
+        robotId: row.robotId,
+        sourceRepoIds: row.sourceRepoIds,
+        workstation: row.workstation,
+        datasets: row.count,
+        hours: row.hours,
+        targetHours,
+        ratePercent: getWorkbenchOkrAchievementRate(
+          row.hours,
+          targetHours ?? 0,
+        ),
+        rule: row.reward.level?.label ?? row.reward.symbol,
+        reward: row.reward.amount,
+      })),
+      alerts,
+    }),
+    [
+      alerts,
+      legacyRows.length,
+      mappedRows.length,
+      organization,
+      projectedRewardAmount,
+      range,
+      rangeDays,
+      robotDashboardRows,
+      targetHours,
+      totalEpisodes,
+      totalHours,
+      unmappedRows.length,
+    ],
+  );
 
   const saveWorkstationMappings = useCallback(async () => {
     setMappingsSaving(true);
@@ -945,26 +1067,6 @@ export default function WorkbenchGroupingPanel({
                 className="rounded-md border border-white/10 bg-[var(--surface-1)] px-3 py-2 text-slate-200 focus:border-cyan-400 focus:outline-none disabled:opacity-50"
               />
             </label>
-            <label className="flex items-center gap-2">
-              <span>Status</span>
-              <select
-                value={selectedStatus}
-                onChange={(event) => setSelectedStatus(event.target.value)}
-                className="rounded-md border border-white/10 bg-[var(--surface-1)] px-3 py-2 text-slate-200 focus:border-cyan-400 focus:outline-none"
-              >
-                {[
-                  ["all", "All"],
-                  ["mapped", "Mapped"],
-                  ["unmapped", "Unmapped"],
-                  ["legacy", "Legacy"],
-                  ["alerts", "Alerts"],
-                ].map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
             <button
               type="button"
               onClick={resetDateRange}
@@ -1047,8 +1149,8 @@ export default function WorkbenchGroupingPanel({
                   Workstation detail
                 </h4>
                 <p className="mt-1 text-[11px] text-slate-500">
-                  Robot ID is the primary key; left SN remains display-only when
-                  available.
+                  Robot ID is the primary key; source repos stay collapsed for
+                  compact scanning.
                 </p>
               </div>
               <span className="text-[10px] text-slate-500">
@@ -1062,7 +1164,7 @@ export default function WorkbenchGroupingPanel({
                 <thead className="bg-[var(--surface-2)] text-slate-400">
                   <tr>
                     <th className="px-3 py-2.5 font-medium">Robot ID</th>
-                    <th className="px-3 py-2.5 font-medium">Left SN</th>
+                    <th className="px-3 py-2.5 font-medium">Source repos</th>
                     <th className="px-3 py-2.5 font-medium">Workstation</th>
                     <th className="px-3 py-2.5 font-medium">Datasets</th>
                     <th className="px-3 py-2.5 font-medium">Hours</th>
@@ -1078,14 +1180,11 @@ export default function WorkbenchGroupingPanel({
                       key={row.robotId ?? row.leftGripperSn ?? row.group}
                       className="border-t border-white/5"
                     >
-                      <td
-                        className="px-3 py-2.5 text-slate-100 tabular-nums"
-                        title={sourceRepoTitle(row.sourceRepoIds)}
-                      >
+                      <td className="px-3 py-2.5 text-slate-100 tabular-nums">
                         {row.robotId ?? "—"}
                       </td>
                       <td className="px-3 py-2.5 text-slate-300">
-                        {row.leftGripperSn ?? "—"}
+                        <SourceReposCell repoIds={row.sourceRepoIds} />
                       </td>
                       <td className="px-3 py-2.5 text-slate-100">
                         {row.workstation}
@@ -1261,9 +1360,6 @@ export default function WorkbenchGroupingPanel({
                   Top groups
                 </h4>
               </div>
-              <span className="text-[10px] text-slate-500">
-                {titleCaseStatus(selectedStatus)}
-              </span>
             </div>
             <div className="h-64 w-full">
               <ResponsiveContainer width="100%" height="100%">
@@ -1304,8 +1400,8 @@ export default function WorkbenchGroupingPanel({
                     Workstation mappings
                   </h4>
                   <p className="mt-1 text-[11px] text-slate-500">
-                    Canonical keys are robot_id. Legacy left SN entries are kept
-                    for display and migration.
+                    Workstation edits now use robot_id. Existing legacy mappings
+                    are preserved for compatibility.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -1351,7 +1447,6 @@ export default function WorkbenchGroupingPanel({
                   <thead className="bg-[var(--surface-2)] text-slate-400">
                     <tr>
                       <th className="px-3 py-2.5 font-medium">Robot ID</th>
-                      <th className="px-3 py-2.5 font-medium">Left SN</th>
                       <th className="px-3 py-2.5 font-medium">Workstation</th>
                       <th className="px-3 py-2.5 font-medium">Source</th>
                     </tr>
@@ -1364,9 +1459,6 @@ export default function WorkbenchGroupingPanel({
                       >
                         <td className="px-3 py-2.5 text-slate-100">
                           {row.robotId ?? "—"}
-                        </td>
-                        <td className="px-3 py-2.5 text-slate-300">
-                          {row.leftGripperSn ?? "—"}
                         </td>
                         <td className="px-3 py-2.5">
                           {row.robotId ? (
@@ -1404,8 +1496,8 @@ export default function WorkbenchGroupingPanel({
               {(Object.keys(workstationLegacyMappings).length > 0 ||
                 Object.keys(workstationLegacyDefaults).length > 0) && (
                 <div className="mt-3 rounded-md border border-amber-400/20 bg-amber-400/5 p-3 text-xs text-amber-100">
-                  Legacy left SN mappings are still loaded. Keep them only if
-                  the hardware file has not been backfilled with robot_id yet.
+                  Existing legacy left SN mappings are still loaded for
+                  compatibility; new workstation edits should use robot_id.
                 </div>
               )}
             </section>
@@ -1591,7 +1683,10 @@ export default function WorkbenchGroupingPanel({
             </section>
           )}
 
-          <WorkbenchMailComposer organization={organization} />
+          <WorkbenchMailComposer
+            organization={organization}
+            dashboardInput={mailDashboardInput}
+          />
           <section className="rounded-md border border-white/10 bg-[var(--surface-1)]/35 p-4">
             <div className="mb-3 flex items-baseline justify-between gap-2">
               <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
