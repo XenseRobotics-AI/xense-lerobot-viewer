@@ -19,10 +19,10 @@ describe("hf endpoint resolution", () => {
     ).toBe("https://huggingface.co");
   });
 
-  test("catalog reuses the sync endpoint unless overridden", () => {
+  test("catalog defaults to the official Hub unless explicitly overridden", () => {
     expect(
       resolveHfCatalogEndpoint({
-        HF_ENDPOINT: "https://huggingface.co",
+        HF_ENDPOINT: "https://hf-mirror.com",
       } as NodeJS.ProcessEnv),
     ).toBe("https://huggingface.co");
     expect(

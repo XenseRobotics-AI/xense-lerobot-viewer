@@ -3,11 +3,13 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { resolveLocalDatasetRoot } from "@/lib/local-datasets-discovery";
 import {
+  normalizeHfEndpoint,
   resolveHfCatalogEndpoint,
   resolveHfSyncEndpoint,
 } from "@/lib/hf-endpoints";
 import { resolveHfToken } from "@/lib/hf-token-store";
 import { addHfMirrorProxyBypass } from "@/lib/proxy-bypass";
+import { normalizeHfToken } from "@/utils/hfValidation";
 import {
   PythonUnavailableError,
   pythonSpawnEnv,
@@ -63,7 +65,7 @@ const HF_CATALOG_ENDPOINT = resolveHfCatalogEndpoint();
 const LIST_TIMEOUT_MS = 120_000;
 
 /**
- * Sync is switched off (2026-09-01, by decision).
+ * Full-dataset sync is switched off (2026-09-01, by decision).
  *
  * The local corpus was reorganised from sibling directories (`TacVerse`,
  * `TacVerse-RAW`, `TacVerse-Failed`) into `TacVerse/{merged,raw,failed,
@@ -74,15 +76,14 @@ const LIST_TIMEOUT_MS = 120_000;
  * `TacVerse/merged/<name>` and re-fetch roughly 500 GB — silently, as a
  * duplication rather than an error.
  *
- * The machinery below is deliberately left intact. Re-enabling means fixing
- * `repo_target()` to target the right sub-directory — and `sync_fast.py` in
- * the engine's work tree, which documents itself as sharing that contract —
- * not just deleting this flag.
+ * `repo_target()` now understands the bucketed layout, which makes the
+ * Workbench-only metadata refresh safe. Full downloads remain disabled until
+ * `sync_fast.py` in the engine's work tree adopts the same contract.
  */
 // Annotated `boolean` rather than inferred: a literal `true` narrows the type
 // and makes everything past the guard unreachable code to the compiler, which
 // is exactly the machinery we are deliberately keeping compilable.
-const SYNC_DISABLED: boolean = true;
+const FULL_SYNC_DISABLED: boolean = true;
 const SYNC_DISABLED_REASON =
   "Hugging Face sync is disabled. The local corpus moved to " +
   "TacVerse/{merged,raw,failed,released,in-processing}/…, and the " +
@@ -375,23 +376,52 @@ function resolveTarget(body: {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  // Refuse before parsing anything: the listing pass transfers no data, but a
-  // caller who gets a listing back reasonably expects the confirm step to work.
-  if (SYNC_DISABLED) {
-    return Response.json({ error: SYNC_DISABLED_REASON }, { status: 503 });
-  }
-
   let body: {
     source?: unknown;
     repo?: unknown;
     confirm?: unknown;
     force?: unknown;
     metadataOnly?: unknown;
+    endpoint?: unknown;
+    token?: unknown;
   };
   try {
     body = await request.json();
   } catch {
     return Response.json({ error: "Expected a JSON body." }, { status: 400 });
+  }
+
+  // Workbench's metadata-only path transfers just info/hardware JSON and uses
+  // the bucket-aware target resolver. Keep every full-dataset entry point
+  // closed until the engine-side downloader shares that layout contract.
+  if (FULL_SYNC_DISABLED && body.metadataOnly !== true) {
+    return Response.json({ error: SYNC_DISABLED_REASON }, { status: 503 });
+  }
+
+  let endpoint =
+    body.metadataOnly === true ? HF_CATALOG_ENDPOINT : HF_SYNC_ENDPOINT;
+  if (body.endpoint !== undefined) {
+    const selectedEndpoint = normalizeHfEndpoint(body.endpoint);
+    if (!selectedEndpoint) {
+      return Response.json(
+        {
+          error:
+            "`endpoint` must be https://hf-mirror.com or https://huggingface.co.",
+        },
+        { status: 400 },
+      );
+    }
+    endpoint = selectedEndpoint;
+  }
+  let requestedToken: string | null = null;
+  if (body.token !== undefined) {
+    requestedToken = normalizeHfToken(body.token);
+    if (!requestedToken) {
+      return Response.json(
+        { error: "`token` must be a non-empty Hugging Face token." },
+        { status: 400 },
+      );
+    }
   }
 
   const target = resolveTarget(body);
@@ -415,7 +445,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   let token: string | null = null;
   try {
-    token = (await resolveHfToken(root)).token;
+    token = requestedToken ?? (await resolveHfToken(root)).token;
   } catch {
     token = null;
   }
@@ -448,7 +478,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       statsScriptPath(),
       body.force === true ? [...baseArgs, "--force"] : baseArgs,
       python.bin,
-      HF_CATALOG_ENDPOINT,
+      endpoint,
       token,
     );
   }

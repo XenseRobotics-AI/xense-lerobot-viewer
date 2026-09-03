@@ -11,6 +11,8 @@ import {
   defaultWorkbenchRewardRules,
   readWorkbenchRewardRules,
 } from "@/lib/workbench-reward-store";
+import { readWorkbenchPersonnelConfig } from "@/lib/workbench-personnel-store";
+import { bucketOf } from "@/lib/dataset-facets";
 import { computeCorpusStats } from "@/utils/corpusStats";
 import {
   computeDailyDelta,
@@ -25,6 +27,10 @@ import {
   workbenchDatasetSuffixDay,
   type WorkbenchDailyAddition,
 } from "@/utils/workbenchRollup";
+import {
+  filterWorkbenchStatisticsDatasets,
+  type WorkbenchStatisticsFilterSummary,
+} from "@/utils/workbenchStatisticsFilter";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,6 +53,9 @@ type WorkbenchDatasetSummary = Awaited<
   durationHours?: number | null;
   dailyAdditions?: WorkbenchDailyAddition[];
 };
+
+export type WorkbenchStatisticsResponseFilter =
+  WorkbenchStatisticsFilterSummary;
 
 type NormalizedWorkbenchMappings = {
   mappings: Record<string, string>;
@@ -220,6 +229,23 @@ async function readCatalogByRepo(
 }
 
 /**
+ * Local TacVerse paths include a storage bucket that does not exist in the
+ * Hub id: `TacVerse/merged/name` and `TacVerse/released/name` both correspond
+ * to `TacVerse/name`.
+ */
+function catalogEntryForLocalDataset(
+  catalog: Map<string, { entry: HfCatalogEntry; rank: number }>,
+  organization: string,
+  relativePath: string,
+): { entry: HfCatalogEntry; rank: number } | undefined {
+  const direct = catalog.get(relativePath);
+  if (direct) return direct;
+  if (bucketOf(relativePath) === null) return undefined;
+  const name = relativePath.split("/").filter(Boolean).at(-1);
+  return name ? catalog.get(`${organization}/${name}`) : undefined;
+}
+
+/**
  * Read-only corpus summary used exclusively by the viewer's Workbench tab.
  * Keeping it separate from the homepage and the shared local-dataset route
  * prevents the moved UI from changing either surface's existing contract.
@@ -235,9 +261,12 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const discovery = await discoverLocalDatasets();
-    const datasets = discovery.datasets.filter(
+    const organizationDatasets = discovery.datasets.filter(
       (dataset) => getDatasetPrefix(dataset.relativePath) === organization,
     );
+    const filteredDatasets =
+      filterWorkbenchStatisticsDatasets(organizationDatasets);
+    const datasets = filteredDatasets.included;
     const workstationMappings = await readWorkbenchWorkstationMappings(
       organization,
       discovery.root,
@@ -246,10 +275,15 @@ export async function GET(request: Request): Promise<Response> {
       organization,
       discovery.root,
     );
+    const personnelConfig = await readWorkbenchPersonnelConfig(organization);
     const catalog = await readCatalogByRepo(discovery.root, organization);
     const workbenchDatasets: WorkbenchDatasetSummary[] = await Promise.all(
       datasets.map(async (dataset) => {
-        const remote = catalog.get(dataset.relativePath)?.entry;
+        const remote = catalogEntryForLocalDataset(
+          catalog,
+          organization,
+          dataset.relativePath,
+        )?.entry;
         const withTasks = {
           ...dataset,
           tasks: await readDatasetTasks(
@@ -264,8 +298,16 @@ export async function GET(request: Request): Promise<Response> {
       }),
     );
     workbenchDatasets.sort((left, right) => {
-      const leftCatalog = catalog.get(left.relativePath);
-      const rightCatalog = catalog.get(right.relativePath);
+      const leftCatalog = catalogEntryForLocalDataset(
+        catalog,
+        organization,
+        left.relativePath,
+      );
+      const rightCatalog = catalogEntryForLocalDataset(
+        catalog,
+        organization,
+        right.relativePath,
+      );
       if (leftCatalog && rightCatalog) {
         return (
           catalogTime(rightCatalog.entry) - catalogTime(leftCatalog.entry) ||
@@ -312,6 +354,7 @@ export async function GET(request: Request): Promise<Response> {
     );
     return Response.json({
       datasets: workbenchDatasets,
+      statisticsFilter: filteredDatasets.summary,
       errors,
       delta,
       workstationMappings: {
@@ -323,6 +366,7 @@ export async function GET(request: Request): Promise<Response> {
       },
       rewardRules,
       rewardRuleDefaults: defaultWorkbenchRewardRules(organization),
+      personnelConfig,
     });
   } catch (error) {
     return Response.json(

@@ -1416,6 +1416,7 @@ function EpisodeViewerInner({
               <Suspense fallback={<Loading />}>
                 <DatasetReviewPanel
                   datasetInfo={datasetInfo}
+                  episodeData={data}
                   episodeLengthStats={episodeLengthStats}
                   episodeLengthStatsLoading={statsLoading}
                   episodeLengthStatsError={statsError}

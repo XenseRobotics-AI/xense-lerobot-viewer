@@ -89,7 +89,8 @@ export function evaluateWorkbenchRewardRules(
 }
 
 export function formatWorkbenchRewardAmount(value: number): string {
-  if (!Number.isFinite(value) || value === 0) return "0";
+  if (!Number.isFinite(value)) return "—";
   const prefix = value > 0 ? "+" : "";
-  return `${prefix}${value.toLocaleString("en-US")}`;
+  const coin = value > 0 ? " 🪙" : "";
+  return `¥${prefix}${value.toLocaleString("en-US")}${coin}`;
 }

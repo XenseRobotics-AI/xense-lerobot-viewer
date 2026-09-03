@@ -3,7 +3,10 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { resolveLocalDatasetRoot } from "@/lib/local-datasets-discovery";
-import { resolveHfCatalogEndpoint } from "@/lib/hf-endpoints";
+import {
+  normalizeHfEndpoint,
+  resolveHfCatalogEndpoint,
+} from "@/lib/hf-endpoints";
 import {
   PythonUnavailableError,
   pythonSpawnEnv,
@@ -19,7 +22,7 @@ import { resolveHfToken } from "@/lib/hf-token-store";
 import { redactHfSecrets } from "@/lib/hf-identity";
 import { addHfMirrorProxyBypass } from "@/lib/proxy-bypass";
 import { isSameOriginRequest } from "@/lib/request-security";
-import { normalizeHfSource } from "@/utils/hfValidation";
+import { normalizeHfSource, normalizeHfToken } from "@/utils/hfValidation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,15 +48,16 @@ function spawnCatalog(
   org: string,
   root: string,
   cache: string,
+  endpoint: string,
   force: boolean,
   token: string | null,
 ): ChildProcessWithoutNullStreams {
   const env = addHfMirrorProxyBypass(
     {
       ...pythonSpawnEnv(),
-      HF_ENDPOINT: CATALOG_ENDPOINT,
+      HF_ENDPOINT: endpoint,
     } as NodeJS.ProcessEnv,
-    CATALOG_ENDPOINT,
+    endpoint,
   );
   if (token) env.HF_TOKEN = token;
   const args = [scriptPath(), "--org", org, "--root", root, "--cache", cache];
@@ -100,7 +104,12 @@ export async function POST(request: NextRequest): Promise<Response> {
       { status: 403 },
     );
   }
-  let body: { org?: unknown; force?: unknown } = {};
+  let body: {
+    org?: unknown;
+    force?: unknown;
+    endpoint?: unknown;
+    token?: unknown;
+  } = {};
   try {
     const value = await request.json();
     if (value && typeof value === "object") body = value as typeof body;
@@ -109,6 +118,31 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
   const org = normalizeHfSource(body.org);
   if (!org) return Response.json({ error: "Invalid org." }, { status: 400 });
+
+  let endpoint = CATALOG_ENDPOINT;
+  if (body.endpoint !== undefined) {
+    const selectedEndpoint = normalizeHfEndpoint(body.endpoint);
+    if (!selectedEndpoint) {
+      return Response.json(
+        {
+          error:
+            "`endpoint` must be https://hf-mirror.com or https://huggingface.co.",
+        },
+        { status: 400 },
+      );
+    }
+    endpoint = selectedEndpoint;
+  }
+  let requestedToken: string | null = null;
+  if (body.token !== undefined) {
+    requestedToken = normalizeHfToken(body.token);
+    if (!requestedToken) {
+      return Response.json(
+        { error: "`token` must be a non-empty Hugging Face token." },
+        { status: 400 },
+      );
+    }
+  }
 
   let root: string;
   try {
@@ -121,7 +155,9 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
   let credentials: { token: string | null };
   try {
-    credentials = await resolveHfToken(root);
+    credentials = {
+      token: requestedToken ?? (await resolveHfToken(root)).token,
+    };
   } catch {
     credentials = { token: null };
   }
@@ -181,6 +217,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             org,
             root,
             cache,
+            endpoint,
             body.force === true,
             credentials.token,
           );

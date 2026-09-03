@@ -1,13 +1,24 @@
+import { formatBytes } from "@/utils/byteSize";
+
 export const WORKBENCH_MAIL_SENDER = "1796262052@qq.com";
 const WORKBENCH_MAIL_RECIPIENT = "frank@xenserobotics.com";
 const WORKBENCH_MAIL_SUBJECT = "SMTP smoketest";
 const STORAGE_PREFIX = "xense-workbench-mail-draft";
+const MAIL_ADDRESS_PATTERN = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/u;
 
 export type WorkbenchMailDraft = {
   sender: string;
   recipient: string;
   subject: string;
-  body: string;
+  note: string;
+};
+
+export type WorkbenchMailMessage = {
+  sender: string;
+  recipient: string;
+  subject: string;
+  textBody: string;
+  htmlBody: string;
 };
 
 export type WorkbenchDashboardMailDateRange = {
@@ -16,13 +27,14 @@ export type WorkbenchDashboardMailDateRange = {
 };
 
 export type WorkbenchDashboardMailSummary = {
-  totalHours: number;
+  organizationTotalHours: number;
+  rangeHours: number;
   episodes: number;
-  targetHours: number | null;
-  projectedReward: number;
-  mappedWorkstations: number;
-  unmappedRobotIds: number;
-  legacyRows: number;
+  tasks: number;
+  storageBytes: number;
+  dailyTargetHours: number;
+  totalBonus: number;
+  robotIds: number;
   daysInRange: number | null;
 };
 
@@ -38,6 +50,17 @@ export type WorkbenchDashboardMailRow = {
   reward: number;
 };
 
+export type WorkbenchDashboardPersonnelMailRow = {
+  personnel: string;
+  workstation: string;
+  hours: number;
+  targetHours: number | null;
+  ratePercent: number | null;
+  rule: string;
+  reward: number;
+  email: string;
+};
+
 export type WorkbenchDashboardMailAlert = {
   kind: "warn" | "info" | "error";
   title: string;
@@ -50,6 +73,8 @@ export type WorkbenchDashboardMailInput = {
   generatedAt?: Date | string;
   summary: WorkbenchDashboardMailSummary;
   rows: readonly WorkbenchDashboardMailRow[];
+  personnelRows: readonly WorkbenchDashboardPersonnelMailRow[];
+  personnelBonusTotal: number;
   alerts: readonly WorkbenchDashboardMailAlert[];
 };
 
@@ -61,6 +86,8 @@ type WorkbenchMailDraftRecord = {
 
 type WorkbenchMailDraftStorage = Pick<Storage, "getItem" | "setItem">;
 
+type MailBodies = Pick<WorkbenchMailMessage, "textBody" | "htmlBody">;
+
 function normalizeOrg(value: string): string {
   const org = value.trim();
   return org || "default";
@@ -70,6 +97,32 @@ function cleanText(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed || null;
+}
+
+export function parseWorkbenchMailRecipients(value: string): string[] {
+  const recipients = value
+    .split(/[\s,，;；]+/u)
+    .map((recipient) => recipient.trim())
+    .filter(Boolean);
+  const unique = new Map<string, string>();
+  for (const recipient of recipients) {
+    const key = recipient.toLowerCase();
+    if (!unique.has(key)) unique.set(key, recipient);
+  }
+  return Array.from(unique.values());
+}
+
+export function normalizeWorkbenchMailRecipients(value: string): string {
+  return parseWorkbenchMailRecipients(value).join(", ");
+}
+
+function validateWorkbenchMailRecipients(value: string): string | null {
+  const recipients = parseWorkbenchMailRecipients(value);
+  if (recipients.length === 0) return "收件人不能为空。";
+  const invalid = recipients.find(
+    (recipient) => !MAIL_ADDRESS_PATTERN.test(recipient),
+  );
+  return invalid ? `收件人邮箱格式无效：${invalid}` : null;
 }
 
 function isDayKey(value: unknown): value is string {
@@ -160,20 +213,13 @@ function formatGeneratedAt(value?: Date | string): string {
   return date.toISOString();
 }
 
-function escapeMarkdownTableCell(value: unknown): string {
-  const text = cleanInlineText(value).replace(/\|/gu, "\\|");
-  return text || "-";
-}
-
-function escapeHtmlText(value: string): string {
-  return value
+function escapeHtml(value: unknown): string {
+  return String(value ?? "")
     .replace(/&/gu, "&amp;")
     .replace(/</gu, "&lt;")
-    .replace(/>/gu, "&gt;");
-}
-
-function markdownTableRow(cells: readonly unknown[]): string {
-  return `| ${cells.map(escapeMarkdownTableCell).join(" | ")} |`;
+    .replace(/>/gu, "&gt;")
+    .replace(/"/gu, "&quot;")
+    .replace(/'/gu, "&#39;");
 }
 
 function formatDateRangeLabel(range: WorkbenchDashboardMailDateRange): string {
@@ -183,31 +229,410 @@ function formatDateRangeLabel(range: WorkbenchDashboardMailDateRange): string {
   return `${normalized.startDate} to ${normalized.inclusiveEndDate}`;
 }
 
-function formatSourceReposCell(repoIds: readonly string[]): string {
-  const repos = repoIds.map((repoId) => repoId.trim()).filter(Boolean);
-  if (repos.length === 0) return "0";
-  const label = repos.length === 1 ? "1 repo" : `${repos.length} repos`;
-  return `${label}: ${repos.map(escapeHtmlText).join("<br>")}`;
+function normalizedSourceRepos(repoIds: readonly string[]): string[] {
+  return repoIds.map(cleanInlineText).filter(Boolean);
 }
 
-function formatAlertKind(kind: WorkbenchDashboardMailAlert["kind"]): string {
-  if (kind === "error") return "[ERROR]";
-  if (kind === "warn") return "[WARN]";
-  return "[INFO]";
+function formatAlertLabel(kind: WorkbenchDashboardMailAlert["kind"]): string {
+  if (kind === "error") return "Error";
+  if (kind === "warn") return "Warning";
+  return "Info";
+}
+
+function alertColor(kind: WorkbenchDashboardMailAlert["kind"]): string {
+  if (kind === "error") return "#dc2626";
+  if (kind === "warn") return "#d97706";
+  return "#0284c7";
+}
+
+function htmlMetricRow(label: string, value: string): string {
+  return `<tr>
+    <td style="width:58%;padding:9px 10px;border-bottom:1px solid #e2e8f0;color:#64748b;font-size:13px;line-height:18px;">${escapeHtml(label)}</td>
+    <td style="width:42%;padding:9px 10px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:13px;font-weight:600;line-height:18px;text-align:right;word-break:break-word;overflow-wrap:anywhere;">${escapeHtml(value)}</td>
+  </tr>`;
+}
+
+function htmlSourceRepos(repoIds: readonly string[]): string {
+  const repos = normalizedSourceRepos(repoIds);
+  if (repos.length === 0) return "<div>None</div>";
+  return repos
+    .map(
+      (repo) =>
+        `<div class="breakable" style="word-break:break-all;overflow-wrap:anywhere;">${escapeHtml(repo)}</div>`,
+    )
+    .join("");
+}
+
+function htmlMobileDetailRow(
+  row: WorkbenchDashboardMailRow,
+  index: number,
+): string {
+  const robotId = cleanInlineText(row.robotId) || "-";
+  const workstation = cleanInlineText(row.workstation) || "-";
+  return `<div style="margin:0 0 12px;border:1px solid #cbd5e1;border-radius:8px;background:#ffffff;overflow:hidden;">
+    <div style="padding:12px;background:#f1f5f9;border-bottom:1px solid #cbd5e1;">
+      <div style="margin:0 0 3px;color:#64748b;font-size:11px;line-height:15px;text-transform:uppercase;letter-spacing:.06em;">Workstation ${index + 1}</div>
+      <div class="breakable" style="color:#0f172a;font-size:16px;font-weight:700;line-height:22px;word-break:break-all;overflow-wrap:anywhere;">${escapeHtml(robotId)}</div>
+      <div class="breakable" style="margin-top:3px;color:#334155;font-size:13px;line-height:19px;word-break:break-all;overflow-wrap:anywhere;">${escapeHtml(workstation)}</div>
+    </div>
+    <div style="padding:10px 10px 4px;">
+      <div style="margin-bottom:4px;color:#64748b;font-size:11px;line-height:15px;text-transform:uppercase;letter-spacing:.06em;">Source repositories</div>
+      <div style="color:#334155;font-size:12px;line-height:18px;">${htmlSourceRepos(row.sourceRepoIds)}</div>
+    </div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;table-layout:fixed;">
+      ${htmlMetricRow("Datasets", formatInteger(row.datasets))}
+      ${htmlMetricRow("Hours / Range target", `${formatDecimal(row.hours)} / ${formatDecimal(row.targetHours)}`)}
+      ${htmlMetricRow("Rate / Rule", `${formatPercent(row.ratePercent)} / ${cleanInlineText(row.rule) || "-"}`)}
+      ${htmlMetricRow("Reward", formatSignedNumber(row.reward))}
+    </table>
+  </div>`;
+}
+
+function htmlDesktopCell(value: unknown, align: "left" | "right" = "left") {
+  return `<td style="padding:9px 7px;border-bottom:1px solid #e2e8f0;color:#334155;font-size:11px;line-height:16px;text-align:${align};vertical-align:top;word-break:break-word;overflow-wrap:anywhere;">${escapeHtml(value)}</td>`;
+}
+
+function htmlDesktopSourceCell(repoIds: readonly string[]): string {
+  return `<td style="padding:9px 7px;border-bottom:1px solid #e2e8f0;color:#334155;font-size:11px;line-height:16px;vertical-align:top;word-break:break-all;overflow-wrap:anywhere;">${htmlSourceRepos(repoIds)}</td>`;
+}
+
+function htmlDesktopDetailRow(row: WorkbenchDashboardMailRow): string {
+  return `<tr>
+    ${htmlDesktopCell(cleanInlineText(row.robotId) || "-")}
+    ${htmlDesktopSourceCell(row.sourceRepoIds)}
+    ${htmlDesktopCell(cleanInlineText(row.workstation) || "-")}
+    ${htmlDesktopCell(formatInteger(row.datasets), "right")}
+    ${htmlDesktopCell(formatDecimal(row.hours), "right")}
+    ${htmlDesktopCell(formatDecimal(row.targetHours), "right")}
+    ${htmlDesktopCell(formatPercent(row.ratePercent), "right")}
+    ${htmlDesktopCell(cleanInlineText(row.rule) || "-")}
+    ${htmlDesktopCell(formatSignedNumber(row.reward), "right")}
+  </tr>`;
+}
+
+function htmlMobilePersonnelRow(
+  row: WorkbenchDashboardPersonnelMailRow,
+  index: number,
+): string {
+  const personnel = cleanInlineText(row.personnel) || "-";
+  const workstation = cleanInlineText(row.workstation) || "-";
+  const email = cleanInlineText(row.email) || "-";
+  return `<div style="margin:0 0 12px;border:1px solid #cbd5e1;border-radius:8px;background:#ffffff;overflow:hidden;">
+    <div style="padding:12px;background:#f1f5f9;border-bottom:1px solid #cbd5e1;">
+      <div style="margin:0 0 3px;color:#64748b;font-size:11px;line-height:15px;text-transform:uppercase;letter-spacing:.06em;">Personnel ${index + 1}</div>
+      <div class="breakable" style="color:#0f172a;font-size:16px;font-weight:700;line-height:22px;word-break:break-word;overflow-wrap:anywhere;">${escapeHtml(personnel)}</div>
+      <div style="margin-top:3px;color:#334155;font-size:13px;line-height:19px;">${escapeHtml(workstation)}</div>
+    </div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;table-layout:fixed;">
+      ${htmlMetricRow("Hours", formatDecimal(row.hours))}
+      ${htmlMetricRow("Range target", formatDecimal(row.targetHours))}
+      ${htmlMetricRow("Rate", formatPercent(row.ratePercent))}
+      ${htmlMetricRow("Rule", cleanInlineText(row.rule) || "-")}
+      ${htmlMetricRow("Reward", formatSignedNumber(row.reward))}
+      ${htmlMetricRow("Email", email)}
+    </table>
+  </div>`;
+}
+
+function htmlDesktopPersonnelRow(
+  row: WorkbenchDashboardPersonnelMailRow,
+): string {
+  return `<tr>
+    ${htmlDesktopCell(cleanInlineText(row.personnel) || "-")}
+    ${htmlDesktopCell(cleanInlineText(row.workstation) || "-")}
+    ${htmlDesktopCell(formatDecimal(row.hours), "right")}
+    ${htmlDesktopCell(formatDecimal(row.targetHours), "right")}
+    ${htmlDesktopCell(formatPercent(row.ratePercent), "right")}
+    ${htmlDesktopCell(cleanInlineText(row.rule) || "-")}
+    ${htmlDesktopCell(formatSignedNumber(row.reward), "right")}
+    ${htmlDesktopCell(cleanInlineText(row.email) || "-")}
+  </tr>`;
+}
+
+function htmlHeaderCell(label: string, align: "left" | "right" = "left") {
+  return `<th scope="col" style="padding:9px 7px;background:#e2e8f0;color:#334155;font-size:10px;font-weight:700;line-height:14px;text-align:${align};vertical-align:bottom;">${escapeHtml(label)}</th>`;
+}
+
+function htmlAlerts(alerts: readonly WorkbenchDashboardMailAlert[]): string {
+  if (alerts.length === 0) {
+    return `<div style="padding:11px 12px;border-left:4px solid #16a34a;background:#f0fdf4;color:#166534;font-size:13px;line-height:19px;">No blockers detected in the current range.</div>`;
+  }
+  return alerts
+    .map((alert) => {
+      const label = formatAlertLabel(alert.kind);
+      const title = cleanInlineText(alert.title) || "Alert";
+      const detail = cleanInlineText(alert.detail);
+      const color = alertColor(alert.kind);
+      return `<div style="margin:0 0 8px;padding:11px 12px;border-left:4px solid ${color};background:#f8fafc;color:#334155;font-size:13px;line-height:19px;">
+        <div style="font-weight:700;color:${color};">${escapeHtml(label)} · ${escapeHtml(title)}</div>
+        ${detail ? `<div style="margin-top:2px;">${escapeHtml(detail)}</div>` : ""}
+      </div>`;
+    })
+    .join("");
+}
+
+function htmlNote(note: string): string {
+  return escapeHtml(note.trim()).replace(/\r?\n/gu, "<br>");
+}
+
+function createWorkbenchDashboardText(
+  input: WorkbenchDashboardMailInput,
+  note: string,
+): string {
+  const lines = [
+    "WORKBENCH DASHBOARD",
+    `Organization: ${cleanInlineText(input.organization) || "default"}`,
+    `Date range: ${formatDateRangeLabel(input.dateRange)}`,
+    `Generated at: ${formatGeneratedAt(input.generatedAt)}`,
+    "",
+    "SUMMARY",
+    `${cleanInlineText(input.organization) || "default"} total hours: ${formatDecimalOneHour(input.summary.organizationTotalHours)}`,
+    `Selected range hours: ${formatDecimal(input.summary.rangeHours)} h`,
+    `Episodes: ${formatInteger(input.summary.episodes)}`,
+    `Tasks: ${formatInteger(input.summary.tasks)}`,
+    `Storage: ${formatBytes(input.summary.storageBytes)}`,
+    `Daily target hours: ${formatDecimal(input.summary.dailyTargetHours)} h/day`,
+    `Total bonus: ${formatSignedNumber(input.summary.totalBonus)}`,
+    `Robot IDs: ${formatInteger(input.summary.robotIds)}`,
+    `Days in range: ${formatInteger(input.summary.daysInRange)}`,
+    "",
+    "WORKSTATION DETAIL",
+  ];
+
+  if (input.rows.length === 0) {
+    lines.push("No workstation detail rows in the current range.");
+  } else {
+    input.rows.forEach((row, index) => {
+      const repos = normalizedSourceRepos(row.sourceRepoIds);
+      if (index > 0) lines.push("");
+      lines.push(
+        `Workstation ${index + 1}`,
+        `Robot ID: ${cleanInlineText(row.robotId) || "-"}`,
+        `Workstation: ${cleanInlineText(row.workstation) || "-"}`,
+        `Source repositories (${repos.length}):`,
+      );
+      if (repos.length === 0) lines.push("  None");
+      else repos.forEach((repo) => lines.push(`  ${repo}`));
+      lines.push(
+        `Datasets: ${formatInteger(row.datasets)}`,
+        `Hours / Range target: ${formatDecimal(row.hours)} / ${formatDecimal(row.targetHours)}`,
+        `Rate / Rule: ${formatPercent(row.ratePercent)} / ${cleanInlineText(row.rule) || "-"}`,
+        `Reward: ${formatSignedNumber(row.reward)}`,
+      );
+    });
+  }
+
+  lines.push("", "PERSONNEL WORKLOAD");
+  if (input.personnelRows.length === 0) {
+    lines.push("No personnel workload rows in the current range.");
+  } else {
+    input.personnelRows.forEach((row, index) => {
+      if (index > 0) lines.push("");
+      lines.push(
+        "Personnel " + (index + 1),
+        "Personnel: " + (cleanInlineText(row.personnel) || "-"),
+        "Workstation: " + (cleanInlineText(row.workstation) || "-"),
+        "Hours: " + formatDecimal(row.hours),
+        "Range target: " + formatDecimal(row.targetHours),
+        "Rate: " + formatPercent(row.ratePercent),
+        "Rule: " + (cleanInlineText(row.rule) || "-"),
+        "Reward: " + formatSignedNumber(row.reward),
+        "Email: " + (cleanInlineText(row.email) || "-"),
+      );
+    });
+  }
+  lines.push(
+    "",
+    "Personnel bonus total: " + formatSignedNumber(input.personnelBonusTotal),
+    "",
+    "ALERTS",
+  );
+  if (input.alerts.length === 0) {
+    lines.push("No blockers detected in the current range.");
+  } else {
+    input.alerts.forEach((alert, index) => {
+      if (index > 0) lines.push("");
+      lines.push(
+        `${formatAlertLabel(alert.kind)} — ${cleanInlineText(alert.title) || "Alert"}`,
+      );
+      const detail = cleanInlineText(alert.detail);
+      if (detail) lines.push(detail);
+    });
+  }
+
+  if (note.trim()) lines.push("", "NOTE", note.trim());
+  return lines.join("\n");
+}
+
+function createWorkbenchDashboardHtml(
+  input: WorkbenchDashboardMailInput,
+  note: string,
+): string {
+  const organization = cleanInlineText(input.organization) || "default";
+  const dateRange = formatDateRangeLabel(input.dateRange);
+  const generatedAt = formatGeneratedAt(input.generatedAt);
+  const summaryRows = [
+    [
+      `${organization} total hours`,
+      formatDecimalOneHour(input.summary.organizationTotalHours),
+    ],
+    ["Selected range hours", `${formatDecimal(input.summary.rangeHours)} h`],
+    ["Episodes", formatInteger(input.summary.episodes)],
+    ["Tasks", formatInteger(input.summary.tasks)],
+    ["Storage", formatBytes(input.summary.storageBytes)],
+    [
+      "Daily target hours",
+      `${formatDecimal(input.summary.dailyTargetHours)} h/day`,
+    ],
+    ["Total bonus", formatSignedNumber(input.summary.totalBonus)],
+    ["Robot IDs", formatInteger(input.summary.robotIds)],
+    ["Days in range", formatInteger(input.summary.daysInRange)],
+  ].map(([label, value]) => htmlMetricRow(label, value));
+  const emptyDetail = `<div style="padding:12px;border:1px solid #cbd5e1;border-radius:8px;background:#ffffff;color:#475569;font-size:13px;line-height:19px;">No workstation detail rows in the current range.</div>`;
+  const mobileRows = input.rows.length
+    ? input.rows.map(htmlMobileDetailRow).join("")
+    : emptyDetail;
+  const desktopRows = input.rows.length
+    ? input.rows.map(htmlDesktopDetailRow).join("")
+    : `<tr><td colspan="9" style="padding:12px;color:#475569;font-size:12px;line-height:18px;">No workstation detail rows in the current range.</td></tr>`;
+  const emptyPersonnel = `<div style="padding:12px;border:1px solid #cbd5e1;border-radius:8px;background:#ffffff;color:#475569;font-size:13px;line-height:19px;">No personnel workload rows in the current range.</div>`;
+  const mobilePersonnelRows = input.personnelRows.length
+    ? input.personnelRows.map(htmlMobilePersonnelRow).join("")
+    : emptyPersonnel;
+  const desktopPersonnelRows = input.personnelRows.length
+    ? input.personnelRows.map(htmlDesktopPersonnelRow).join("")
+    : `<tr><td colspan="8" style="padding:12px;color:#475569;font-size:12px;line-height:18px;">No personnel workload rows in the current range.</td></tr>`;
+  const noteSection = note.trim()
+    ? `<div style="padding-top:22px;">
+        <h2 style="margin:0 0 10px;color:#0f172a;font-size:17px;line-height:22px;">Note</h2>
+        <div class="breakable" style="padding:12px;border:1px solid #cbd5e1;border-radius:8px;background:#ffffff;color:#334155;font-size:13px;line-height:20px;word-break:break-word;overflow-wrap:anywhere;">${htmlNote(note)}</div>
+      </div>`
+    : "";
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light only">
+  <title>Workbench dashboard</title>
+  <style>
+    body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+    table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+    table { border-spacing: 0; border-collapse: collapse; }
+    .mobile-detail { display: block; }
+    .desktop-detail { display: none; }
+    .breakable { word-break: break-word; overflow-wrap: anywhere; }
+    @media only screen and (min-width: 720px) {
+      .mobile-detail { display: none !important; max-height: 0 !important; overflow: hidden !important; }
+      .desktop-detail { display: table !important; width: 100% !important; }
+    }
+  </style>
+</head>
+<body style="margin:0;padding:0;background:#e2e8f0;color:#0f172a;font-family:Arial,'Helvetica Neue',sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;background:#e2e8f0;">
+    <tr>
+      <td align="center" style="padding:12px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;max-width:760px;margin:0 auto;background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px;">
+          <tr>
+            <td style="padding:22px 16px 24px;">
+              <div style="padding-bottom:18px;border-bottom:1px solid #cbd5e1;">
+                <h1 style="margin:0 0 12px;color:#0f172a;font-size:24px;line-height:30px;">Workbench dashboard</h1>
+                <div class="breakable" style="margin:3px 0;color:#475569;font-size:13px;line-height:19px;word-break:break-word;overflow-wrap:anywhere;"><strong style="color:#334155;">Organization:</strong> ${escapeHtml(organization)}</div>
+                <div style="margin:3px 0;color:#475569;font-size:13px;line-height:19px;"><strong style="color:#334155;">Date range:</strong> ${escapeHtml(dateRange)}</div>
+                <div class="breakable" style="margin:3px 0;color:#64748b;font-size:12px;line-height:18px;word-break:break-word;overflow-wrap:anywhere;"><strong>Generated at:</strong> ${escapeHtml(generatedAt)}</div>
+              </div>
+
+              <div style="padding-top:22px;">
+                <h2 style="margin:0 0 10px;color:#0f172a;font-size:17px;line-height:22px;">Summary</h2>
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border:1px solid #cbd5e1;border-radius:8px;background:#ffffff;table-layout:fixed;overflow:hidden;">
+                  ${summaryRows.join("")}
+                </table>
+              </div>
+
+              <div style="padding-top:22px;">
+                <h2 style="margin:0 0 10px;color:#0f172a;font-size:17px;line-height:22px;">Workstation detail</h2>
+                <div class="mobile-detail" style="display:block;">${mobileRows}</div>
+                <table class="desktop-detail" aria-label="Workstation detail" width="100%" cellpadding="0" cellspacing="0" style="display:none;width:100%;border:1px solid #cbd5e1;background:#ffffff;table-layout:fixed;">
+                  <thead>
+                    <tr>
+                      ${htmlHeaderCell("Robot ID")}
+                      ${htmlHeaderCell("Source repos")}
+                      ${htmlHeaderCell("Workstation")}
+                      ${htmlHeaderCell("Datasets", "right")}
+                      ${htmlHeaderCell("Hours", "right")}
+                      ${htmlHeaderCell("Range target", "right")}
+                      ${htmlHeaderCell("Rate", "right")}
+                      ${htmlHeaderCell("Rule")}
+                      ${htmlHeaderCell("Reward", "right")}
+                    </tr>
+                  </thead>
+                  <tbody>${desktopRows}</tbody>
+                </table>
+              </div>
+
+              <div style="padding-top:22px;">
+                <h2 style="margin:0 0 10px;color:#0f172a;font-size:17px;line-height:22px;">Personnel workload</h2>
+                <div class="mobile-detail" style="display:block;">
+                  ${mobilePersonnelRows}
+                  <div style="padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;background:#f1f5f9;color:#0f172a;font-size:13px;font-weight:700;text-align:right;">Personnel bonus total: ${escapeHtml(formatSignedNumber(input.personnelBonusTotal))}</div>
+                </div>
+                <table class="desktop-detail" aria-label="Personnel workload" width="100%" cellpadding="0" cellspacing="0" style="display:none;width:100%;border:1px solid #cbd5e1;background:#ffffff;table-layout:fixed;">
+                  <thead>
+                    <tr>
+                      ${htmlHeaderCell("Personnel")}
+                      ${htmlHeaderCell("Workstation")}
+                      ${htmlHeaderCell("Hours", "right")}
+                      ${htmlHeaderCell("Range target", "right")}
+                      ${htmlHeaderCell("Rate", "right")}
+                      ${htmlHeaderCell("Rule")}
+                      ${htmlHeaderCell("Reward", "right")}
+                      ${htmlHeaderCell("Email")}
+                    </tr>
+                  </thead>
+                  <tbody>${desktopPersonnelRows}</tbody>
+                  <tfoot>
+                    <tr>
+                      <td colspan="6" style="padding:10px 7px;background:#f1f5f9;color:#334155;font-size:11px;font-weight:700;text-align:right;">Personnel bonus total</td>
+                      <td style="padding:10px 7px;background:#f1f5f9;color:#0f172a;font-size:11px;font-weight:700;text-align:right;">${escapeHtml(formatSignedNumber(input.personnelBonusTotal))}</td>
+                      <td style="background:#f1f5f9;"></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+
+              <div style="padding-top:22px;">
+                <h2 style="margin:0 0 10px;color:#0f172a;font-size:17px;line-height:22px;">Alerts</h2>
+                ${htmlAlerts(input.alerts)}
+              </div>
+
+              ${noteSection}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
 }
 
 function normalizeDraft(input: unknown): WorkbenchMailDraft | null {
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
   const raw = input as Record<string, unknown>;
-  const recipient = cleanText(raw.recipient);
+  const recipient =
+    typeof raw.recipient === "string"
+      ? normalizeWorkbenchMailRecipients(raw.recipient)
+      : "";
   const subject = cleanText(raw.subject);
-  const body = typeof raw.body === "string" ? raw.body : null;
-  if (!recipient || !subject || body === null || !body.trim()) return null;
+  if (!recipient || !subject) return null;
   return {
     sender: WORKBENCH_MAIL_SENDER,
     recipient,
     subject,
-    body,
+    // Legacy drafts used `body` for generated Markdown. It is deliberately not
+    // migrated into the user-authored note field.
+    note: typeof raw.note === "string" ? raw.note : "",
   };
 }
 
@@ -227,7 +652,7 @@ export function createDefaultWorkbenchMailDraft(): WorkbenchMailDraft {
     sender: WORKBENCH_MAIL_SENDER,
     recipient: WORKBENCH_MAIL_RECIPIENT,
     subject: WORKBENCH_MAIL_SUBJECT,
-    body: "",
+    note: "",
   };
 }
 
@@ -244,93 +669,33 @@ export function formatWorkbenchMailSubject(input: {
   )}-${compactDayKey(range.inclusiveEndDate)}`;
 }
 
-export function createWorkbenchDashboardMarkdown(
+export function createWorkbenchDashboardMail(
   input: WorkbenchDashboardMailInput,
-): string {
-  const lines = [
-    "# Workbench dashboard",
-    "",
-    `Organization: ${cleanInlineText(input.organization) || "default"}`,
-    `Date range: ${formatDateRangeLabel(input.dateRange)}`,
-    `Generated at: ${formatGeneratedAt(input.generatedAt)}`,
-    "",
-    "## Summary",
-    "",
-    "| Metric | Value |",
-    "| --- | ---: |",
-    markdownTableRow(["Total hours", formatDecimal(input.summary.totalHours)]),
-    markdownTableRow(["Episodes", formatInteger(input.summary.episodes)]),
-    markdownTableRow(["Target", formatDecimal(input.summary.targetHours)]),
-    markdownTableRow([
-      "Projected reward",
-      formatSignedNumber(input.summary.projectedReward),
-    ]),
-    markdownTableRow([
-      "Mapped workstations",
-      formatInteger(input.summary.mappedWorkstations),
-    ]),
-    markdownTableRow([
-      "Unmapped robot IDs",
-      formatInteger(input.summary.unmappedRobotIds),
-    ]),
-    markdownTableRow(["Legacy rows", formatInteger(input.summary.legacyRows)]),
-    markdownTableRow([
-      "Days in range",
-      formatInteger(input.summary.daysInRange),
-    ]),
-    "",
-    "## Workstation detail",
-    "",
-  ];
-
-  if (input.rows.length === 0) {
-    lines.push("No workstation detail rows in the current range.");
-  } else {
-    lines.push(
-      "| Robot ID | Source repos | Workstation | Datasets | Hours | Target | Rate | Rule | Reward |",
-      "| --- | --- | --- | ---: | ---: | ---: | ---: | --- | ---: |",
-    );
-    for (const row of input.rows) {
-      lines.push(
-        markdownTableRow([
-          row.robotId || "-",
-          formatSourceReposCell(row.sourceRepoIds),
-          row.workstation,
-          formatInteger(row.datasets),
-          formatDecimal(row.hours),
-          formatDecimal(row.targetHours),
-          formatPercent(row.ratePercent),
-          row.rule,
-          formatSignedNumber(row.reward),
-        ]),
-      );
-    }
-  }
-
-  lines.push("", "## Alerts", "");
-  if (input.alerts.length === 0) {
-    lines.push("No blockers detected in the current range.");
-  } else {
-    for (const alert of input.alerts) {
-      const title = cleanInlineText(alert.title) || "Alert";
-      const detail = cleanInlineText(alert.detail);
-      lines.push(
-        `- ${formatAlertKind(alert.kind)} ${title}${
-          detail ? `: ${detail}` : ""
-        }`,
-      );
-    }
-  }
-
-  return lines.join("\n");
+  note = "",
+): MailBodies {
+  return {
+    textBody: createWorkbenchDashboardText(input, note),
+    htmlBody: createWorkbenchDashboardHtml(input, note),
+  };
 }
 
 export function validateWorkbenchMailDraft(
   draft: WorkbenchMailDraft,
 ): string | null {
-  if (!draft.recipient.trim()) return "收件人不能为空。";
+  const recipientError = validateWorkbenchMailRecipients(draft.recipient);
+  if (recipientError) return recipientError;
   if (!draft.subject.trim()) return "主题不能为空。";
-  if (!draft.body.trim()) return "正文不能为空。";
+  return null;
+}
+
+export function validateWorkbenchMailMessage(
+  message: WorkbenchMailMessage,
+): string | null {
+  const recipientError = validateWorkbenchMailRecipients(message.recipient);
+  if (recipientError) return recipientError;
+  if (!message.subject.trim()) return "主题不能为空。";
+  if (!message.textBody.trim()) return "纯文本正文不能为空。";
+  if (!message.htmlBody.trim()) return "HTML 正文不能为空。";
   return null;
 }
 
@@ -360,15 +725,13 @@ export function saveWorkbenchMailDraft(
   storage: WorkbenchMailDraftStorage,
 ): WorkbenchMailDraft {
   const validationError = validateWorkbenchMailDraft(draft);
-  if (validationError) {
-    throw new Error(validationError);
-  }
+  if (validationError) throw new Error(validationError);
   const normalizedOrg = normalizeOrg(org);
   const normalizedDraft: WorkbenchMailDraft = {
     sender: WORKBENCH_MAIL_SENDER,
-    recipient: draft.recipient.trim(),
+    recipient: normalizeWorkbenchMailRecipients(draft.recipient),
     subject: draft.subject.trim(),
-    body: draft.body,
+    note: draft.note,
   };
   const record: WorkbenchMailDraftRecord = {
     org: normalizedOrg,
@@ -380,4 +743,9 @@ export function saveWorkbenchMailDraft(
     JSON.stringify(record),
   );
   return normalizedDraft;
+}
+
+function formatDecimalOneHour(value: number | null | undefined): string {
+  if (!Number.isFinite(value)) return "0.0 h";
+  return `${Number(value).toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} h`;
 }

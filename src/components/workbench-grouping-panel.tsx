@@ -1,6 +1,22 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { usePathname } from "next/navigation";
+import {
+  FiAward,
+  FiMonitor,
+  FiRefreshCw,
+  FiRotateCcw,
+  FiSettings,
+  FiUsers,
+} from "react-icons/fi";
 import {
   Bar,
   BarChart,
@@ -12,7 +28,16 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import type { EpisodeData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import type { LocalDatasetSummary } from "@/lib/local-datasets-discovery";
+import { buildHomepageDatasetStatistics } from "@/utils/homepageDatasetStatistics";
+import {
+  getLinkedHubDatasetRepoId,
+  makeLocalRepoId,
+} from "@/utils/datasetRoute";
+import WorkbenchStatisticsFilterNotice from "@/components/workbench-statistics-filter-notice";
+import WorkbenchRuleBadge from "@/components/workbench-rule-badge";
+import { formatBytes } from "@/utils/byteSize";
 import {
   computeWorkbenchAdditionTimeline,
   computeWorkbenchAdditionRollup,
@@ -22,6 +47,7 @@ import {
   isWorkbenchIgnoredRobotId,
   normalizeWorkbenchDateRange,
   workbenchAdditionAvailableDays,
+  workbenchAdditionDatasetPaths,
   workbenchGroupAdditionDatasetNames,
   workbenchGroupSourceRepoIds,
   type WorkbenchDailyAddition,
@@ -36,13 +62,37 @@ import {
   type WorkbenchRewardRuleLevel,
   type WorkbenchRewardRulesConfig,
 } from "@/utils/workbenchRewards";
-import WorkbenchMailComposer from "@/components/workbench-mail-composer";
+import WorkbenchMailComposer, {
+  type WorkbenchMailRecipientGroup,
+} from "@/components/workbench-mail-composer";
+import WorkbenchPersonnelMappingEditor from "@/components/workbench-personnel-mapping-editor";
+import WorkbenchPersonnelWorkload from "@/components/workbench-personnel-workload";
 import type { WorkbenchDashboardMailInput } from "@/lib/workbench-mail-draft";
+import type { WorkbenchPersonnelConfig } from "@/types/workbench-personnel.types";
+import { computeWorkbenchPersonnelRollup } from "@/utils/workbenchPersonnel";
+import {
+  createWorkbenchStatisticsFilterSummary,
+  type WorkbenchStatisticsFilterSummary,
+} from "@/utils/workbenchStatisticsFilter";
+import WorkbenchDisplay from "@/components/workbench-display";
+import {
+  isWorkbenchOrganizationDisplayPath,
+  requestWorkbenchDisplayFullscreen,
+} from "@/components/workbench-display-browser";
+import {
+  createWorkbenchDisplayReplaySnapshot,
+  createWorkbenchDisplaySnapshot,
+  isTacCapWorkbenchReplaySource,
+  TACCAP_WORKBENCH_REPLAY_DATASET,
+  type WorkbenchDisplaySnapshot,
+} from "@/components/workbench-display-utils";
 
 const DIMENSIONS: Array<{
   value: WorkbenchRollupDimension;
   label: string;
 }> = [{ value: "robot_id", label: "Robot ID" }];
+
+const WORKBENCH_TEAM_MANAGER_NAMES = new Set(["dylan", "frank", "jay"]);
 
 type WorkbenchDataset = LocalDatasetSummary & {
   hf?: {
@@ -53,8 +103,17 @@ type WorkbenchDataset = LocalDatasetSummary & {
   lastModified?: string | null;
   uploader?: string | null;
   uploaderDisplayName?: string | null;
+  durationHours?: number | null;
   dailyAdditions?: WorkbenchDailyAddition[];
 };
+
+function isTacCapReplayDataset(dataset: WorkbenchDataset): boolean {
+  return (
+    dataset.relativePath.trim() === TACCAP_WORKBENCH_REPLAY_DATASET ||
+    getLinkedHubDatasetRepoId(makeLocalRepoId(dataset.relativePath)) ===
+      TACCAP_WORKBENCH_REPLAY_DATASET
+  );
+}
 
 type WorkbenchWorkstationMappingsPayload = {
   mappings?: Record<string, string>;
@@ -78,6 +137,8 @@ type WorkbenchStatisticsPayload = {
   workstationMappings?: WorkbenchWorkstationMappingsPayload;
   rewardRules?: WorkbenchRewardRulesPayload;
   rewardRuleDefaults?: WorkbenchRewardRulesConfig;
+  personnelConfig?: WorkbenchPersonnelConfig;
+  statisticsFilter?: WorkbenchStatisticsFilterSummary;
   error?: string;
 };
 
@@ -106,6 +167,19 @@ type AlertItem = {
   detail: string;
 };
 
+function dedupeWorkbenchEmails(
+  people: readonly { email?: string | null }[],
+): string[] {
+  const emails = new Map<string, string>();
+  for (const person of people) {
+    const email = person.email?.trim();
+    if (email && !emails.has(email.toLowerCase())) {
+      emails.set(email.toLowerCase(), email);
+    }
+  }
+  return Array.from(emails.values());
+}
+
 function formatHours(value: number): string {
   return value.toLocaleString("en-US", {
     minimumFractionDigits: 2,
@@ -116,11 +190,6 @@ function formatHours(value: number): string {
 function formatRate(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return "—";
   return `${value.toFixed(1)}%`;
-}
-
-function formatChange(value: number): string {
-  const prefix = value > 0 ? "+" : "";
-  return `${prefix}${formatHours(value)}`;
 }
 
 function formatCount(value: number): string {
@@ -175,6 +244,10 @@ function cloneRewardDraft(
     dailyTargetHours: config.dailyTargetHours,
     levels: cloneRewardLevels(config.levels),
   };
+}
+
+function emptyPersonnelConfig(org: string): WorkbenchPersonnelConfig {
+  return { org, people: [], schedules: {}, updatedAt: null };
 }
 
 function emptyRewardDraft(org: string): RewardRulesDraft {
@@ -273,16 +346,53 @@ function dayKeyFromDateTimeInput(value: string): string | null {
   return match?.[1] ?? null;
 }
 
-function shortRepoName(repoId: string): string {
-  const parts = repoId.split("/").filter(Boolean);
-  return parts.at(-1) ?? repoId;
-}
-
 function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
   const [open, setOpen] = useState(false);
+  const [copyState, setCopyState] = useState<{
+    repoId: string;
+    ok: boolean;
+  } | null>(null);
   const repos = useMemo(
     () => repoIds.map((repoId) => repoId.trim()).filter(Boolean),
     [repoIds],
+  );
+
+  const copyRepo = useCallback(async (repoId: string) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(repoId);
+      } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = repoId;
+        textArea.style.position = "fixed";
+        textArea.style.opacity = "0";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        const copied = document.execCommand("copy");
+        textArea.remove();
+        if (!copied) throw new Error("Copy command was rejected");
+      }
+      setCopyState({ repoId, ok: true });
+    } catch {
+      setCopyState({ repoId, ok: false });
+    }
+  }, []);
+
+  const repoButton = (repoId: string, compact = false) => (
+    <button
+      type="button"
+      onClick={() => void copyRepo(repoId)}
+      className={
+        compact
+          ? "block max-w-full break-all text-left font-mono text-[11px] leading-5 text-cyan-200/80 transition-colors hover:text-cyan-100 hover:underline"
+          : "block max-w-[22rem] break-all text-left font-mono text-[11px] leading-5 text-cyan-200/90 transition-colors hover:text-cyan-100 hover:underline"
+      }
+      title={"Click to copy " + repoId}
+      aria-label={"Copy source repo " + repoId}
+    >
+      {repoId}
+    </button>
   );
 
   if (repos.length === 0) {
@@ -291,18 +401,26 @@ function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
 
   if (repos.length === 1) {
     return (
-      <span
-        className="block max-w-[16rem] truncate font-mono text-[11px] text-slate-300"
-        aria-label={`Source repo: ${repos[0]}`}
-      >
-        {shortRepoName(repos[0])}
-      </span>
+      <div className="max-w-[22rem]">
+        {repoButton(repos[0])}
+        {copyState?.repoId === repos[0] && (
+          <span
+            role="status"
+            className={
+              "text-[10px] " +
+              (copyState.ok ? "text-emerald-300" : "text-amber-300")
+            }
+          >
+            {copyState.ok ? "Copied" : "Copy failed"}
+          </span>
+        )}
+      </div>
     );
   }
 
   return (
     <div
-      className="relative max-w-[18rem]"
+      className="relative max-w-[22rem]"
       onBlur={(event) => {
         const nextTarget = event.relatedTarget;
         if (!(nextTarget instanceof Node)) {
@@ -315,20 +433,28 @@ function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
         if (event.key === "Escape") setOpen(false);
       }}
     >
-      <div className="flex min-w-0 items-center gap-2">
-        <span className="shrink-0 text-slate-100 tabular-nums">
+      <div className="flex min-w-0 items-start gap-2">
+        <span className="shrink-0 pt-0.5 text-slate-100 tabular-nums">
           {repos.length} repos
         </span>
-        <span
-          className="min-w-0 max-w-[9rem] truncate font-mono text-[11px] text-slate-400"
-          aria-label={`First source repo: ${repos[0]}`}
-        >
-          {shortRepoName(repos[0])}
-        </span>
+        <div className="min-w-0 flex-1">
+          {repoButton(repos[0], true)}
+          {copyState?.repoId === repos[0] && (
+            <span
+              role="status"
+              className={
+                "text-[10px] " +
+                (copyState.ok ? "text-emerald-300" : "text-amber-300")
+              }
+            >
+              {copyState.ok ? "Copied" : "Copy failed"}
+            </span>
+          )}
+        </div>
         <button
           type="button"
           aria-expanded={open}
-          aria-label={`View ${repos.length} source repos`}
+          aria-label={"View " + repos.length + " source repos"}
           onClick={() => setOpen((value) => !value)}
           className="shrink-0 rounded border border-white/10 px-2 py-0.5 text-[10px] text-cyan-200 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/10"
         >
@@ -337,21 +463,28 @@ function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
       </div>
       {open && (
         <div
-          className="absolute left-0 top-full z-30 mt-1 max-h-64 w-[min(28rem,calc(100vw-2rem))] overflow-y-auto rounded-md border border-white/10 bg-[var(--surface-2)] p-2 shadow-xl shadow-black/50"
+          className="absolute left-0 top-full z-30 mt-1 max-h-64 w-[min(32rem,calc(100vw-2rem))] overflow-y-auto rounded-md border border-white/10 bg-[var(--surface-2)] p-2 shadow-xl shadow-black/50"
           role="dialog"
           aria-label="Source repos"
         >
           <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-            {repos.length} source repos
+            Click a dataset name to copy its full repository id
           </div>
           <ul className="space-y-1">
             {repos.map((repoId) => (
-              <li
-                key={repoId}
-                className="truncate rounded bg-white/[0.03] px-2 py-1 font-mono text-[11px] text-slate-200"
-                aria-label={repoId}
-              >
-                {repoId}
+              <li key={repoId} className="rounded bg-white/[0.03] px-2 py-1">
+                {repoButton(repoId)}
+                {copyState?.repoId === repoId && (
+                  <span
+                    role="status"
+                    className={
+                      "ml-2 text-[10px] " +
+                      (copyState.ok ? "text-emerald-300" : "text-amber-300")
+                    }
+                  >
+                    {copyState.ok ? "Copied" : "Copy failed"}
+                  </span>
+                )}
               </li>
             ))}
           </ul>
@@ -364,13 +497,19 @@ function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
 export default function WorkbenchGroupingPanel({
   organization,
   refreshToken = 0,
+  episodeData,
 }: {
   organization: string;
   refreshToken?: number;
+  episodeData?: EpisodeData;
 }) {
+  const pathname = usePathname();
   const [dimension, setDimension] =
     useState<WorkbenchRollupDimension>("robot_id");
   const [datasets, setDatasets] = useState<WorkbenchDataset[]>([]);
+  const [statisticsFilter, setStatisticsFilter] = useState(() =>
+    createWorkbenchStatisticsFilterSummary([]),
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [localRefreshToken, setLocalRefreshToken] = useState(0);
@@ -407,19 +546,45 @@ export default function WorkbenchGroupingPanel({
   const [rewardDefaults, setRewardDefaults] = useState<RewardRulesDraft>(() =>
     emptyRewardDraft(organization),
   );
+  const [personnelConfig, setPersonnelConfig] =
+    useState<WorkbenchPersonnelConfig>(() =>
+      emptyPersonnelConfig(organization),
+    );
   const [mappingEditorOpen, setMappingEditorOpen] = useState(false);
   const [rewardEditorOpen, setRewardEditorOpen] = useState(false);
+  const [personnelEditorOpen, setPersonnelEditorOpen] = useState(false);
   const [mappingsSaving, setMappingsSaving] = useState(false);
   const [rewardSaving, setRewardSaving] = useState(false);
   const [mappingsError, setMappingsError] = useState<string | null>(null);
   const [mappingsMessage, setMappingsMessage] = useState<string | null>(null);
   const [rewardError, setRewardError] = useState<string | null>(null);
   const [rewardMessage, setRewardMessage] = useState<string | null>(null);
+  const [displaySnapshot, setDisplaySnapshot] =
+    useState<WorkbenchDisplaySnapshot | null>(null);
+  const [displayOpening, setDisplayOpening] = useState(false);
+  const [displayReplayError, setDisplayReplayError] = useState<string | null>(
+    null,
+  );
+  const displayButtonRef = useRef<HTMLButtonElement>(null);
+  const displayRestoreRef = useRef<{
+    scrollY: number;
+    focus: HTMLElement | null;
+  }>({ scrollY: 0, focus: null });
+  const displayActiveRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      if (displayActiveRef.current && document.fullscreenElement) {
+        void document.exitFullscreen().catch(() => undefined);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
     setError(null);
+    setStatisticsFilter(createWorkbenchStatisticsFilterSummary([]));
     fetch(`/api/workbench/statistics?org=${encodeURIComponent(organization)}`, {
       cache: "no-store",
       signal: controller.signal,
@@ -453,6 +618,10 @@ export default function WorkbenchGroupingPanel({
           payload.workstationMappings?.legacyDefaults,
         );
         setDatasets(payload.datasets ?? []);
+        setStatisticsFilter(
+          payload.statisticsFilter ??
+            createWorkbenchStatisticsFilterSummary([]),
+        );
         setWorkstationMappings(mappings);
         setWorkstationLegacyMappings(legacyMappings);
         setWorkstationDefaults(defaults);
@@ -474,6 +643,9 @@ export default function WorkbenchGroupingPanel({
         );
         setRewardDraft(rewardBase);
         setRewardDefaults(cloneRewardDraft(rewardDefaultConfig, organization));
+        setPersonnelConfig(
+          payload.personnelConfig ?? emptyPersonnelConfig(organization),
+        );
         setMappingsError(null);
         setMappingsMessage(null);
         setRewardError(null);
@@ -545,6 +717,32 @@ export default function WorkbenchGroupingPanel({
         endDate: range.endDate,
       }),
     [range.endDate, range.startDate, workstationRollupDatasets],
+  );
+  const organizationTotalHours = buildHomepageDatasetStatistics(datasets, {
+    preserveOrder: true,
+  }).hours;
+  const selectedDatasetPaths = useMemo(
+    () =>
+      workbenchAdditionDatasetPaths(workstationRollupDatasets, {
+        startDate: range.startDate,
+        endDate: range.endDate,
+      }),
+    [range.endDate, range.startDate, workstationRollupDatasets],
+  );
+  const selectedStorageBytes = selectedDatasetPaths.reduce(
+    (sum, datasetPath) => {
+      const dataset = workstationRollupDatasets.find(
+        (item) => item.relativePath === datasetPath,
+      );
+      const bytes = dataset?.sizeBytes;
+      return (
+        sum +
+        (typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0
+          ? bytes
+          : 0)
+      );
+    },
+    0,
   );
   const robotRows = useMemo(
     () =>
@@ -713,16 +911,54 @@ export default function WorkbenchGroupingPanel({
     workstationMappings,
   ]);
 
-  const mappedRows = robotDashboardRows.filter(
-    (row) => row.robotId && row.workstation !== "—",
+  const personnelWorkstationMappings = useMemo(() => {
+    const mappings: Record<string, string> = {};
+    for (const dataset of workstationRollupDatasets) {
+      const robotId = dataset.robotId?.trim();
+      const leftGripperSn = dataset.leftGripperSn?.trim();
+      const key = robotId || leftGripperSn;
+      if (!key) continue;
+      const workstation = robotId
+        ? workstationDraft[robotId]?.trim() ||
+          workstationMappings[robotId]?.trim() ||
+          workstationDefaults[robotId]?.trim()
+        : workstationLegacyDraft[key]?.trim() ||
+          workstationLegacyMappings[key]?.trim() ||
+          workstationLegacyDefaults[key]?.trim();
+      if (workstation) mappings[key] = workstation;
+    }
+    return mappings;
+  }, [
+    workstationDefaults,
+    workstationDraft,
+    workstationLegacyDefaults,
+    workstationLegacyDraft,
+    workstationLegacyMappings,
+    workstationMappings,
+    workstationRollupDatasets,
+  ]);
+  const personnelRollup = useMemo(
+    () =>
+      computeWorkbenchPersonnelRollup(
+        workstationRollupDatasets,
+        personnelWorkstationMappings,
+        personnelConfig,
+        range,
+        rewardDraft,
+      ),
+    [
+      personnelConfig,
+      personnelWorkstationMappings,
+      range,
+      rewardDraft,
+      workstationRollupDatasets,
+    ],
   );
-  const unmappedRows = robotDashboardRows.filter(
-    (row) => row.robotId && row.workstation === "—",
-  );
-  const legacyRows = robotDashboardRows.filter(
-    (row) => !row.robotId && row.leftGripperSn,
-  );
+
   const totalHours = totalTimeline.total.hours;
+  const robotIds = robotDashboardRows.filter((row) =>
+    Boolean(row.robotId),
+  ).length;
   const totalEpisodes = totalTimeline.total.episodes;
   const projectedRewardAmount = robotDashboardRows.reduce(
     (sum, row) => sum + row.reward.amount,
@@ -741,20 +977,6 @@ export default function WorkbenchGroupingPanel({
 
   const alerts = useMemo<AlertItem[]>(() => {
     const items: AlertItem[] = [];
-    if (legacyRows.length > 0) {
-      items.push({
-        kind: "warn",
-        title: "Legacy rows present",
-        detail: `${legacyRows.length} row(s) still only have a left SN and need a robot_id backfill.`,
-      });
-    }
-    if (unmappedRows.length > 0) {
-      items.push({
-        kind: "warn",
-        title: "Unmapped robot IDs",
-        detail: `${unmappedRows.length} robot_id row(s) do not resolve to a workstation yet.`,
-      });
-    }
     if (
       (workstationLegacyMappings &&
         Object.keys(workstationLegacyMappings).length > 0) ||
@@ -785,29 +1007,101 @@ export default function WorkbenchGroupingPanel({
         detail: "The selected window has no strict addition rows yet.",
       });
     }
+    if (personnelRollup.unattributedHours > 0) {
+      items.push({
+        kind: "warn",
+        title: "Personnel attribution incomplete",
+        detail:
+          formatHours(personnelRollup.unattributedHours) +
+          " hour(s) belong to workstations without personnel assignments in this range.",
+      });
+    }
     return items.slice(0, 5);
   }, [
-    legacyRows.length,
+    personnelRollup.unattributedHours,
     rewardValidationError,
     workstationRollupDatasets.length,
     totalTimeline.rows.length,
-    unmappedRows.length,
     workstationLegacyDefaults,
     workstationLegacyMappings,
   ]);
+
+  const recipientSuggestions = useMemo(
+    () =>
+      personnelRollup.rows
+        .filter((row) => row.email.trim())
+        .map((row) => ({
+          label: row.personnel,
+          email: row.email.trim(),
+        })),
+    [personnelRollup.rows],
+  );
+  const recipientGroups = useMemo<WorkbenchMailRecipientGroup[]>(() => {
+    const peopleById = new Map(
+      personnelConfig.people.map((person) => [person.id, person]),
+    );
+    const xrPersonIds = new Set<string>();
+    for (const assignments of Object.values(personnelConfig.schedules)) {
+      for (const assignment of assignments) {
+        if (assignment.workstation.trim().toLocaleUpperCase() !== "XR") {
+          continue;
+        }
+        for (const member of assignment.members) {
+          xrPersonIds.add(member.personId);
+        }
+      }
+    }
+    const xrPeople = Array.from(xrPersonIds)
+      .map((personId) => peopleById.get(personId))
+      .filter((person): person is WorkbenchPersonnelConfig["people"][number] =>
+        Boolean(person),
+      );
+    const teamManagers = personnelConfig.people.filter((person) =>
+      WORKBENCH_TEAM_MANAGER_NAMES.has(
+        person.displayName.trim().toLocaleLowerCase(),
+      ),
+    );
+    const rewardNonNegative = personnelRollup.rows.filter(
+      (row) => row.reward.amount >= 0,
+    );
+    const groups: WorkbenchMailRecipientGroup[] = [
+      {
+        id: "xr-workstation",
+        label: "XR 工位",
+        emails: dedupeWorkbenchEmails(xrPeople),
+      },
+      {
+        id: "team-managers",
+        label: "Dylan 等团队管理人员",
+        emails: dedupeWorkbenchEmails(teamManagers),
+      },
+      {
+        id: "reward-non-negative",
+        label: "Reward >=0（筛选范围内）",
+        emails: dedupeWorkbenchEmails(rewardNonNegative),
+      },
+      {
+        id: "all-personnel",
+        label: "人员列表全员",
+        emails: dedupeWorkbenchEmails(personnelConfig.people),
+      },
+    ];
+    return groups.filter((group) => group.emails.length > 0);
+  }, [personnelConfig, personnelRollup.rows]);
 
   const mailDashboardInput = useMemo<WorkbenchDashboardMailInput>(
     () => ({
       organization,
       dateRange: range,
       summary: {
-        totalHours,
+        organizationTotalHours,
+        rangeHours: totalHours,
         episodes: totalEpisodes,
-        targetHours,
-        projectedReward: projectedRewardAmount,
-        mappedWorkstations: mappedRows.length,
-        unmappedRobotIds: unmappedRows.length,
-        legacyRows: legacyRows.length,
+        tasks: selectedDatasetPaths.length,
+        storageBytes: selectedStorageBytes,
+        dailyTargetHours: rewardDraft.dailyTargetHours,
+        totalBonus: projectedRewardAmount,
+        robotIds,
         daysInRange: rangeDays,
       },
       rows: robotDashboardRows.map((row) => ({
@@ -824,13 +1118,23 @@ export default function WorkbenchGroupingPanel({
         rule: row.reward.level?.label ?? row.reward.symbol,
         reward: row.reward.amount,
       })),
+      personnelRows: personnelRollup.rows.map((row) => ({
+        personnel: row.personnel,
+        workstation: row.workstations.join(", ") || "—",
+        hours: row.hours,
+        targetHours: row.targetHours,
+        ratePercent: row.ratePercent,
+        rule: row.rule,
+        reward: row.reward.amount,
+        email: row.email,
+      })),
+      personnelBonusTotal: personnelRollup.totalBonus,
       alerts,
     }),
     [
       alerts,
-      legacyRows.length,
-      mappedRows.length,
       organization,
+      personnelRollup,
       projectedRewardAmount,
       range,
       rangeDays,
@@ -838,7 +1142,11 @@ export default function WorkbenchGroupingPanel({
       targetHours,
       totalEpisodes,
       totalHours,
-      unmappedRows.length,
+      organizationTotalHours,
+      selectedDatasetPaths,
+      selectedStorageBytes,
+      robotIds,
+      rewardDraft.dailyTargetHours,
     ],
   );
 
@@ -1013,28 +1321,263 @@ export default function WorkbenchGroupingPanel({
     ),
   );
 
+  const replayDataset = useMemo(
+    () =>
+      datasets.find(
+        (dataset) =>
+          dataset.relativePath.trim() === TACCAP_WORKBENCH_REPLAY_DATASET,
+      ) ?? datasets.find(isTacCapReplayDataset),
+    [datasets],
+  );
+  const currentEpisodeIsReplaySource = Boolean(
+    episodeData &&
+    isTacCapWorkbenchReplaySource(
+      episodeData.datasetInfo.repoId,
+      episodeData.episodeId,
+    ),
+  );
+
+  const closeDisplay = useCallback(() => {
+    displayActiveRef.current = false;
+    setDisplaySnapshot(null);
+    const restore = displayRestoreRef.current;
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: restore.scrollY, behavior: "instant" });
+      const focusTarget = restore.focus?.isConnected
+        ? restore.focus
+        : displayButtonRef.current;
+      focusTarget?.focus({ preventScroll: true });
+    });
+  }, []);
+
+  const openDisplay = useCallback(async () => {
+    if (displayOpening) return;
+
+    setDisplayOpening(true);
+    setDisplayReplayError(null);
+    let replayEpisodeData: EpisodeData | undefined =
+      currentEpisodeIsReplaySource ? episodeData : undefined;
+
+    if (!replayEpisodeData && replayDataset) {
+      try {
+        const { getEpisodeDataSafe } =
+          await import("@/app/[org]/[dataset]/[episode]/fetch-data");
+        const result = await getEpisodeDataSafe(
+          "_local",
+          replayDataset.encodedPath,
+          0,
+        );
+        replayEpisodeData = result.data;
+        if (!replayEpisodeData && result.error) {
+          setDisplayReplayError(result.error);
+        }
+      } catch (reason: unknown) {
+        setDisplayReplayError(
+          reason instanceof Error ? reason.message : String(reason),
+        );
+      }
+    }
+
+    try {
+      displayActiveRef.current = true;
+      displayRestoreRef.current = {
+        scrollY: window.scrollY,
+        focus:
+          document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null,
+      };
+      setDisplaySnapshot(
+        createWorkbenchDisplaySnapshot({
+          organization,
+          dateRange: range,
+          dailyTargetHours: rewardDraft.dailyTargetHours,
+          summary: {
+            organizationTotalHours,
+            selectedRangeHours: totalTimeline.total.hours,
+            episodes: totalTimeline.total.episodes,
+            tasks: selectedDatasetPaths.length,
+            storageBytes: selectedStorageBytes,
+            dailyTargetHours: rewardDraft.dailyTargetHours,
+            totalBonus: projectedRewardAmount,
+            robotIds,
+            daysInRange: rangeDays,
+          },
+          workstations: robotDashboardRows.map((row) => ({
+            robotId: row.robotId ?? row.leftGripperSn ?? "—",
+            workstation: row.workstation,
+            datasets: row.count,
+            hours: row.hours,
+            targetHours,
+            ratePercent: getWorkbenchOkrAchievementRate(
+              row.hours,
+              targetHours ?? 0,
+            ),
+            rule: row.reward.level?.label ?? row.reward.symbol,
+            ruleSymbol: row.reward.symbol,
+            reward: row.reward.amount,
+          })),
+          personnelRows: personnelRollup.rows.map((row) => ({
+            personnel: row.personnel,
+            workstation: row.workstations.join(", ") || "—",
+            hours: row.hours,
+            targetHours: row.targetHours,
+            ratePercent: row.ratePercent,
+            rule: row.rule,
+            ruleSymbol: row.reward.symbol,
+            reward: row.reward.amount,
+            email: row.email,
+          })),
+          personnelBonusTotal: personnelRollup.totalBonus,
+          unattributedHours: personnelRollup.unattributedHours,
+          heatmapDays: visibleDays,
+          heatmapRows: heatmapRows.map((row) => ({
+            robotId: row.robotId,
+            workstation: row.workstation,
+            totalHours: row.totalHours,
+            hoursByDay: row.hoursByDay,
+          })),
+          trend: totalTimeline.rows.map((row) => ({
+            day: row.day,
+            hours: row.hours,
+            datasets: row.datasets,
+          })),
+          topGroups: selectedRows.map((row) => ({
+            group: row.group,
+            hours: row.hours,
+            datasets: row.count,
+          })),
+          replay: replayEpisodeData
+            ? (createWorkbenchDisplayReplaySnapshot({
+                datasetName: replayEpisodeData.datasetInfo.repoId,
+                episodeId: replayEpisodeData.episodeId,
+                chartRows: replayEpisodeData.flatChartData,
+                videosInfo: replayEpisodeData.videosInfo,
+                episodeDurationSeconds: replayEpisodeData.duration,
+                fps: replayEpisodeData.datasetInfo.fps,
+              }) ?? undefined)
+            : undefined,
+        }),
+      );
+
+      if (!document.fullscreenElement) {
+        void requestWorkbenchDisplayFullscreen(document.documentElement);
+      }
+    } finally {
+      setDisplayOpening(false);
+    }
+  }, [
+    currentEpisodeIsReplaySource,
+    displayOpening,
+    heatmapRows,
+    organization,
+    organizationTotalHours,
+    personnelRollup,
+    projectedRewardAmount,
+    range,
+    rewardDraft.dailyTargetHours,
+    replayDataset,
+    robotDashboardRows,
+    selectedDatasetPaths.length,
+    selectedRows,
+    selectedStorageBytes,
+    targetHours,
+    totalTimeline.rows,
+    totalTimeline.total.episodes,
+    totalTimeline.total.hours,
+    robotIds,
+    rangeDays,
+    visibleDays,
+    episodeData,
+  ]);
+
   return (
     <section className="mx-auto w-full max-w-7xl space-y-4 py-5">
-      <header className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <header className="space-y-4">
+        <div className="flex flex-col gap-4 rounded-xl border border-cyan-400/20 bg-gradient-to-br from-cyan-400/[0.08] via-[var(--surface-1)]/50 to-emerald-400/[0.05] p-5 shadow-[0_18px_45px_rgba(8,15,30,0.22)] sm:flex-row sm:items-center sm:justify-between sm:p-6">
           <div>
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-cyan-200">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-cyan-300/80">
+              Operations workspace
+            </div>
+            <h3 className="mt-2 text-xl font-semibold tracking-tight text-slate-100">
               Workbench dashboard
             </h3>
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-400">
               Organization-level daily additions, workstation mapping, and
               reward rules.
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
-            <label className="flex items-center gap-2">
+          {isWorkbenchOrganizationDisplayPath(pathname) && (
+            <button
+              ref={displayButtonRef}
+              type="button"
+              onClick={openDisplay}
+              disabled={loading || displayOpening}
+              aria-label="Open Workbench display"
+              className="group inline-flex min-h-[4.25rem] items-center justify-center gap-3 rounded-xl border border-cyan-200/70 bg-gradient-to-br from-cyan-200 via-cyan-300 to-emerald-300 px-5 py-3 text-left text-slate-950 shadow-[0_12px_30px_rgba(34,211,238,0.28)] ring-1 ring-cyan-100/30 transition-all hover:-translate-y-0.5 hover:from-cyan-100 hover:to-emerald-200 hover:shadow-[0_16px_36px_rgba(34,211,238,0.38)] focus:outline-none focus:ring-2 focus:ring-cyan-100/80 disabled:cursor-not-allowed disabled:opacity-50 sm:min-w-[12rem]"
+            >
+              <FiMonitor
+                aria-hidden="true"
+                className="h-6 w-6 transition-transform group-hover:scale-110"
+              />
+              <span>
+                <span className="block text-sm font-bold tracking-wide">
+                  Display
+                </span>
+                <span className="mt-0.5 block text-[10px] font-medium text-slate-800/70">
+                  {displayOpening
+                    ? "Loading 3D Replay..."
+                    : currentEpisodeIsReplaySource || replayDataset
+                      ? "Fullscreen view · 3D Replay enabled"
+                      : "Fullscreen operations view"}
+                </span>
+              </span>
+            </button>
+          )}
+          {displayReplayError && (
+            <p
+              className="max-w-[18rem] text-right text-[10px] leading-4 text-amber-300"
+              role="status"
+            >
+              3D Replay could not be loaded; Display opened without it.
+            </p>
+          )}
+        </div>
+
+        <section
+          aria-labelledby="workbench-controls-title"
+          className="rounded-xl border border-white/10 bg-[var(--surface-1)]/45 p-4 shadow-[0_12px_30px_rgba(8,15,30,0.14)] sm:p-5"
+        >
+          <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Control center
+              </div>
+              <h4
+                id="workbench-controls-title"
+                className="mt-1 text-sm font-semibold text-slate-200"
+              >
+                Dashboard controls
+              </h4>
+              <p className="mt-1 text-[11px] text-slate-500">
+                Adjust the reporting window, refresh local data, or manage
+                Workbench rules.
+              </p>
+            </div>
+            <span className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[10px] tabular-nums text-slate-500">
+              {availableDays.length.toLocaleString()} reporting days
+            </span>
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-[0.8fr_1.25fr_1.25fr]">
+            <label className="flex min-w-0 flex-col gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-slate-500">
               <span>Group by</span>
               <select
                 value={dimension}
                 onChange={(event) =>
                   setDimension(event.target.value as WorkbenchRollupDimension)
                 }
-                className="rounded-md border border-white/10 bg-[var(--surface-1)] px-3 py-2 text-slate-200 focus:border-cyan-400 focus:outline-none"
+                className="h-10 rounded-lg border border-white/10 bg-[var(--surface-0)]/70 px-3 text-xs font-normal normal-case tracking-normal text-slate-200 transition-colors focus:border-cyan-400/70 focus:outline-none"
               >
                 {DIMENSIONS.map((item) => (
                   <option key={item.value} value={item.value}>
@@ -1043,8 +1586,8 @@ export default function WorkbenchGroupingPanel({
                 ))}
               </select>
             </label>
-            <label className="flex items-center gap-2">
-              <span>Start</span>
+            <label className="flex min-w-0 flex-col gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-slate-500">
+              <span>Start date</span>
               <input
                 type="datetime-local"
                 value={startDateTime}
@@ -1052,11 +1595,11 @@ export default function WorkbenchGroupingPanel({
                 step={60}
                 disabled={availableDays.length === 0}
                 onChange={(event) => setStartDateTime(event.target.value)}
-                className="rounded-md border border-white/10 bg-[var(--surface-1)] px-3 py-2 text-slate-200 focus:border-cyan-400 focus:outline-none disabled:opacity-50"
+                className="h-10 rounded-lg border border-white/10 bg-[var(--surface-0)]/70 px-3 text-xs font-normal normal-case tracking-normal text-slate-200 transition-colors focus:border-cyan-400/70 focus:outline-none disabled:opacity-50"
               />
             </label>
-            <label className="flex items-center gap-2">
-              <span>End</span>
+            <label className="flex min-w-0 flex-col gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-slate-500">
+              <span>End date</span>
               <input
                 type="datetime-local"
                 value={endDateTime}
@@ -1064,43 +1607,65 @@ export default function WorkbenchGroupingPanel({
                 step={60}
                 disabled={availableDays.length === 0}
                 onChange={(event) => setEndDateTime(event.target.value)}
-                className="rounded-md border border-white/10 bg-[var(--surface-1)] px-3 py-2 text-slate-200 focus:border-cyan-400 focus:outline-none disabled:opacity-50"
+                className="h-10 rounded-lg border border-white/10 bg-[var(--surface-0)]/70 px-3 text-xs font-normal normal-case tracking-normal text-slate-200 transition-colors focus:border-cyan-400/70 focus:outline-none disabled:opacity-50"
               />
             </label>
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/10 pt-4">
+            <span className="mr-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Actions
+            </span>
             <button
               type="button"
               onClick={resetDateRange}
-              className="rounded-md border border-white/10 px-3 py-2 text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-200"
+              className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100"
             >
+              <FiRotateCcw aria-hidden="true" className="h-3.5 w-3.5" />
               Reset range
             </button>
             <button
               type="button"
               onClick={() => setLocalRefreshToken((value) => value + 1)}
               disabled={loading}
-              className="rounded-md border border-white/10 px-3 py-2 text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-200 disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
+              <FiRefreshCw aria-hidden="true" className="h-3.5 w-3.5" />
               Reload local data
             </button>
+            <span
+              className="mx-1 hidden h-5 w-px bg-white/10 sm:block"
+              aria-hidden="true"
+            />
+            <button
+              type="button"
+              onClick={() => setMappingEditorOpen((value) => !value)}
+              className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100"
+            >
+              <FiSettings aria-hidden="true" className="h-3.5 w-3.5" />
+              Workstation mappings
+            </button>
+            <button
+              type="button"
+              onClick={() => setPersonnelEditorOpen((value) => !value)}
+              className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100"
+            >
+              <FiUsers aria-hidden="true" className="h-3.5 w-3.5" />
+              Personnel mapping
+            </button>
+            <button
+              type="button"
+              onClick={() => setRewardEditorOpen((value) => !value)}
+              className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100"
+            >
+              <FiAward aria-hidden="true" className="h-3.5 w-3.5" />
+              Reward rules
+            </button>
           </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => setMappingEditorOpen((value) => !value)}
-            className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-200"
-          >
-            Workstation mappings
-          </button>
-          <button
-            type="button"
-            onClick={() => setRewardEditorOpen((value) => !value)}
-            className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-200"
-          >
-            Reward rules
-          </button>
-        </div>
+        </section>
       </header>
+
+      <WorkbenchStatisticsFilterNotice filter={statisticsFilter} />
 
       {error && (
         <div className="rounded-md border border-amber-400/25 bg-amber-400/5 p-3 text-xs text-amber-200">
@@ -1114,32 +1679,82 @@ export default function WorkbenchGroupingPanel({
         </div>
       ) : (
         <>
-          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {[
-              ["Total hours", formatHours(totalHours)],
-              ["Episodes", formatCount(totalEpisodes)],
-              ["Target", targetLabel],
-              ["Projected reward", formatChange(projectedRewardAmount)],
-              ["Mapped workstations", formatCount(mappedRows.length)],
-              ["Unmapped robot IDs", formatCount(unmappedRows.length)],
-              ["Legacy rows", formatCount(legacyRows.length)],
-              [
-                "Days in range",
-                rangeDays === null ? "—" : formatCount(rangeDays),
-              ],
-            ].map(([label, value]) => (
-              <div
-                key={label}
-                className="rounded-md border border-white/10 bg-[var(--surface-1)]/35 p-4"
-              >
-                <div className="text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                  {label}
+          <section
+            aria-labelledby="workbench-overview-title"
+            className="rounded-xl border border-cyan-400/20 bg-gradient-to-br from-cyan-400/[0.06] via-[var(--surface-1)]/45 to-[var(--surface-0)]/40 p-4 shadow-[0_16px_38px_rgba(8,15,30,0.16)] sm:p-5"
+          >
+            <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300/70">
+                  Live snapshot
                 </div>
-                <div className="mt-2 text-lg font-semibold text-slate-100 tabular-nums">
-                  {value}
-                </div>
+                <h4
+                  id="workbench-overview-title"
+                  className="mt-1 text-sm font-semibold text-slate-200"
+                >
+                  Operations overview
+                </h4>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Organization totals and selected-range performance at a
+                  glance.
+                </p>
               </div>
-            ))}
+              <span className="rounded-full border border-cyan-400/15 bg-cyan-400/[0.05] px-2.5 py-1 text-[10px] text-cyan-200/75">
+                {range.startDate && range.endDate
+                  ? range.startDate + " → " + range.endDate
+                  : "Auto range"}
+              </span>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {[
+                [
+                  organization + " total hours",
+                  organizationTotalHours.toLocaleString("en-US", {
+                    minimumFractionDigits: 1,
+                    maximumFractionDigits: 1,
+                  }) + " h",
+                ],
+                ["Selected range hours", formatHours(totalHours) + " h"],
+                ["Episodes", formatCount(totalEpisodes)],
+                ["Tasks", formatCount(selectedDatasetPaths.length)],
+                ["Storage", formatBytes(selectedStorageBytes)],
+                [
+                  "Daily target hours",
+                  formatHours(rewardDraft.dailyTargetHours) + " h/day",
+                ],
+                [
+                  "Total bonus",
+                  formatWorkbenchRewardAmount(projectedRewardAmount),
+                ],
+                ["Robot IDs", formatCount(robotIds)],
+                [
+                  "Days in range",
+                  rangeDays === null ? "—" : formatCount(rangeDays),
+                ],
+              ].map(([label, value], index) => (
+                <div
+                  key={label}
+                  className={
+                    index < 2
+                      ? "rounded-lg border border-cyan-400/30 bg-cyan-400/[0.09] p-4 shadow-[inset_0_1px_rgba(165,243,252,0.12)]"
+                      : "rounded-lg border border-white/10 bg-[var(--surface-0)]/45 p-4"
+                  }
+                >
+                  <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-slate-500">
+                    {label}
+                  </div>
+                  <div
+                    className={
+                      index < 2
+                        ? "mt-2 text-2xl font-semibold tracking-tight text-cyan-100 tabular-nums"
+                        : "mt-2 text-xl font-semibold tracking-tight text-slate-100 tabular-nums"
+                    }
+                  >
+                    {value}
+                  </div>
+                </div>
+              ))}
+            </div>
           </section>
 
           <section className="rounded-md border border-white/10 bg-[var(--surface-1)]/35 p-4">
@@ -1150,7 +1765,8 @@ export default function WorkbenchGroupingPanel({
                 </h4>
                 <p className="mt-1 text-[11px] text-slate-500">
                   Robot ID is the primary key; source repos stay collapsed for
-                  compact scanning.
+                  compact scanning. Row totals and Source repos follow the
+                  statistics scope shown above.
                 </p>
               </div>
               <span className="text-[10px] text-slate-500">
@@ -1168,7 +1784,7 @@ export default function WorkbenchGroupingPanel({
                     <th className="px-3 py-2.5 font-medium">Workstation</th>
                     <th className="px-3 py-2.5 font-medium">Datasets</th>
                     <th className="px-3 py-2.5 font-medium">Hours</th>
-                    <th className="px-3 py-2.5 font-medium">Target</th>
+                    <th className="px-3 py-2.5 font-medium">Range target</th>
                     <th className="px-3 py-2.5 font-medium">Rate</th>
                     <th className="px-3 py-2.5 font-medium">Rule</th>
                     <th className="px-3 py-2.5 font-medium">Reward</th>
@@ -1207,7 +1823,10 @@ export default function WorkbenchGroupingPanel({
                         )}
                       </td>
                       <td className="px-3 py-2.5 text-slate-300 tabular-nums">
-                        {row.reward.level?.label ?? row.reward.symbol}
+                        <WorkbenchRuleBadge
+                          label={row.reward.level?.label}
+                          symbol={row.reward.symbol}
+                        />
                       </td>
                       <td className="px-3 py-2.5 text-slate-300 tabular-nums">
                         {formatWorkbenchRewardAmount(row.reward.amount)}
@@ -1218,6 +1837,8 @@ export default function WorkbenchGroupingPanel({
               </table>
             </div>
           </section>
+
+          <WorkbenchPersonnelWorkload rollup={personnelRollup} />
 
           <section className="rounded-md border border-white/10 bg-[var(--surface-1)]/35 p-4">
             <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
@@ -1311,7 +1932,7 @@ export default function WorkbenchGroupingPanel({
                 Daily trend
               </h4>
               <span className="text-[10px] text-slate-500">
-                Total hours across the selected range
+                Selected range hours
               </span>
             </div>
             <div className="h-64 w-full">
@@ -1683,46 +2304,36 @@ export default function WorkbenchGroupingPanel({
             </section>
           )}
 
+          {personnelEditorOpen && (
+            <WorkbenchPersonnelMappingEditor
+              organization={organization}
+              config={personnelConfig}
+              workstationSuggestions={Array.from(
+                new Set(
+                  [
+                    ...Object.values(workstationDefaults),
+                    ...Object.values(workstationMappings),
+                    ...Object.values(workstationDraft),
+                    ...Object.values(workstationLegacyDefaults),
+                    ...Object.values(workstationLegacyMappings),
+                    ...Object.values(workstationLegacyDraft),
+                  ].filter(Boolean),
+                ),
+              ).sort()}
+              onSaved={setPersonnelConfig}
+            />
+          )}
+
           <WorkbenchMailComposer
             organization={organization}
             dashboardInput={mailDashboardInput}
+            recipientSuggestions={recipientSuggestions}
+            recipientGroups={recipientGroups}
           />
-          <section className="rounded-md border border-white/10 bg-[var(--surface-1)]/35 p-4">
-            <div className="mb-3 flex items-baseline justify-between gap-2">
-              <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
-                Alerts
-              </h4>
-              <span className="text-[10px] text-slate-500">
-                {alerts.length}
-              </span>
-            </div>
-            <div className="space-y-2">
-              {alerts.length === 0 ? (
-                <div className="rounded-md border border-emerald-400/20 bg-emerald-400/5 p-3 text-xs text-emerald-200">
-                  No blockers detected in the current range.
-                </div>
-              ) : (
-                alerts.map((item) => (
-                  <div
-                    key={`${item.kind}-${item.title}`}
-                    className={`rounded-md border p-3 text-xs ${
-                      item.kind === "error"
-                        ? "border-red-400/25 bg-red-400/5 text-red-100"
-                        : item.kind === "warn"
-                          ? "border-amber-400/25 bg-amber-400/5 text-amber-100"
-                          : "border-cyan-400/20 bg-cyan-400/5 text-cyan-100"
-                    }`}
-                  >
-                    <div className="font-medium">{item.title}</div>
-                    <div className="mt-1 text-[11px] leading-5 text-inherit/85">
-                      {item.detail}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </section>
         </>
+      )}
+      {displaySnapshot && (
+        <WorkbenchDisplay snapshot={displaySnapshot} onExit={closeDisplay} />
       )}
     </section>
   );

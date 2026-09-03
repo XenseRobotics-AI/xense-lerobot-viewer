@@ -78,11 +78,12 @@ describe("Workbench mail smoke-test route", () => {
       postRequest(
         {
           org: "TacVerse",
-          draft: {
+          message: {
             sender: "ignored@example.com",
             recipient: "frank@xenserobotics.com",
             subject: "SMTP smoketest",
-            body: "11111",
+            textBody: "Plain report",
+            htmlBody: "<html><body>Report</body></html>",
           },
         },
         {
@@ -98,7 +99,7 @@ describe("Workbench mail smoke-test route", () => {
     expect(response.status).toBe(403);
   });
 
-  test("normalizes draft fields and invokes the smoke-test script", async () => {
+  test("normalizes message fields and passes both bodies to SMTP", async () => {
     await writeFakePython(`
 console.log(JSON.stringify({
   type: "result",
@@ -109,7 +110,8 @@ console.log(JSON.stringify({
     username: process.env.SMTP_USERNAME,
     to: process.env.SMTP_TO_ADDRESS,
     subject: process.env.SMTP_SUBJECT,
-    body: process.env.SMTP_BODY,
+    textBody: process.env.SMTP_TEXT_BODY,
+    htmlBody: process.env.SMTP_HTML_BODY,
     passwordFile: process.env.SMTP_PASSWORD_FILE,
     pythonPath: process.env.PYTHONPATH ?? null
   }
@@ -119,11 +121,13 @@ console.log(JSON.stringify({
     const response = await POST(
       postRequest({
         org: " TacVerse ",
-        draft: {
+        message: {
           sender: "spoof@example.com",
-          recipient: " frank@xenserobotics.com ",
+          recipient:
+            " frank@xenserobotics.com; jay@xenserobotics.com,FRANK@xenserobotics.com ",
           subject: " SMTP smoketest ",
-          body: "11111",
+          textBody: "Plain report",
+          htmlBody: "<!doctype html><html><body>HTML report</body></html>",
         },
       }),
     );
@@ -137,9 +141,10 @@ console.log(JSON.stringify({
     expect(payload.result).toMatchObject({
       from: "1796262052@qq.com",
       username: "1796262052@qq.com",
-      to: "frank@xenserobotics.com",
+      to: "frank@xenserobotics.com, jay@xenserobotics.com",
       subject: "SMTP smoketest",
-      body: "11111",
+      textBody: "Plain report",
+      htmlBody: "<!doctype html><html><body>HTML report</body></html>",
       passwordFile: "/tmp/qq_smtp_password",
       pythonPath: null,
     });
@@ -159,11 +164,12 @@ process.exit(3);
     const response = await POST(
       postRequest({
         org: "TacVerse",
-        draft: {
+        message: {
           sender: "ignored@example.com",
           recipient: "frank@xenserobotics.com",
           subject: "SMTP smoketest",
-          body: "11111",
+          textBody: "Plain report",
+          htmlBody: "<html><body>Report</body></html>",
         },
       }),
     );
@@ -182,11 +188,12 @@ process.exit(3);
     const response = await POST(
       postRequest({
         org: "TacVerse",
-        draft: {
+        message: {
           sender: "ignored@example.com",
           recipient: "frank@xenserobotics.com",
           subject: "SMTP smoketest",
-          body: "11111",
+          textBody: "Plain report",
+          htmlBody: "<html><body>Report</body></html>",
         },
       }),
     );
@@ -200,5 +207,23 @@ process.exit(3);
     expect(payload.stage).toBe("script");
     expect(payload.code).toBe("SMTP_OUTPUT_INVALID");
     expect(payload.error).toContain("malformed output");
+  });
+
+  test("rejects legacy draft payloads without generated bodies", async () => {
+    const response = await POST(
+      postRequest({
+        org: "TacVerse",
+        draft: {
+          recipient: "frank@xenserobotics.com",
+          subject: "SMTP smoketest",
+          body: "Legacy Markdown",
+        },
+      }),
+    );
+
+    await expect(response.json()).resolves.toEqual({
+      error: "Workbench mail smoke test requires a message.",
+    });
+    expect(response.status).toBe(400);
   });
 });

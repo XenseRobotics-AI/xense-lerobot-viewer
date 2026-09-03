@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { formatWorkbenchRewardAmount } from "@/utils/workbenchRewards";
 import {
   WORKBENCH_LEFT_SN_REWARD_AMOUNT,
   computeWorkbenchAdditionRollup,
@@ -21,6 +22,7 @@ import {
   isWorkbenchIgnoredRobotId,
   normalizeWorkbenchDateRange,
   workbenchAdditionAvailableDays,
+  workbenchAdditionDatasetPaths,
   workbenchDatasetSuffixDay,
   workbenchDayKey,
   workbenchGroupAdditionDatasetNames,
@@ -39,6 +41,7 @@ function dataset(
     total_frames: 36_000,
     fps: 10,
     robot_type: "g1",
+    sizeBytes: 0,
     leftGripperSn: null,
     ...overrides,
   };
@@ -182,6 +185,12 @@ describe("Left SN OKR helpers", () => {
     expect(formatWorkbenchRewardCoins(20)).toBe("🪙🪙");
     expect(formatWorkbenchRewardCoins(30)).toBe("🪙🪙🪙");
     expect(formatWorkbenchRewardCoins(0)).toBe("—");
+  });
+
+  test("adds the coin emoji only to positive reward amounts", () => {
+    expect(formatWorkbenchRewardAmount(20)).toBe("¥+20 🪙");
+    expect(formatWorkbenchRewardAmount(-20)).toBe("¥-20");
+    expect(formatWorkbenchRewardAmount(0)).toBe("¥0");
   });
 
   test("returns a placeholder when no Workstation mapping is provided", () => {
@@ -372,10 +381,10 @@ describe("normalizeWorkbenchDateRange", () => {
 });
 
 describe("workbench source repo ids", () => {
-  test("returns sorted dated relative paths for each robot_id group", () => {
+  test("returns sorted full Hub repo ids for each robot_id group", () => {
     const repos = workbenchGroupSourceRepoIds(
       [
-        dataset("TacVerse/z-last-0828", {
+        dataset("TacVerse/raw/z-last-0828", {
           robotId: "robot-a",
           dailyAdditions: [
             { day: "2026-08-28", episodes: 1, frames: 3600, hours: 0.1 },
@@ -484,6 +493,21 @@ describe("date-aware workbench rollups", () => {
       hours: 1.5,
     });
   });
+});
+
+test("returns unique dataset paths in the half-open range", () => {
+  const item = dataset("TacVerse/repeated-task", {
+    dailyAdditions: [
+      { day: "2026-08-28", episodes: 1, frames: 1, hours: 0.1 },
+      { day: "2026-08-29", episodes: 1, frames: 1, hours: 0.1 },
+    ],
+  });
+  expect(
+    workbenchAdditionDatasetPaths([item, item], {
+      startDate: "2026-08-28",
+      endDate: "2026-08-30",
+    }),
+  ).toEqual(["TacVerse/repeated-task"]);
 });
 
 describe("strict workbench addition rollups", () => {

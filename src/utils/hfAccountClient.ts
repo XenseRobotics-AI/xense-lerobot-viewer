@@ -46,8 +46,14 @@ function accountFromPayload(payload: Record<string, unknown>): HfAccount {
 }
 
 /** Read local credential status; this endpoint intentionally performs no Hub request. */
-export async function readHfAccount(signal?: AbortSignal): Promise<HfAccount> {
-  const response = await fetch(ACCOUNT_URL, {
+export async function readHfAccount(
+  signal?: AbortSignal,
+  org?: string,
+): Promise<HfAccount> {
+  const url = org
+    ? `${ACCOUNT_URL}?org=${encodeURIComponent(org)}`
+    : ACCOUNT_URL;
+  const response = await fetch(url, {
     method: "GET",
     signal,
     cache: "no-store",
@@ -63,6 +69,7 @@ export async function checkHfAccount(
   token?: string,
   signal?: AbortSignal,
   org?: string,
+  endpoint?: string,
 ): Promise<HfAccount> {
   const response = await fetch(ACCOUNT_URL, {
     method: "POST",
@@ -70,6 +77,7 @@ export async function checkHfAccount(
     body: JSON.stringify({
       ...(token === undefined ? {} : { token }),
       ...(org ? { org } : {}),
+      ...(endpoint ? { endpoint } : {}),
     }),
     signal,
     cache: "no-store",

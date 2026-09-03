@@ -8,9 +8,9 @@ import {
 } from "@/lib/python-runtime";
 
 /**
- * Identity checks must use the official Hub. Download mirrors are useful for
- * large files, but they are not an authentication authority and can reject or
- * mishandle a perfectly valid access token.
+ * Identity checks default to the official Hub. The Workbench may explicitly
+ * select an allowlisted endpoint so the same credential settings are used by
+ * catalog, metadata, and account requests.
  */
 export const HF_DEFAULT_ENDPOINT = "https://huggingface.co";
 const IDENTITY_TIMEOUT_MS = 30_000;
@@ -71,10 +71,15 @@ export function parseHfIdentityOutput(stdout: string): HfIdentityResult | null {
 
 /** Child environment for an explicit identity check. Exported for regression
  * tests so a submitted token can never silently fall back to inherited auth. */
-export function hfIdentityEnv(token: string | null): NodeJS.ProcessEnv {
+export function hfIdentityEnv(
+  token: string | null,
+  endpoint?: string,
+): NodeJS.ProcessEnv {
   const env = pythonSpawnEnv();
   env.HF_ENDPOINT =
-    process.env.HF_IDENTITY_ENDPOINT?.trim() || HF_DEFAULT_ENDPOINT;
+    endpoint?.trim() ||
+    process.env.HF_IDENTITY_ENDPOINT?.trim() ||
+    HF_DEFAULT_ENDPOINT;
   if (token) {
     delete env.HF_TOKEN;
     env.XENSE_HF_TOKEN = token;
@@ -87,8 +92,9 @@ function spawnIdentity(
   org: string,
   token: string | null,
   whoamiOnly: boolean,
+  endpoint?: string,
 ): ChildProcessWithoutNullStreams {
-  const env = hfIdentityEnv(token);
+  const env = hfIdentityEnv(token, endpoint);
   // Do not put secrets in argv. When a resolved token is supplied, remove the
   // inherited variable and pass the value through a Viewer-specific name. This
   // avoids huggingface_hub's misleading “HF_TOKEN environment variable is
@@ -105,6 +111,7 @@ export async function runHfIdentity(options: {
   org: string;
   token?: string | null;
   whoamiOnly?: boolean;
+  endpoint?: string;
   timeoutMs?: number;
 }): Promise<HfIdentityResult> {
   let python: ResolvedPython;
@@ -127,6 +134,7 @@ export async function runHfIdentity(options: {
         options.org,
         options.token ?? null,
         options.whoamiOnly === true,
+        options.endpoint,
       );
     } catch (err) {
       reject(new HfIdentityError(`Failed to launch Python: ${String(err)}`));

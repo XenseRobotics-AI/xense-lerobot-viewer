@@ -7,6 +7,7 @@ import {
   type HfTokenSource,
   type ResolvedHfToken,
 } from "@/lib/hf-token-store";
+import { normalizeHfEndpoint } from "@/lib/hf-endpoints";
 import {
   HF_DEFAULT_ENDPOINT,
   HfIdentityError,
@@ -25,6 +26,7 @@ const DEFAULT_ORG = "TacVerse";
 type AccountRequestBody = {
   token?: unknown;
   org?: unknown;
+  endpoint?: unknown;
   whoamiOnly?: unknown;
 };
 
@@ -90,6 +92,7 @@ function accountFromIdentity(
 function accountFromCredential(
   org: string,
   credential: ResolvedHfToken,
+  selectedEndpoint = endpoint(),
 ): Record<string, unknown> {
   const source: HfTokenSource = credential.token ? credential.source : "none";
   return {
@@ -101,7 +104,7 @@ function accountFromCredential(
     username: null,
     org,
     visibleDatasets: null,
-    endpoint: endpoint(),
+    endpoint: selectedEndpoint,
     listingError: null,
     identityError: null,
   };
@@ -221,6 +224,21 @@ async function verifyAccount(
       400,
     );
   }
+  let selectedEndpoint = HF_DEFAULT_ENDPOINT;
+  if (body.endpoint !== undefined) {
+    const normalizedEndpoint = normalizeHfEndpoint(body.endpoint);
+    if (!normalizedEndpoint) {
+      return json(
+        {
+          error:
+            "`endpoint` must be https://hf-mirror.com or https://huggingface.co.",
+          code: "INVALID_ENDPOINT",
+        },
+        400,
+      );
+    }
+    selectedEndpoint = normalizedEndpoint;
+  }
 
   const rootResult = rootOrError();
   if (rootResult.response) return rootResult.response;
@@ -242,7 +260,7 @@ async function verifyAccount(
     // No network request is useful without a credential. Return a normal
     // account payload so the toolbar can render the issue inline.
     return json({
-      ...accountFromCredential(org, credential),
+      ...accountFromCredential(org, credential, selectedEndpoint),
       error: "No Hugging Face token is configured.",
       code: "HF_NOT_AUTHENTICATED",
     });
@@ -255,6 +273,7 @@ async function verifyAccount(
       token: credential.token,
       // Token login should be quick and deterministic; the potentially large
       // organization listing belongs to the explicit "刷新统计" action.
+      endpoint: selectedEndpoint,
       whoamiOnly: body.whoamiOnly === true || Boolean(suppliedToken),
     });
   } catch (error: unknown) {

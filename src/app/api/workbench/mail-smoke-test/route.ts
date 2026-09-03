@@ -5,9 +5,10 @@ import { isSameOriginRequest } from "@/lib/request-security";
 import { pythonSpawnEnv } from "@/lib/python-runtime";
 import { workbenchSmtpPasswordFilePath } from "@/lib/workbench-mail-runtime";
 import {
-  validateWorkbenchMailDraft,
+  normalizeWorkbenchMailRecipients,
+  validateWorkbenchMailMessage,
   WORKBENCH_MAIL_SENDER,
-  type WorkbenchMailDraft,
+  type WorkbenchMailMessage,
 } from "@/lib/workbench-mail-draft";
 
 export const runtime = "nodejs";
@@ -46,33 +47,44 @@ function cleanText(value: unknown): string | null {
 
 function normalizeRequestBody(
   value: unknown,
-): { org: string; draft: WorkbenchMailDraft } | { error: string } {
+): { org: string; message: WorkbenchMailMessage } | { error: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { error: "Expected a JSON object body." };
   }
 
-  const raw = value as { org?: unknown; draft?: unknown };
+  const raw = value as { org?: unknown; message?: unknown };
   const org = cleanText(raw.org);
   if (!org) {
     return { error: "Workbench mail smoke test requires an organization." };
   }
-  if (!raw.draft || typeof raw.draft !== "object" || Array.isArray(raw.draft)) {
-    return { error: "Workbench mail smoke test requires a draft." };
+  if (
+    !raw.message ||
+    typeof raw.message !== "object" ||
+    Array.isArray(raw.message)
+  ) {
+    return { error: "Workbench mail smoke test requires a message." };
   }
 
-  const rawDraft = raw.draft as Record<string, unknown>;
-  const recipient = cleanText(rawDraft.recipient);
-  const subject = cleanText(rawDraft.subject);
-  const body = typeof rawDraft.body === "string" ? rawDraft.body : "";
-  const draft = {
+  const rawMessage = raw.message as Record<string, unknown>;
+  const recipient =
+    typeof rawMessage.recipient === "string"
+      ? normalizeWorkbenchMailRecipients(rawMessage.recipient)
+      : "";
+  const subject = cleanText(rawMessage.subject);
+  const textBody =
+    typeof rawMessage.textBody === "string" ? rawMessage.textBody : "";
+  const htmlBody =
+    typeof rawMessage.htmlBody === "string" ? rawMessage.htmlBody : "";
+  const message = {
     sender: WORKBENCH_MAIL_SENDER,
-    recipient: recipient ?? "",
+    recipient,
     subject: subject ?? "",
-    body,
+    textBody,
+    htmlBody,
   };
-  const validationError = validateWorkbenchMailDraft(draft);
+  const validationError = validateWorkbenchMailMessage(message);
   if (validationError) return { error: validationError };
-  return { org, draft };
+  return { org, message };
 }
 
 function scriptPath(): string {
@@ -88,14 +100,15 @@ function pythonBin(): string {
   return process.env.PYTHON_BIN?.trim() || "python3";
 }
 
-function mailSpawnEnv(draft: WorkbenchMailDraft): NodeJS.ProcessEnv {
+function mailSpawnEnv(message: WorkbenchMailMessage): NodeJS.ProcessEnv {
   const env = {
     ...pythonSpawnEnv(),
     SMTP_FROM_ADDRESS: WORKBENCH_MAIL_SENDER,
     SMTP_USERNAME: process.env.SMTP_USERNAME?.trim() || WORKBENCH_MAIL_SENDER,
-    SMTP_TO_ADDRESS: draft.recipient,
-    SMTP_SUBJECT: draft.subject,
-    SMTP_BODY: draft.body,
+    SMTP_TO_ADDRESS: message.recipient,
+    SMTP_SUBJECT: message.subject,
+    SMTP_TEXT_BODY: message.textBody,
+    SMTP_HTML_BODY: message.htmlBody,
   } as NodeJS.ProcessEnv;
 
   if (!env.SMTP_PASSWORD?.trim() && !env.SMTP_PASSWORD_FILE?.trim()) {
@@ -202,9 +215,9 @@ function parseScriptOutput(
 }
 
 function runMailScript(
-  draft: WorkbenchMailDraft,
+  message: WorkbenchMailMessage,
 ): Promise<MailScriptSuccess | MailScriptFailure> {
-  const env = mailSpawnEnv(draft);
+  const env = mailSpawnEnv(message);
   const py = pythonBin();
 
   return new Promise((resolve) => {
@@ -308,7 +321,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     return Response.json({ error: normalized.error }, { status: 400 });
   }
 
-  const result = await runMailScript(normalized.draft);
+  const result = await runMailScript(normalized.message);
   if (result.ok) {
     return Response.json({
       message: result.message,

@@ -15,8 +15,8 @@ import os
 import sys
 import traceback
 
-# Account verification deliberately uses the official Hub. A download mirror
-# is a transfer optimization, not the authority that issued the token.
+# Account verification defaults to the official Hub. The Node route may pass an
+# allowlisted endpoint explicitly so Workbench requests share one configuration.
 os.environ.setdefault("HF_ENDPOINT", "https://huggingface.co")
 
 

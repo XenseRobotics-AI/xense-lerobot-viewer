@@ -63,6 +63,21 @@ describe("HF account route", () => {
     expect((await response.json()).code).toBe("INVALID_TOKEN");
   });
 
+  test("rejects endpoints outside the Workbench allowlist", async () => {
+    const response = await POST(
+      new NextRequest("http://localhost/api/hf/account", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          org: "TacVerse",
+          endpoint: "https://example.invalid",
+        }),
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()).code).toBe("INVALID_ENDPOINT");
+  });
+
   test("DELETE is local-only and reports the cleared state", async () => {
     const response = await DELETE(
       new NextRequest("http://localhost/api/hf/account", { method: "DELETE" }),

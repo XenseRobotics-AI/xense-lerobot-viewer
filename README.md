@@ -246,6 +246,10 @@ shown on the homepage). The homepage login only validates/stores the
 credential; dataset transfer still starts from the source tab below.
 
 > **Endpoint note.** Sync defaults to `HF_ENDPOINT=https://hf-mirror.com` to keep
+> Workbench statistics use the official Hub endpoint by default because this
+> metadata request is not served reliably by the mirror. Override it with
+> `HF_CATALOG_ENDPOINT` only if your mirror supports `hf_hub_download`.
+>
 > downloads off a metered VPN. If the mirror answers with a `308` redirect to
 > `huggingface.co`, downloads fail with an explanatory message — and the mirror
 > is saving you nothing anyway, because the bytes then come from the origin.
@@ -298,7 +302,8 @@ dataset root, not to the git-tracked defaults. Repository defaults live in
 <LOCAL_DATASET_ROOT>/.xense-viewer/workbench/<org>.workstation-mappings.json
 ```
 
-Use **Refresh statistics** to sync lightweight metadata for Workbench views. Use
+Use **Refresh statistics** to sync lightweight metadata for Workbench views. It
+does not enable the disabled full-dataset Hugging Face download path. Use
 **Reload local data** to refresh local dataset discovery without editing any
 dataset files.
 

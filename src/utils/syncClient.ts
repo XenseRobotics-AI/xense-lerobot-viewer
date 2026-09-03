@@ -17,17 +17,17 @@ import { tStandalone } from "@/i18n/standalone";
 const SYNC_URL = "/api/local-datasets/sync";
 
 /**
- * Sync is switched off (2026-09-01, by decision). The flag that actually
- * enforces it lives in `src/app/api/local-datasets/sync/route.ts`; this one
- * exists so the UI can disable its entry points rather than offer a button
- * whose only possible outcome is a 503.
+ * Full-dataset sync is switched off (2026-09-01, by decision). The flag that
+ * actually enforces it lives in `src/app/api/local-datasets/sync/route.ts`;
+ * this one exists so the UI can disable full-download entry points rather than
+ * offer a button whose only possible outcome is a 503. Workbench's
+ * `metadataOnly` refresh remains available.
  *
  * The corpus moved to `TacVerse/{merged,raw,failed,released,in-processing}/…`,
  * while `scripts/sync_hf_dataset.py:repo_target()` writes to
  * `<root>/<org>/<name>` — and `TacVerse` is *also* the Hugging Face org slug.
- * A sync would therefore recreate the old paths beside the new ones and
- * re-fetch the corpus. Re-enable both flags only together with a fix to that
- * layout.
+ * `repo_target()` now protects the metadata-only path, but the engine-side
+ * downloader must adopt the same layout before full sync is re-enabled.
  */
 export const SYNC_DISABLED = true;
 export const SYNC_DISABLED_REASON =
@@ -103,11 +103,16 @@ export type SyncResult = {
 export async function listSyncCandidates(
   target: SyncTargetInput,
   signal?: AbortSignal,
+  options: { endpoint?: string; token?: string } = {},
 ): Promise<SyncListing> {
   const response = await fetch(SYNC_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(normalizeTarget(target)),
+    body: JSON.stringify({
+      ...normalizeTarget(target),
+      ...(options.endpoint ? { endpoint: options.endpoint } : {}),
+      ...(options.token ? { token: options.token } : {}),
+    }),
     signal,
   });
   const payload = await response.json().catch(() => null);
@@ -132,9 +137,12 @@ export async function runSync(
     signal?: AbortSignal;
     force?: boolean;
     metadataOnly?: boolean;
+    endpoint?: string;
+    token?: string;
   } = {},
 ): Promise<SyncResult> {
-  const { signal, force = false, metadataOnly = false } = options;
+  const { signal, force = false, metadataOnly = false, endpoint, token } =
+    options;
   const response = await fetch(SYNC_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -143,6 +151,8 @@ export async function runSync(
       confirm: true,
       force,
       metadataOnly,
+      ...(endpoint ? { endpoint } : {}),
+      ...(token ? { token } : {}),
     }),
     signal,
   });

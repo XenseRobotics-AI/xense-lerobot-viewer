@@ -164,9 +164,56 @@ def fetch_repo_details(
     return out
 
 
+MOVED_CORPUS_CONTAINER = "TacVerse"
+MOVED_CORPUS_BUCKETS = (
+    "merged",
+    "raw",
+    "failed",
+    "released",
+    "in-processing",
+)
+MOVED_ORG_DEFAULT_BUCKET = {
+    "TacVerse": "merged",
+    "TacVerse-RAW": "raw",
+    "TacVerse-Failed": "failed",
+}
+
+
 def repo_target(root: str, org: str, repo_id: str) -> str:
-    """`<root>/<org>/<name>` — the layout the viewer's scanner expects."""
-    return os.path.join(root, org, repo_id.split("/")[-1])
+    """Return the local directory for a Hub dataset.
+
+    Most organizations retain the historical ``<root>/<org>/<name>`` layout.
+    The TacVerse corpus is different: its former sibling organizations now
+    live below one container as ``TacVerse/<bucket>/<name>``.
+
+    An existing dataset wins over the source's default bucket so a dataset
+    moved to ``released`` or ``in-processing`` keeps being refreshed in place.
+    If several copies exist, the source's default wins; an otherwise ambiguous
+    target is refused instead of overwriting an arbitrary copy.
+    """
+    name = repo_id.rsplit("/", 1)[-1]
+    default_bucket = MOVED_ORG_DEFAULT_BUCKET.get(org)
+    if default_bucket is None:
+        return os.path.join(root, org, name)
+
+    container = os.path.join(root, MOVED_CORPUS_CONTAINER)
+    default_target = os.path.join(container, default_bucket, name)
+    existing = [
+        os.path.join(container, bucket, name)
+        for bucket in MOVED_CORPUS_BUCKETS
+        if os.path.isdir(os.path.join(container, bucket, name))
+    ]
+    if default_target in existing:
+        return default_target
+    if len(existing) == 1:
+        return existing[0]
+    if len(existing) > 1:
+        relative = ", ".join(os.path.relpath(target, root) for target in existing)
+        raise RuntimeError(
+            f"Ambiguous local target for {repo_id}: found {relative}. "
+            "Keep only the intended corpus copy before syncing."
+        )
+    return default_target
 
 
 def local_snapshot_shas(target: str) -> set[str]:

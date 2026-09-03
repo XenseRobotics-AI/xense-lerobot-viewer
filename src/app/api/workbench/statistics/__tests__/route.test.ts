@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { GET } from "@/app/api/workbench/statistics/route";
+import { WORKBENCH_PERSONNEL_BASELINE_DAY } from "@/components/workbench-personnel-mapping-editor";
 import { writeWorkbenchWorkstationMappings } from "@/lib/workbench-config-store";
 
 let root: string;
@@ -67,6 +68,54 @@ afterEach(async () => {
 });
 
 describe("Workbench statistics route", () => {
+  test("matches bucketed local paths to their unbucketed Hub repo ids", async () => {
+    await writeDataset("TacVerse/released/example-0902", {
+      total_episodes: 1,
+      total_frames: 3_600,
+      fps: 10,
+    });
+    const cacheDir = path.join(root, ".xense-viewer", "hf-catalog");
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(
+      path.join(cacheDir, "TacVerse.json"),
+      JSON.stringify({
+        org: "TacVerse",
+        datasets: [
+          {
+            repoId: "TacVerse/example-0902",
+            uploader: "alice",
+            totalEpisodes: 12,
+            totalFrames: 43_200,
+            fps: 10,
+            lastModified: "2026-09-02T12:00:00Z",
+          },
+        ],
+      }),
+    );
+
+    const response = await GET(
+      new Request("http://localhost/api/workbench/statistics?org=TacVerse"),
+    );
+    const payload = (await response.json()) as {
+      datasets: Array<{
+        relativePath: string;
+        total_episodes: number;
+        uploader: string | null;
+        lastModified: string | null;
+      }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.datasets).toEqual([
+      expect.objectContaining({
+        relativePath: "TacVerse/released/example-0902",
+        total_episodes: 12,
+        uploader: "alice",
+        lastModified: "2026-09-02T12:00:00Z",
+      }),
+    ]);
+  });
+
   test("returns HF metadata fields and stable lastModified order", async () => {
     await writeDataset("TacVerse/older-0817", {
       total_episodes: 1,
@@ -227,6 +276,11 @@ describe("Workbench statistics route", () => {
         mappings: Record<string, string>;
         defaults: Record<string, string>;
       };
+      personnelConfig: {
+        org: string;
+        people: Array<{ id: string; displayName: string; email: string }>;
+        schedules: Record<string, unknown>;
+      };
       datasets: Array<{
         relativePath: string;
         total_episodes: number;
@@ -258,6 +312,24 @@ describe("Workbench statistics route", () => {
       legacyMappings: { TCGU01A28Z0069m: "D2" },
     });
     expect(payload.workstationMappings.defaults.TCGU01A28Z0033m).toBe("N0");
+    expect(payload.personnelConfig.org).toBe("TacVerse");
+    expect(payload.personnelConfig.people.length).toBeGreaterThan(0);
+    expect(
+      payload.personnelConfig.schedules[WORKBENCH_PERSONNEL_BASELINE_DAY],
+    ).toBeArray();
+    expect(
+      payload.personnelConfig.people.find(
+        (person) => person.displayName === "李四",
+      )?.email,
+    ).toBe("jay@xenserobotics.com");
+    const baselinePersonnelMapping = payload.personnelConfig.schedules[
+      WORKBENCH_PERSONNEL_BASELINE_DAY
+    ] as Array<{ workstation: string; members: unknown[] }>;
+    expect(
+      baselinePersonnelMapping.find(
+        (assignment) => assignment.workstation === "A2",
+      )?.members,
+    ).toHaveLength(2);
     expect(payload.datasets.map((dataset) => dataset.relativePath)).toEqual([
       "TacVerse/metadata-only-0818",
       "TacVerse/newer-0818",
@@ -448,5 +520,38 @@ describe("Workbench statistics route", () => {
     );
     expect(datasetWithoutSuffix).toBeDefined();
     expect(datasetWithoutSuffix?.dailyAdditions).toEqual([]);
+  });
+
+  test("excludes merged post-processing datasets and reports the rule", async () => {
+    await writeDataset("TacVerse/merged/taccap-g1-arrange-desk-items-09902");
+    await writeDataset("TacVerse/taccap-g1-arrange-desk-items-0902");
+
+    const response = await GET(
+      new Request("http://localhost/api/workbench/statistics?org=TacVerse"),
+    );
+    const payload = (await response.json()) as {
+      datasets: Array<{ relativePath: string }>;
+      statisticsFilter: {
+        rule: string;
+        excludedDatasets: Array<{
+          relativePath: string;
+          reason: string;
+        }>;
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.datasets.map((dataset) => dataset.relativePath)).toEqual([
+      "TacVerse/taccap-g1-arrange-desk-items-0902",
+    ]);
+    expect(payload.statisticsFilter).toEqual({
+      rule: expect.stringContaining("exact path segment"),
+      excludedDatasets: [
+        {
+          relativePath: "TacVerse/merged/taccap-g1-arrange-desk-items-09902",
+          reason: "post-processing-merged-output",
+        },
+      ],
+    });
   });
 });

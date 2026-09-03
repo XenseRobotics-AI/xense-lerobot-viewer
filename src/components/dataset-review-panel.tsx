@@ -3,11 +3,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   DatasetDisplayInfo,
+  EpisodeData,
   EpisodeLengthStats,
 } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import { EpisodeLengthHistogram } from "@/components/stats-panel";
 import WorkbenchDatasetStatistics from "@/components/workbench-dataset-statistics";
 import WorkbenchGroupingPanel from "@/components/workbench-grouping-panel";
+import { HF_MIRROR_ENDPOINT, HF_OFFICIAL_ENDPOINT } from "@/lib/hf-endpoints";
+import {
+  checkHfAccount,
+  clearHfAccount,
+  readHfAccount,
+  type HfAccount,
+} from "@/utils/hfAccountClient";
 import { assignEpisodesToBins } from "@/utils/episodeLengthHistogram";
 import { runSync } from "@/utils/syncClient";
 
@@ -32,8 +40,23 @@ type QualityResponse = {
   };
 };
 
+type StatisticsProgress = {
+  phase: "catalog" | "stats" | "complete" | "error";
+  index?: number;
+  total?: number;
+  percent?: number;
+  repo?: string;
+  repoId?: string;
+};
+
+const STATISTICS_ENDPOINTS = [
+  HF_OFFICIAL_ENDPOINT,
+  HF_MIRROR_ENDPOINT,
+] as const;
+
 interface DatasetReviewPanelProps {
   datasetInfo: DatasetDisplayInfo;
+  episodeData?: EpisodeData;
   episodeLengthStats: EpisodeLengthStats | null;
   episodeLengthStatsLoading: boolean;
   episodeLengthStatsError: string | null;
@@ -195,6 +218,7 @@ function EpisodeDurationGroups({ stats }: { stats: EpisodeLengthStats }) {
 
 export default function DatasetReviewPanel({
   datasetInfo,
+  episodeData,
   episodeLengthStats,
   episodeLengthStatsLoading,
   episodeLengthStatsError,
@@ -217,10 +241,30 @@ export default function DatasetReviewPanel({
   const [statisticsRefreshMessage, setStatisticsRefreshMessage] = useState<
     string | null
   >(null);
+  const [statisticsEndpoint, setStatisticsEndpoint] =
+    useState(HF_OFFICIAL_ENDPOINT);
+  const [statisticsToken, setStatisticsToken] = useState("");
+  const [showStatisticsToken, setShowStatisticsToken] = useState(false);
+  const [hfAccount, setHfAccount] = useState<HfAccount | null>(null);
+  const [accountBusy, setAccountBusy] = useState(false);
+  const [statisticsProgress, setStatisticsProgress] =
+    useState<StatisticsProgress | null>(null);
+  const [statisticsProgressError, setStatisticsProgressError] = useState<
+    string | null
+  >(null);
   const [workbenchView, setWorkbenchView] = useState<
     "dataset-statistics" | "checks" | "grouping"
   >("grouping");
   const qualityRequestIdRef = useRef(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    setHfAccount(null);
+    readHfAccount(controller.signal, organization || undefined)
+      .then(setHfAccount)
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [organization]);
+
   const statisticsRefreshAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -300,13 +344,20 @@ export default function DatasetReviewPanel({
     const controller = new AbortController();
     statisticsRefreshAbortRef.current = controller;
     setStatisticsAction("refresh");
+    const explicitToken = statisticsToken.trim();
     setStatisticsRefreshError(null);
     setStatisticsRefreshMessage(null);
+    setStatisticsProgressError(null);
+    setStatisticsProgress({ phase: "catalog", percent: 0 });
     try {
       const response = await fetch("/api/hf/catalog", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ org: organization }),
+        body: JSON.stringify({
+          org: organization,
+          endpoint: statisticsEndpoint,
+          ...(explicitToken ? { token: explicitToken } : {}),
+        }),
         signal: controller.signal,
         cache: "no-store",
       });
@@ -326,41 +377,42 @@ export default function DatasetReviewPanel({
       let buffer = "";
       let refreshError: string | null = null;
       let catalogCount: number | null = null;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split(/\r?\n/u);
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const event = JSON.parse(line) as {
-              type?: string;
-              error?: string;
-              result?: { datasets?: unknown[] };
-            };
-            if (event.type === "error" && !refreshError) {
-              refreshError = event.error || "Statistics refresh failed.";
-            }
-            if (
-              event.type === "result" &&
-              Array.isArray(event.result?.datasets)
-            ) {
-              catalogCount = event.result.datasets.length;
-            }
-          } catch {
-            // Progress lines are best-effort; final API errors are handled above.
-          }
-        }
-      }
-      if (buffer.trim()) {
+      const handleCatalogLine = (line: string) => {
+        if (!line.trim()) return;
         try {
-          const event = JSON.parse(buffer) as {
+          const event = JSON.parse(line) as {
             type?: string;
             error?: string;
+            progress?: {
+              index?: number;
+              total?: number;
+              percent?: number;
+              repoId?: string;
+            };
             result?: { datasets?: unknown[] };
           };
+          if (event.type === "progress" && event.progress) {
+            const progress = event.progress;
+            const total =
+              typeof progress.total === "number" ? progress.total : undefined;
+            const index =
+              typeof progress.index === "number" ? progress.index : undefined;
+            setStatisticsProgress({
+              phase: "catalog",
+              index,
+              total,
+              percent:
+                typeof progress.percent === "number"
+                  ? progress.percent
+                  : total && index
+                    ? Math.round((index / total) * 100)
+                    : undefined,
+              repoId:
+                typeof progress.repoId === "string"
+                  ? progress.repoId
+                  : undefined,
+            });
+          }
           if (event.type === "error" && !refreshError) {
             refreshError = event.error || "Statistics refresh failed.";
           }
@@ -371,20 +423,48 @@ export default function DatasetReviewPanel({
             catalogCount = event.result.datasets.length;
           }
         } catch {
-          // Ignore trailing non-JSON output.
+          // Progress lines are best-effort; final API errors are handled above.
         }
+      };
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/u);
+        buffer = lines.pop() ?? "";
+        for (const line of lines) handleCatalogLine(line);
       }
+      handleCatalogLine(buffer);
       if (refreshError) throw new Error(refreshError);
 
-      const result = await runSync(organization, () => undefined, {
-        signal: controller.signal,
-        metadataOnly: true,
-      });
+      setStatisticsProgress({ phase: "stats", percent: 0 });
+      const result = await runSync(
+        organization,
+        (progress) => {
+          setStatisticsProgress({
+            phase: progress.phase === "complete" ? "complete" : "stats",
+            index: progress.index,
+            total: progress.total,
+            percent: progress.percent,
+            repo: progress.repo,
+          });
+        },
+        {
+          signal: controller.signal,
+          metadataOnly: true,
+          endpoint: statisticsEndpoint,
+          ...(explicitToken ? { token: explicitToken } : {}),
+        },
+      );
+      setStatisticsProgress({ phase: "complete", percent: 100 });
       setStatisticsRefreshToken((value) => value + 1);
-      const catalogMessage =
-        catalogCount === null
+      const formatCatalogMessage = (count: number | null): string =>
+        count === null
           ? "Catalog refreshed."
-          : `Catalog refreshed: ${catalogCount.toLocaleString()} datasets visible to the current credential.`;
+          : `Catalog refreshed: ${count.toLocaleString()} datasets visible to the current credential.`;
+      const catalogMessage = formatCatalogMessage(
+        catalogCount as number | null,
+      );
       const syncMessage =
         result.failed.length === 0
           ? result.downloaded === 0
@@ -394,9 +474,14 @@ export default function DatasetReviewPanel({
       setStatisticsRefreshMessage(`${catalogMessage} ${syncMessage}`);
     } catch (error: unknown) {
       if (error instanceof DOMException && error.name === "AbortError") return;
-      setStatisticsRefreshError(
-        error instanceof Error ? error.message : "Statistics refresh failed.",
-      );
+      const message =
+        error instanceof Error ? error.message : "Statistics refresh failed.";
+      setStatisticsProgressError(message);
+      setStatisticsProgress((current) => ({
+        ...(current ?? {}),
+        phase: "error",
+      }));
+      setStatisticsRefreshError(message);
     } finally {
       if (statisticsRefreshAbortRef.current === controller) {
         statisticsRefreshAbortRef.current = null;
@@ -404,6 +489,60 @@ export default function DatasetReviewPanel({
       if (!controller.signal.aborted) setStatisticsAction(null);
     }
   };
+
+  const verifyStatisticsAccount = async () => {
+    if (!organization) return;
+    setAccountBusy(true);
+    setStatisticsRefreshError(null);
+    try {
+      const token = statisticsToken.trim();
+      const account = await checkHfAccount(
+        token || undefined,
+        undefined,
+        organization,
+        statisticsEndpoint,
+      );
+      setHfAccount(account);
+      if (token) {
+        setStatisticsToken("");
+        setShowStatisticsToken(false);
+      }
+    } catch (error: unknown) {
+      setStatisticsRefreshError(
+        error instanceof Error ? error.message : "HF account check failed.",
+      );
+    } finally {
+      setAccountBusy(false);
+    }
+  };
+
+  const clearStatisticsAccount = async () => {
+    setAccountBusy(true);
+    try {
+      setHfAccount(await clearHfAccount());
+    } catch (error: unknown) {
+      setStatisticsRefreshError(
+        error instanceof Error ? error.message : "Unable to clear HF token.",
+      );
+    } finally {
+      setAccountBusy(false);
+    }
+  };
+
+  const progressPercent =
+    typeof statisticsProgress?.percent === "number"
+      ? Math.max(0, Math.min(100, Math.round(statisticsProgress.percent)))
+      : null;
+  const progressLabel =
+    statisticsProgress?.phase === "catalog"
+      ? "Refreshing Hub catalog"
+      : statisticsProgress?.phase === "stats"
+        ? "Syncing stats files"
+        : statisticsProgress?.phase === "complete"
+          ? "Statistics refresh complete"
+          : statisticsProgress?.phase === "error"
+            ? "Statistics refresh failed"
+            : null;
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-6 py-5">
@@ -423,7 +562,7 @@ export default function DatasetReviewPanel({
             Parquet remain independent.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {encodedPath && workbenchView === "checks" && (
             <button
               type="button"
@@ -436,15 +575,142 @@ export default function DatasetReviewPanel({
           <button
             type="button"
             onClick={refreshStatistics}
-            disabled={statisticsAction !== null || !organization}
+            disabled={statisticsAction !== null || accountBusy || !organization}
             className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-3 py-1.5 text-xs text-cyan-100 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {statisticsAction === "refresh"
               ? "Refreshing statistics…"
               : "Refresh statistics"}
           </button>
+          <label className="flex items-center gap-1.5 text-[11px] text-slate-400">
+            <span>Hub</span>
+            <select
+              value={statisticsEndpoint}
+              onChange={(event) => setStatisticsEndpoint(event.target.value)}
+              aria-label="Hugging Face endpoint"
+              className="rounded-md border border-white/10 bg-[var(--surface-1)] px-2 py-1.5 text-[11px] text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50"
+            >
+              {STATISTICS_ENDPOINTS.map((endpoint) => (
+                <option key={endpoint} value={endpoint}>
+                  {endpoint === HF_OFFICIAL_ENDPOINT
+                    ? "huggingface.co (official)"
+                    : "hf-mirror.com (mirror)"}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span
+            className="max-w-[16rem] truncate text-[11px] text-slate-400"
+            title={hfAccount?.endpoint ?? undefined}
+          >
+            {hfAccount?.authenticated
+              ? `HF: ${hfAccount.username ?? "authenticated"}`
+              : hfAccount?.tokenPresent
+                ? "HF token configured (not checked)"
+                : "HF: not signed in"}
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowStatisticsToken((value) => !value)}
+            className="rounded-md border border-white/10 px-2.5 py-1.5 text-[11px] text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-100"
+          >
+            {hfAccount?.authenticated ? "Change token" : "HF token"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void verifyStatisticsAccount()}
+            disabled={accountBusy || statisticsAction !== null || !organization}
+            className="rounded-md border border-white/10 px-2.5 py-1.5 text-[11px] text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {accountBusy ? "Checking account…" : "Check account"}
+          </button>
+          {hfAccount?.source === "viewer" && (
+            <button
+              type="button"
+              onClick={() => void clearStatisticsAccount()}
+              disabled={accountBusy || statisticsAction !== null}
+              className="rounded-md border border-white/10 px-2.5 py-1.5 text-[11px] text-slate-500 transition-colors hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Clear local token
+            </button>
+          )}
         </div>
       </div>
+
+      {statisticsEndpoint === HF_MIRROR_ENDPOINT && (
+        <p className="-mt-2 text-[11px] text-amber-200/80">
+          hf-mirror.com may not serve metadata files. Use huggingface.co when
+          Refresh statistics needs to download stats JSON.
+        </p>
+      )}
+
+      {showStatisticsToken && (
+        <div className="-mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-[var(--surface-1)]/40 p-3">
+          <input
+            type="password"
+            value={statisticsToken}
+            onChange={(event) => setStatisticsToken(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void verifyStatisticsAccount();
+            }}
+            placeholder="hf_…"
+            autoComplete="new-password"
+            aria-label="Hugging Face token"
+            className="min-w-[18rem] flex-1 rounded-md border border-white/10 bg-black/20 px-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-300/60 focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={() => void verifyStatisticsAccount()}
+            disabled={accountBusy || !statisticsToken.trim()}
+            className="rounded-md bg-cyan-400/80 px-3 py-1.5 text-xs font-semibold text-slate-950 transition-colors hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {accountBusy ? "Verifying…" : "Verify and save"}
+          </button>
+          <p className="w-full text-[11px] text-slate-500">
+            The token is sent only to this local backend and saved under
+            .xense-viewer/secrets after successful verification.
+          </p>
+        </div>
+      )}
+
+      {progressLabel && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-lg border border-cyan-400/15 bg-cyan-400/5 px-3 py-2.5 text-xs text-slate-300"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span>{progressLabel}</span>
+            <span className="tabular-nums text-cyan-200">
+              {progressPercent === null ? "…" : `${progressPercent}%`}
+            </span>
+          </div>
+          <div
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progressPercent ?? 0}
+            className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10"
+          >
+            <div
+              className="h-full rounded-full bg-cyan-300 transition-[width] duration-300"
+              style={{ width: `${progressPercent ?? 0}%` }}
+            />
+          </div>
+          <p className="mt-1.5 text-[11px] text-slate-500">
+            {statisticsProgress?.index && statisticsProgress.total
+              ? `${statisticsProgress.index.toLocaleString()} / ${statisticsProgress.total.toLocaleString()}`
+              : "Waiting for progress events…"}
+            {(statisticsProgress?.repo || statisticsProgress?.repoId) &&
+              ` · ${statisticsProgress.repo || statisticsProgress.repoId}`}
+          </p>
+          {statisticsProgressError && (
+            <p className="mt-1 text-[11px] text-amber-200">
+              {statisticsProgressError}
+            </p>
+          )}
+        </div>
+      )}
 
       {(statisticsRefreshError || statisticsRefreshMessage) && (
         <div
@@ -485,11 +751,13 @@ export default function DatasetReviewPanel({
         <WorkbenchDatasetStatistics
           organization={organization}
           refreshToken={statisticsRefreshToken}
+          episodeData={episodeData}
         />
       ) : workbenchView === "grouping" ? (
         <WorkbenchGroupingPanel
           organization={organization}
           refreshToken={statisticsRefreshToken}
+          episodeData={episodeData}
         />
       ) : (
         <>

@@ -1,6 +1,7 @@
 import type { LocalDatasetSummary } from "@/lib/local-datasets-discovery";
 import { getDatasetPrefix } from "@/utils/datasetGrouping";
 import { WORKBENCH_UPLOADER_NAMES } from "@/utils/workbenchUploaderNames";
+import { isWorkbenchStatisticsExcludedDataset } from "@/utils/workbenchStatisticsFilter";
 
 export type WorkbenchRollupDimension =
   | "uploader"
@@ -12,7 +13,12 @@ export type WorkbenchRollupDimension =
 
 export type WorkbenchRollupDataset = Pick<
   LocalDatasetSummary,
-  "relativePath" | "total_episodes" | "total_frames" | "fps" | "robot_type"
+  | "relativePath"
+  | "total_episodes"
+  | "total_frames"
+  | "fps"
+  | "robot_type"
+  | "sizeBytes"
 > & {
   robotId?: string | null;
   leftGripperSn?: string | null;
@@ -358,6 +364,9 @@ export function workbenchGroupDatasetNames(
   } = {},
 ): Map<string, string[]> {
   const availableDays = datasets
+    .filter(
+      (dataset) => !isWorkbenchStatisticsExcludedDataset(dataset.relativePath),
+    )
     .map((dataset) => workbenchDayKey(dataset.lastModified))
     .filter((value): value is string => Boolean(value));
   const range = normalizeWorkbenchDateRange(
@@ -382,6 +391,13 @@ export function workbenchGroupDatasetNames(
   );
 }
 
+/** Convert a local bucketed path to its canonical organization/name repo id. */
+function workbenchSourceRepoId(relativePath: string): string {
+  const segments = relativePath.split(/[\\/]+/u).filter(Boolean);
+  if (segments.length < 2) return relativePath;
+  return `${segments[0]}/${segments[segments.length - 1]}`;
+}
+
 export function workbenchGroupSourceRepoIds(
   datasets: readonly WorkbenchRollupDataset[],
   dimension: WorkbenchRollupDimension,
@@ -399,6 +415,7 @@ export function workbenchGroupSourceRepoIds(
   const groups = new Map<string, Set<string>>();
 
   for (const dataset of datasets) {
+    if (isWorkbenchStatisticsExcludedDataset(dataset.relativePath)) continue;
     if (additionsInRange(dataset, range).length === 0) continue;
     if (
       !hasWorkbenchDatasetDateSuffix(dataset.relativePath, dataset.lastModified)
@@ -407,7 +424,7 @@ export function workbenchGroupSourceRepoIds(
     }
     const group = workbenchRollupLabel(dataset, dimension);
     const repos = groups.get(group) ?? new Set<string>();
-    repos.add(dataset.relativePath);
+    repos.add(workbenchSourceRepoId(dataset.relativePath));
     groups.set(group, repos);
   }
 
@@ -441,6 +458,9 @@ export function workbenchAdditionAvailableDays(
   datasets: readonly WorkbenchRollupDataset[],
 ): string[] {
   return datasets
+    .filter(
+      (dataset) => !isWorkbenchStatisticsExcludedDataset(dataset.relativePath),
+    )
     .flatMap((dataset) => additionDays(dataset).map((addition) => addition.day))
     .sort();
 }
@@ -454,6 +474,25 @@ function additionsInRange(
     if (range.endDate && addition.day >= range.endDate) return false;
     return true;
   });
+}
+
+/** Unique dataset directories with strict additions in a half-open range. */
+export function workbenchAdditionDatasetPaths(
+  datasets: readonly WorkbenchRollupDataset[],
+  options: { startDate?: string | null; endDate?: string | null } = {},
+): string[] {
+  const range = normalizeWorkbenchDateRange(
+    options.startDate,
+    options.endDate,
+    workbenchAdditionAvailableDays(datasets),
+  );
+  const paths = new Set<string>();
+  for (const dataset of datasets) {
+    if (isWorkbenchStatisticsExcludedDataset(dataset.relativePath)) continue;
+    if (additionsInRange(dataset, range).length > 0)
+      paths.add(dataset.relativePath);
+  }
+  return Array.from(paths).sort((left, right) => left.localeCompare(right));
 }
 
 export function workbenchGroupAdditionDatasetNames(
@@ -473,6 +512,7 @@ export function workbenchGroupAdditionDatasetNames(
   const groups = new Map<string, Set<string>>();
 
   for (const dataset of datasets) {
+    if (isWorkbenchStatisticsExcludedDataset(dataset.relativePath)) continue;
     if (additionsInRange(dataset, range).length === 0) continue;
     const group = workbenchRollupLabel(dataset, dimension);
     const names = groups.get(group) ?? new Set<string>();
@@ -514,12 +554,15 @@ export function filterWorkbenchDatasetsByDate(
   datasets: readonly WorkbenchRollupDataset[],
   range: WorkbenchRollupDateRange,
 ): WorkbenchRollupDataset[] {
-  const hasKnownDay = datasets.some((dataset) =>
+  const included = datasets.filter(
+    (dataset) => !isWorkbenchStatisticsExcludedDataset(dataset.relativePath),
+  );
+  const hasKnownDay = included.some((dataset) =>
     workbenchDayKey(dataset.lastModified),
   );
-  if (!range.startDate && !range.endDate) return [...datasets];
-  if (!hasKnownDay) return [...datasets];
-  return datasets.filter((dataset) => {
+  if (!range.startDate && !range.endDate) return included;
+  if (!hasKnownDay) return included;
+  return included.filter((dataset) => {
     const day = workbenchDayKey(dataset.lastModified);
     if (!day) return false;
     if (range.startDate && day < range.startDate) return false;
@@ -542,6 +585,9 @@ export function computeWorkbenchRollup(
   } = {},
 ): WorkbenchRollupRow[] {
   const availableDays = datasets
+    .filter(
+      (dataset) => !isWorkbenchStatisticsExcludedDataset(dataset.relativePath),
+    )
     .map((dataset) => workbenchDayKey(dataset.lastModified))
     .filter((value): value is string => Boolean(value));
   const range = normalizeWorkbenchDateRange(
@@ -605,6 +651,7 @@ export function computeWorkbenchAdditionRollup(
   >();
 
   for (const dataset of datasets) {
+    if (isWorkbenchStatisticsExcludedDataset(dataset.relativePath)) continue;
     const additions = additionsInRange(dataset, range);
     if (additions.length === 0) continue;
     const group = workbenchRollupLabel(dataset, dimension);
@@ -652,6 +699,9 @@ export function computeWorkbenchTimeline(
   } = {},
 ): WorkbenchRollupTimeline {
   const availableDays = datasets
+    .filter(
+      (dataset) => !isWorkbenchStatisticsExcludedDataset(dataset.relativePath),
+    )
     .map((dataset) => workbenchDayKey(dataset.lastModified))
     .filter((value): value is string => Boolean(value));
   const range = normalizeWorkbenchDateRange(
@@ -758,6 +808,7 @@ export function computeWorkbenchAdditionTimeline(
   const totalNames = new Set<string>();
 
   for (const dataset of datasets) {
+    if (isWorkbenchStatisticsExcludedDataset(dataset.relativePath)) continue;
     const name = workbenchDatasetName(dataset.relativePath);
     for (const addition of additionsInRange(dataset, range)) {
       const current = byDay.get(addition.day) ?? {

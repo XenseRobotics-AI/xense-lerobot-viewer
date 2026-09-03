@@ -2,13 +2,20 @@
 
 import { useEffect, useState } from "react";
 import HomepageDatasetStatistics from "@/components/homepage-dataset-statistics";
+import type { EpisodeData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import type { LocalDatasetSummary } from "@/lib/local-datasets-discovery";
 import type { DailyDelta } from "@/utils/corpusHistory";
+import WorkbenchStatisticsFilterNotice from "@/components/workbench-statistics-filter-notice";
+import {
+  createWorkbenchStatisticsFilterSummary,
+  type WorkbenchStatisticsFilterSummary,
+} from "@/utils/workbenchStatisticsFilter";
 
 type WorkbenchStatisticsResponse = {
   datasets?: LocalDatasetSummary[];
   errors?: Array<{ path: string; message: string }>;
   delta?: DailyDelta;
+  statisticsFilter?: WorkbenchStatisticsFilterSummary;
   error?: string;
 };
 
@@ -18,6 +25,8 @@ export default function WorkbenchDatasetStatistics({
 }: {
   organization: string;
   refreshToken?: number;
+  /** Optional episode payload supplied by the episode-viewer Workbench. */
+  episodeData?: EpisodeData;
 }) {
   const [payload, setPayload] = useState<WorkbenchStatisticsResponse | null>(
     null,
@@ -25,11 +34,15 @@ export default function WorkbenchDatasetStatistics({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
+  const [statisticsFilter, setStatisticsFilter] = useState(() =>
+    createWorkbenchStatisticsFilterSummary([]),
+  );
 
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
     setError(null);
+    setStatisticsFilter(createWorkbenchStatisticsFilterSummary([]));
 
     fetch(`/api/workbench/statistics?org=${encodeURIComponent(organization)}`, {
       cache: "no-store",
@@ -50,7 +63,12 @@ export default function WorkbenchDatasetStatistics({
         }
         return result;
       })
-      .then(setPayload)
+      .then((result) => {
+        setStatisticsFilter(
+          result.statisticsFilter ?? createWorkbenchStatisticsFilterSummary([]),
+        );
+        setPayload(result);
+      })
       .catch((reason: unknown) => {
         if (reason instanceof DOMException && reason.name === "AbortError") {
           return;
@@ -98,6 +116,7 @@ export default function WorkbenchDatasetStatistics({
 
   return (
     <div className="space-y-3">
+      <WorkbenchStatisticsFilterNotice filter={statisticsFilter} />
       {(payload.errors?.length ?? 0) > 0 && (
         <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 p-3 text-xs text-amber-200/80">
           {payload.errors?.length} dataset path

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Send one plain-text SMTP smoke-test message.
+"""Send one multipart plain-text and HTML SMTP smoke-test message.
 
 Run this from a Python interpreter inside the `lerobot` mamba environment.
 
@@ -13,7 +13,8 @@ Optional environment variables:
   SMTP_TO_ADDRESS=frank@xenserobotics.com
   SMTP_USERNAME=<defaults to SMTP_FROM_ADDRESS>
   SMTP_SUBJECT=SMTP smoketest
-  SMTP_BODY=SMTP smoke test from xense-lerobot-viewer.
+  SMTP_TEXT_BODY=SMTP smoke test from xense-lerobot-viewer.
+  SMTP_HTML_BODY=<p>SMTP smoke test from xense-lerobot-viewer.</p>
   SMTP_USE_SSL=1
   SMTP_TIMEOUT_SECONDS=15
 
@@ -31,9 +32,8 @@ import smtplib
 import ssl
 import sys
 import traceback
-from datetime import datetime, timezone
 from email.message import EmailMessage
-from email.utils import formatdate, make_msgid
+from email.utils import formatdate, getaddresses, make_msgid
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +42,12 @@ DEFAULT_SMTP_PORT = 465
 DEFAULT_FROM_ADDRESS = "1796262052@qq.com"
 DEFAULT_TO_ADDRESS = "frank@xenserobotics.com"
 DEFAULT_SUBJECT = "SMTP smoketest"
-DEFAULT_BODY = "SMTP smoke test from xense-lerobot-viewer."
+DEFAULT_TEXT_BODY = "SMTP smoke test from xense-lerobot-viewer."
+DEFAULT_HTML_BODY = (
+    "<!doctype html><html><body>"
+    "<p>SMTP smoke test from xense-lerobot-viewer.</p>"
+    "</body></html>"
+)
 DEFAULT_TIMEOUT_SECONDS = 15.0
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -129,17 +134,38 @@ def parse_timeout() -> float:
     return timeout
 
 
+def parse_recipient_addresses(raw: str) -> list[str]:
+    normalized_raw = raw.replace(";", ",").replace("；", ",").replace("，", ",")
+    parsed = getaddresses([normalized_raw])
+    recipients: list[str] = []
+    seen: set[str] = set()
+    for _, address in parsed:
+        normalized = address.strip()
+        if (
+            not normalized
+            or "@" not in normalized
+            or normalized.startswith("@")
+            or normalized.endswith("@")
+        ):
+            raise ConfigError("SMTP_TO_ADDRESS must contain valid email addresses")
+        key = normalized.lower()
+        if key not in seen:
+            recipients.append(normalized)
+            seen.add(key)
+    if not recipients:
+        raise ConfigError("SMTP_TO_ADDRESS must contain at least one email address")
+    return recipients
+
+
 def build_message(
     from_address: str,
     to_address: str,
     subject: str,
-    body: str,
+    text_body: str,
+    html_body: str,
 ) -> EmailMessage:
     message_domain = from_address.rsplit("@", 1)[-1] if "@" in from_address else "qq.com"
     message_id = make_msgid(domain=message_domain)
-    now_utc = datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
-        "+00:00", "Z"
-    )
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -148,15 +174,20 @@ def build_message(
     msg["Date"] = formatdate(localtime=False)
     msg["Message-ID"] = message_id
     msg["X-Mailer"] = "xense-lerobot-viewer smtp-smoke-test"
-    msg.set_content(body)
+    msg.set_content(text_body)
+    msg.add_alternative(html_body, subtype="html")
     return msg
 
 
 def load_config() -> dict[str, Any]:
     from_address = get_optional_env("SMTP_FROM_ADDRESS", DEFAULT_FROM_ADDRESS)
-    to_address = get_optional_env("SMTP_TO_ADDRESS", DEFAULT_TO_ADDRESS)
+    to_addresses = parse_recipient_addresses(
+        get_optional_env("SMTP_TO_ADDRESS", DEFAULT_TO_ADDRESS)
+    )
+    to_address = ", ".join(to_addresses)
     subject = get_optional_env("SMTP_SUBJECT", DEFAULT_SUBJECT)
-    body = get_optional_env("SMTP_BODY", DEFAULT_BODY)
+    text_body = get_optional_env("SMTP_TEXT_BODY", DEFAULT_TEXT_BODY)
+    html_body = get_optional_env("SMTP_HTML_BODY", DEFAULT_HTML_BODY)
     host = get_optional_env("SMTP_HOST", DEFAULT_SMTP_HOST)
     port = parse_port(get_optional_env("SMTP_PORT", str(DEFAULT_SMTP_PORT)))
     username = get_optional_env("SMTP_USERNAME", from_address)
@@ -167,8 +198,10 @@ def load_config() -> dict[str, Any]:
     return {
         "from_address": from_address,
         "to_address": to_address,
+        "to_addresses": to_addresses,
         "subject": subject,
-        "body": body,
+        "text_body": text_body,
+        "html_body": html_body,
         "host": host,
         "port": port,
         "username": username,
@@ -222,7 +255,8 @@ def main() -> int:
         config["from_address"],
         config["to_address"],
         config["subject"],
-        config["body"],
+        config["text_body"],
+        config["html_body"],
     )
 
     try:
@@ -249,7 +283,7 @@ def main() -> int:
                 return emit_error("auth", "auth_error", exc)
 
             try:
-                refused = smtp.send_message(message)
+                refused = smtp.send_message(message, to_addrs=config["to_addresses"])
             except (OSError, socket.timeout, smtplib.SMTPException) as exc:
                 return emit_error("send", "send_error", exc)
 
@@ -276,8 +310,10 @@ def main() -> int:
                 "message": "SMTP smoke test sent.",
                 "from": config["from_address"],
                 "to": config["to_address"],
+                "recipients": config["to_addresses"],
                 "subject": config["subject"],
-                "body": config["body"],
+                "textBody": config["text_body"],
+                "htmlBody": config["html_body"],
                 "host": config["host"],
                 "port": config["port"],
                 "transport": transport,

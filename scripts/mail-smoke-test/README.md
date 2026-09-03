@@ -31,11 +31,13 @@ Set the sender and login address to the QQ mailbox you want to use:
 - `SMTP_FROM_ADDRESS=1796262052@qq.com`
 - `SMTP_USERNAME=1796262052@qq.com`
 
-The recipient, subject, and body can be passed in the environment:
+The recipient, subject, and plain-text/HTML bodies can be passed in the
+environment:
 
-- `SMTP_TO_ADDRESS=frank@xenserobotics.com`
+- `SMTP_TO_ADDRESS=frank@xenserobotics.com,jay@xenserobotics.com`
 - `SMTP_SUBJECT=...`
-- `SMTP_BODY=...`
+- `SMTP_TEXT_BODY=...`
+- `SMTP_HTML_BODY=...`
 
 Recommended runtime settings:
 
@@ -49,11 +51,15 @@ Recommended runtime settings:
 SMTP_PASSWORD_FILE=/tmp/qq_smtp_password \
 SMTP_FROM_ADDRESS=1796262052@qq.com \
 SMTP_USERNAME=1796262052@qq.com \
-SMTP_TO_ADDRESS=frank@xenserobotics.com \
+SMTP_TO_ADDRESS=frank@xenserobotics.com,jay@xenserobotics.com \
 SMTP_SUBJECT='SMTP smoketest' \
-SMTP_BODY='SMTP smoke test from xense-lerobot-viewer.' \
+SMTP_TEXT_BODY='SMTP smoke test from xense-lerobot-viewer.' \
+SMTP_HTML_BODY='<p>SMTP smoke test from xense-lerobot-viewer.</p>' \
 SMTP_HOST=smtp.qq.com \
 SMTP_PORT=465 \
 SMTP_USE_SSL=1 \
 python scripts/mail-smoke-test/smtp_smoke_test.py
 ```
+
+The resulting message is `multipart/alternative`: clients that do not render
+HTML use the plain-text body.
