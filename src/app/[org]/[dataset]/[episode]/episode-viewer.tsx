@@ -431,6 +431,25 @@ function EpisodeViewerInner({
   // correct tab renders on the very first frame (no post-mount flash).
   // Safe because EpisodeViewerInner only mounts client-side (behind a loading gate).
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
+    const requestedTab = searchParams.get("tab");
+    if (
+      requestedTab &&
+      [
+        "episodes",
+        "annotations",
+        "statistics",
+        "frames",
+        "insights",
+        "doctor",
+        "filtering",
+        "urdf",
+        "parquet",
+        "workbench",
+        "tacflow",
+      ].includes(requestedTab)
+    ) {
+      return requestedTab as ActiveTab;
+    }
     if (typeof window !== "undefined") {
       const stored = sessionStorage.getItem("activeTab");
       if (
@@ -876,18 +895,40 @@ function EpisodeViewerInner({
   useEffect(() => {
     if (episodeLoading || selectedEpisodeId !== episodeId) return;
     const timeParam = searchParams.get("t");
-    if (!timeParam) {
+    const frameParam = searchParams.get("frame");
+    const frameTimestamps = data.frameTimestamps ?? [];
+    const frameValue = frameParam === null ? NaN : Number(frameParam);
+    const hasFrame =
+      Number.isInteger(frameValue) &&
+      frameValue >= 0 &&
+      (frameTimestamps.length === 0 || frameValue < frameTimestamps.length);
+    const applyKey = hasFrame
+      ? `${episodeId}:frame:${frameValue}`
+      : timeParam
+        ? `${episodeId}:${timeParam}`
+        : null;
+    if (!applyKey) {
       appliedUrlTimeRef.current = null;
       return;
     }
-    const applyKey = `${episodeId}:${timeParam}`;
     if (appliedUrlTimeRef.current === applyKey) return;
-    const timeValue = parseFloat(timeParam);
-    if (!isNaN(timeValue)) {
+    const timeValue = hasFrame
+      ? (frameTimestamps[frameValue] ??
+        (data.datasetInfo.fps > 0 ? frameValue / data.datasetInfo.fps : 0))
+      : Number.parseFloat(timeParam ?? "");
+    if (Number.isFinite(timeValue)) {
       appliedUrlTimeRef.current = applyKey;
       seek(timeValue);
     }
-  }, [episodeId, episodeLoading, searchParams, seek, selectedEpisodeId]);
+  }, [
+    data.datasetInfo.fps,
+    data.frameTimestamps,
+    episodeId,
+    episodeLoading,
+    searchParams,
+    seek,
+    selectedEpisodeId,
+  ]);
 
   // Initialize page based on the current episode. Splitting this out from
   // the keyboard listener effect lets the listener attach exactly once.

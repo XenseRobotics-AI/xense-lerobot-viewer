@@ -14,8 +14,10 @@ import {
   workbenchGroupSourceRepoIds,
   getWorkbenchDefaultDateRange,
   getWorkbenchDefaultDateTimeRange,
+  getWorkbenchDateTimeRangeShortcut,
   getWorkbenchLeftSnWorkstation,
   getWorkbenchLeftSnTargetHours,
+  getWorkbenchLatestAvailableDateTimeRange,
   getWorkbenchOkrRewardAmount,
   getWorkbenchOkrSymbol,
   hasWorkbenchDatasetDateSuffix,
@@ -145,6 +147,54 @@ describe("getWorkbenchDefaultDateTimeRange", () => {
         endDateTime: "2026-08-26T00:00",
       },
     );
+  });
+});
+
+describe("Workbench production-day date ranges", () => {
+  test("selects the latest available day and its exclusive next-day boundary", () => {
+    expect(
+      getWorkbenchLatestAvailableDateTimeRange([
+        "2026-08-28",
+        "2026-09-02",
+        "2026-09-02",
+      ]),
+    ).toEqual({
+      startDateTime: "2026-09-02T00:00",
+      endDateTime: "2026-09-03T00:00",
+    });
+  });
+
+  test("falls back to yesterday when no production day is available", () => {
+    expect(
+      getWorkbenchLatestAvailableDateTimeRange([], new Date(2026, 7, 26, 12)),
+    ).toEqual({
+      startDateTime: "2026-08-25T00:00",
+      endDateTime: "2026-08-26T00:00",
+    });
+  });
+
+  test("supports the five local date shortcuts", () => {
+    const now = new Date(2026, 7, 26, 12);
+    expect(getWorkbenchDateTimeRangeShortcut("today", now)).toEqual({
+      startDateTime: "2026-08-26T00:00",
+      endDateTime: "2026-08-27T00:00",
+    });
+    expect(getWorkbenchDateTimeRangeShortcut("yesterday", now)).toEqual({
+      startDateTime: "2026-08-25T00:00",
+      endDateTime: "2026-08-26T00:00",
+    });
+    expect(getWorkbenchDateTimeRangeShortcut("last7Days", now)).toEqual({
+      startDateTime: "2026-08-20T00:00",
+      endDateTime: "2026-08-27T00:00",
+    });
+    expect(getWorkbenchDateTimeRangeShortcut("thisWeek", now)).toEqual({
+      startDateTime: "2026-08-24T00:00",
+      endDateTime: "2026-08-27T00:00",
+    });
+    expect(getWorkbenchDateTimeRangeShortcut("lastWeek", now)).toEqual({
+      startDateTime: "2026-08-17T00:00",
+      endDateTime: "2026-08-24T00:00",
+    });
   });
 });
 

@@ -303,9 +303,11 @@ describe("Workbench statistics route", () => {
           uploaderDisplayName: string | null;
         };
       }>;
+      dataUpdatedAt: string | null;
     };
 
     expect(response.status).toBe(200);
+    expect(payload.dataUpdatedAt).toBe("2026-08-18T11:00:00.000Z");
     expect(payload.workstationMappings).toMatchObject({
       source: "stored",
       mappings: { "robot-newer": "D2" },
@@ -524,6 +526,7 @@ describe("Workbench statistics route", () => {
 
   test("excludes merged post-processing datasets and reports the rule", async () => {
     await writeDataset("TacVerse/merged/taccap-g1-arrange-desk-items-09902");
+    await writeDataset("TacVerse/merged/taccap-g1-operate-shoe-box-0812");
     await writeDataset("TacVerse/taccap-g1-arrange-desk-items-0902");
 
     const response = await GET(
@@ -538,6 +541,7 @@ describe("Workbench statistics route", () => {
           reason: string;
         }>;
       };
+      displayReplayDataset: { relativePath: string } | null;
     };
 
     expect(response.status).toBe(200);
@@ -551,7 +555,14 @@ describe("Workbench statistics route", () => {
           relativePath: "TacVerse/merged/taccap-g1-arrange-desk-items-09902",
           reason: "post-processing-merged-output",
         },
+        {
+          relativePath: "TacVerse/merged/taccap-g1-operate-shoe-box-0812",
+          reason: "post-processing-merged-output",
+        },
       ],
     });
+    expect(payload.displayReplayDataset?.relativePath).toBe(
+      "TacVerse/merged/taccap-g1-operate-shoe-box-0812",
+    );
   });
 });

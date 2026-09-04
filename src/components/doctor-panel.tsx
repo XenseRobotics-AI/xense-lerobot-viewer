@@ -23,7 +23,9 @@ import {
   type DoctorSpeedThresholds,
 } from "@/types/doctor.types";
 import { copyTextToClipboard } from "@/utils/clipboard";
+import { decodeLocalDatasetPath } from "@/utils/datasetRoute";
 import { runDatasetDoctor } from "@/utils/doctorClient";
+import { createWorkbenchReviewTask } from "@/utils/workbenchActions";
 import { assignEpisodesToBins } from "@/utils/episodeLengthHistogram";
 import { useLocale, useT } from "@/context/locale-context";
 import type { MessageKey } from "@/i18n/messages";
@@ -62,6 +64,11 @@ function scopeOptionFor(
   if (episodeRange) return "custom";
   if (maxEpisodes === null) return "all";
   return String(maxEpisodes) as DoctorScopeOption;
+}
+
+function extractDoctorFrame(message: string): number | null {
+  const match = message.match(/\bframe(?:\s+|=)(\d+)\b/iu);
+  return match ? Number(match[1]) : null;
 }
 
 // Conditional tab content unmounts when the user switches tabs. Keep the last
@@ -249,12 +256,14 @@ function SummaryCard({
 
 function CheckCard({
   check,
+  encodedPath,
   dimensionJumpThresholds,
   speedThresholds,
   expanded,
   onToggle,
 }: {
   check: DoctorCheckResult;
+  encodedPath: string | null;
   dimensionJumpThresholds: DoctorDimensionJumpThresholds;
   speedThresholds: DoctorSpeedThresholds;
   expanded: boolean;
@@ -262,6 +271,7 @@ function CheckCard({
 }) {
   const { t, tp } = useLocale();
   const { addMany } = useFlaggedEpisodes();
+  const [reviewMessage, setReviewMessage] = useState<string | null>(null);
   const episodeIds = useMemo(() => {
     const ids = new Set<number>();
     for (const item of check.messages) {
@@ -275,6 +285,25 @@ function CheckCard({
   const issueCount = check.messages.filter(
     (message) => message.severity !== "PASS",
   ).length;
+  const createReviewTask = useCallback(
+    (message: string, episodeId: number) => {
+      const task = createWorkbenchReviewTask({
+        organization: "local",
+        source: "doctor",
+        title: `${check.name} · episode ${episodeId}`,
+        detail: message,
+        datasetPath: encodedPath ? decodeLocalDatasetPath(encodedPath) : null,
+        episodeId,
+        frame: extractDoctorFrame(message),
+      });
+      setReviewMessage(
+        task
+          ? "Review task created in this browser."
+          : "Unable to create review task.",
+      );
+    },
+    [check.name, encodedPath],
+  );
 
   return (
     <section
@@ -337,22 +366,68 @@ function CheckCard({
 
       {expanded && (
         <div className="space-y-2 border-t border-white/5 px-4 py-3">
+          {reviewMessage && (
+            <p className="text-[11px] text-emerald-300" role="status">
+              {reviewMessage}
+            </p>
+          )}
           {check.messages.length === 0 ? (
             <p className="text-xs text-slate-500">{t("doctor.noDetail")}</p>
           ) : (
-            check.messages.map((message, index) => (
-              <div
-                key={`${message.severity}-${index}-${message.message}`}
-                className="flex items-start gap-2.5 text-xs leading-5"
-              >
-                <span
-                  className={`mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full ${SEVERITY_TONE[message.severity].dot}`}
-                />
-                <p className="min-w-0 whitespace-pre-wrap break-words text-slate-300">
-                  {message.message}
-                </p>
-              </div>
-            ))
+            check.messages.map((message, index) => {
+              const messageEpisodeIds =
+                message.severity === "PASS"
+                  ? []
+                  : extractDoctorEpisodeIdsFromMessage(message.message);
+              const frame = extractDoctorFrame(message.message);
+              return (
+                <div
+                  key={`${message.severity}-${index}-${message.message}`}
+                  className="flex items-start gap-2.5 text-xs leading-5"
+                >
+                  <span
+                    className={`mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full ${SEVERITY_TONE[message.severity].dot}`}
+                  />
+                  <div className="min-w-0">
+                    <p className="whitespace-pre-wrap break-words text-slate-300">
+                      {message.message}
+                    </p>
+                    {encodedPath && messageEpisodeIds.length > 0 && (
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                        {messageEpisodeIds.map((episodeId) => {
+                          const params = new URLSearchParams({ tab: "doctor" });
+                          if (frame !== null)
+                            params.set("frame", String(frame));
+                          return (
+                            <span
+                              key={`${index}-${episodeId}`}
+                              className="inline-flex items-center gap-2"
+                            >
+                              <a
+                                href={`/_local/${encodedPath}/episode_${episodeId}?${params.toString()}`}
+                                className="text-[10px] font-medium text-cyan-300 hover:text-cyan-100 hover:underline"
+                              >
+                                Open episode {episodeId}
+                                {frame === null ? "" : ` · frame ${frame}`}
+                              </a>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  createReviewTask(message.message, episodeId)
+                                }
+                                className="text-[10px] font-medium text-amber-300 hover:text-amber-100 hover:underline"
+                              >
+                                Review task
+                              </button>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })
           )}
         </div>
       )}
@@ -1325,6 +1400,7 @@ export default function DoctorPanel({
               <CheckCard
                 key={check.name}
                 check={check}
+                encodedPath={encodedPath}
                 dimensionJumpThresholds={
                   result.execution.dimension_jump_thresholds ??
                   DEFAULT_DOCTOR_DIMENSION_JUMP_THRESHOLDS

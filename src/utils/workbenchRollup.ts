@@ -49,6 +49,13 @@ export type WorkbenchDateTimeRange = {
   endDateTime: string;
 };
 
+export type WorkbenchDateShortcut =
+  | "today"
+  | "yesterday"
+  | "last7Days"
+  | "thisWeek"
+  | "lastWeek";
+
 export type WorkbenchRollupDailyRow = {
   day: string;
   datasets: number;
@@ -329,6 +336,63 @@ export function getWorkbenchDefaultDateTimeRange(
   end.setHours(0, 0, 0, 0);
   const start = new Date(end);
   start.setDate(start.getDate() - 1);
+  return {
+    startDateTime: formatWorkbenchDateTimeLocal(start),
+    endDateTime: formatWorkbenchDateTimeLocal(end),
+  };
+}
+
+/**
+ * Choose the newest complete production day represented by daily additions.
+ * The range is local-midnight to local-midnight so it can be passed directly
+ * to a datetime-local input without turning a UTC catalog timestamp into a
+ * partial day.
+ */
+export function getWorkbenchLatestAvailableDateTimeRange(
+  availableDays: readonly string[],
+  fallbackNow: Date = new Date(),
+): WorkbenchDateTimeRange {
+  const latestDay = [...new Set(availableDays.filter(isDayKey))].sort().at(-1);
+  if (!latestDay) return getWorkbenchDefaultDateTimeRange(fallbackNow);
+
+  const start = new Date(`${latestDay}T00:00:00`);
+  if (Number.isNaN(start.getTime())) {
+    return getWorkbenchDefaultDateTimeRange(fallbackNow);
+  }
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return {
+    startDateTime: formatWorkbenchDateTimeLocal(start),
+    endDateTime: formatWorkbenchDateTimeLocal(end),
+  };
+}
+
+export function getWorkbenchDateTimeRangeShortcut(
+  shortcut: WorkbenchDateShortcut,
+  now: Date = new Date(),
+): WorkbenchDateTimeRange {
+  const end = new Date(now);
+  end.setHours(0, 0, 0, 0);
+  const start = new Date(end);
+
+  if (shortcut === "today") {
+    end.setDate(end.getDate() + 1);
+  } else if (shortcut === "yesterday") {
+    start.setDate(start.getDate() - 1);
+  } else if (shortcut === "last7Days") {
+    start.setDate(start.getDate() - 6);
+    end.setDate(end.getDate() + 1);
+  } else {
+    const mondayOffset = (end.getDay() + 6) % 7;
+    start.setDate(start.getDate() - mondayOffset);
+    if (shortcut === "lastWeek") {
+      end.setDate(start.getDate());
+      start.setDate(start.getDate() - 7);
+    } else {
+      end.setDate(end.getDate() + 1);
+    }
+  }
+
   return {
     startDateTime: formatWorkbenchDateTimeLocal(start),
     endDateTime: formatWorkbenchDateTimeLocal(end),

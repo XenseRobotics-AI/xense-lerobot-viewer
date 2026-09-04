@@ -32,6 +32,8 @@ import {
   type TacFlowStreamEvent,
   type TacFlowSummary,
 } from "@/types/tacflow.types";
+import { routePathFromRepoId, makeLocalRepoId } from "@/utils/datasetRoute";
+import { createWorkbenchReviewTask } from "@/utils/workbenchActions";
 
 type StepUiDefinition = {
   id: TacFlowStepId;
@@ -582,6 +584,30 @@ function findingSummary(finding: TacFlowDoctorFinding): string {
   return JSON.stringify(finding).slice(0, 120);
 }
 
+function findingNumber(
+  finding: TacFlowDoctorFinding,
+  key: "episode" | "frame",
+): number | null {
+  const value = finding[key];
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) {
+    return value;
+  }
+  if (typeof value === "string" && /^\d+$/u.test(value)) return Number(value);
+  return null;
+}
+
+function tacFlowFindingHref(
+  datasetPath: string,
+  finding: TacFlowDoctorFinding,
+): string {
+  const episode = findingNumber(finding, "episode") ?? 0;
+  const frame = findingNumber(finding, "frame");
+  const base = routePathFromRepoId(makeLocalRepoId(datasetPath), episode);
+  const params = new URLSearchParams({ tab: "tacflow" });
+  if (frame !== null) params.set("frame", String(frame));
+  return `${base}?${params.toString()}`;
+}
+
 function GradeBadge({
   calculation,
   status,
@@ -633,10 +659,17 @@ function GradeBadge({
 
 function ScoreTable({
   calculation,
+  datasetPath,
   onWeightChange,
+  onCreateReviewTask,
 }: {
   calculation: TacFlowScoreCalculation;
+  datasetPath: string;
   onWeightChange: (id: string, weight: number) => void;
+  onCreateReviewTask: (
+    finding: TacFlowDoctorFinding,
+    checkName: string,
+  ) => void;
 }) {
   if (!calculation.rows.length) {
     return (
@@ -708,12 +741,44 @@ function ScoreTable({
                     <p className="font-mono text-slate-300">
                       {row.findings.length}
                     </p>
-                    <p
-                      className="line-clamp-2 leading-4 text-slate-500"
-                      title={findingSummary(row.findings[0])}
-                    >
-                      {findingSummary(row.findings[0])}
-                    </p>
+                    <div className="max-h-36 space-y-1 overflow-y-auto">
+                      {row.findings.map((finding, index) => {
+                        const episode = findingNumber(finding, "episode");
+                        const frame = findingNumber(finding, "frame");
+                        return (
+                          <div
+                            key={`${row.id}-finding-${index}`}
+                            className="rounded border border-white/5 bg-black/10 px-2 py-1"
+                          >
+                            <p
+                              className="line-clamp-2 leading-4 text-slate-400"
+                              title={findingSummary(finding)}
+                            >
+                              {findingSummary(finding)}
+                            </p>
+                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                              <a
+                                href={tacFlowFindingHref(datasetPath, finding)}
+                                className="text-[10px] font-medium text-cyan-300 hover:text-cyan-100 hover:underline"
+                              >
+                                Open TACFLOW finding
+                                {episode === null ? "" : ` · ep ${episode}`}
+                                {frame === null ? "" : ` · frame ${frame}`}
+                              </a>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onCreateReviewTask(finding, row.name)
+                                }
+                                className="text-[10px] font-medium text-amber-300 hover:text-amber-100 hover:underline"
+                              >
+                                Create review task
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 ) : (
                   <span className="text-slate-500">0</span>
@@ -757,6 +822,8 @@ function ScoreSection({
   reportLabel,
   onRun,
   onWeightChange,
+  selectedDatasetPath,
+  onCreateReviewTask,
 }: {
   state: ScoreState;
   calculation: TacFlowScoreCalculation | null;
@@ -764,6 +831,11 @@ function ScoreSection({
   reportLabel: string;
   onRun: () => void;
   onWeightChange: (id: string, weight: number) => void;
+  selectedDatasetPath: string;
+  onCreateReviewTask: (
+    finding: TacFlowDoctorFinding,
+    checkName: string,
+  ) => void;
 }) {
   const width = progressWidth(state.status, state.percent);
 
@@ -783,6 +855,12 @@ function ScoreSection({
               >
                 {reportLabel}
               </p>
+              <a
+                href={`${routePathFromRepoId(makeLocalRepoId(selectedDatasetPath), 0)}?tab=tacflow`}
+                className="mt-2 inline-flex text-[10px] font-medium text-cyan-300 hover:text-cyan-100 hover:underline"
+              >
+                Open TACFLOW run in viewer
+              </a>
             </div>
             <div className="max-w-xl space-y-2">
               <div className="flex items-center justify-between gap-3 text-xs">
@@ -850,7 +928,9 @@ function ScoreSection({
           {calculation ? (
             <ScoreTable
               calculation={calculation}
+              datasetPath={selectedDatasetPath}
               onWeightChange={onWeightChange}
+              onCreateReviewTask={onCreateReviewTask}
             />
           ) : (
             <div className="rounded-md border border-dashed border-white/10 px-3 py-8 text-xs text-slate-500">
@@ -955,6 +1035,9 @@ export default function TacFlowPanel() {
   const [steps, setSteps] =
     useState<Record<TacFlowStepId, StepState>>(initialState);
   const [score, setScore] = useState<ScoreState>(INITIAL_SCORE);
+  const [scoreActionMessage, setScoreActionMessage] = useState<string | null>(
+    null,
+  );
   const [scoreWeights, setScoreWeights] = useState<Record<string, number>>({});
   const [scoreWeightsLoaded, setScoreWeightsLoaded] = useState(false);
   const [selectedDatasetPath, setSelectedDatasetPath] = useState(
@@ -1006,6 +1089,25 @@ export default function TacFlowPanel() {
   const selectedDatasetName = datasetNameFromPath(selectedDatasetPath);
   const selectedReportLabel = `${selectedDatasetName}/.tacflow/doctor-before.json`;
   const datasetSelectorDisabled = Boolean(runningStep) || scoreRunning;
+  const createReviewTaskFromFinding = useCallback(
+    (finding: TacFlowDoctorFinding, checkName: string) => {
+      const task = createWorkbenchReviewTask({
+        organization: selectedDatasetPath.split("/")[0] ?? "local",
+        source: "tacflow",
+        title: `${checkName} finding`,
+        detail: findingSummary(finding),
+        datasetPath: selectedDatasetPath || null,
+        episodeId: findingNumber(finding, "episode"),
+        frame: findingNumber(finding, "frame"),
+      });
+      setScoreActionMessage(
+        task
+          ? "Review task created in this browser."
+          : "Unable to create review task.",
+      );
+    },
+    [selectedDatasetPath],
+  );
 
   useEffect(() => {
     setScoreWeights(readStoredScoreWeights());
@@ -1303,7 +1405,14 @@ export default function TacFlowPanel() {
           reportLabel={selectedReportLabel}
           onRun={runScore}
           onWeightChange={updateScoreWeight}
+          selectedDatasetPath={selectedDatasetPath}
+          onCreateReviewTask={createReviewTaskFromFinding}
         />
+        {scoreActionMessage && (
+          <p className="pt-2 text-[11px] text-emerald-300" role="status">
+            {scoreActionMessage}
+          </p>
+        )}
         <div className="pt-1">
           {STEP_DEFINITIONS.map((definition) => {
             const dependencyDone =

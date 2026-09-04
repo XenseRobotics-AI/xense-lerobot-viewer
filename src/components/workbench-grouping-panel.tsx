@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
   FiAward,
   FiMonitor,
@@ -34,7 +34,9 @@ import { buildHomepageDatasetStatistics } from "@/utils/homepageDatasetStatistic
 import {
   getLinkedHubDatasetRepoId,
   makeLocalRepoId,
+  routePathFromRepoId,
 } from "@/utils/datasetRoute";
+import { copyTextToClipboard } from "@/utils/clipboard";
 import WorkbenchStatisticsFilterNotice from "@/components/workbench-statistics-filter-notice";
 import WorkbenchRuleBadge from "@/components/workbench-rule-badge";
 import { formatBytes } from "@/utils/byteSize";
@@ -43,6 +45,8 @@ import {
   computeWorkbenchAdditionRollup,
   countHalfOpenDays,
   getWorkbenchDefaultDateTimeRange,
+  getWorkbenchDateTimeRangeShortcut,
+  getWorkbenchLatestAvailableDateTimeRange,
   getWorkbenchOkrAchievementRate,
   isWorkbenchIgnoredRobotId,
   normalizeWorkbenchDateRange,
@@ -55,6 +59,10 @@ import {
   type WorkbenchRollupDimension,
   type WorkbenchRollupRow,
 } from "@/utils/workbenchRollup";
+import {
+  createWorkbenchReviewTask,
+  workbenchCsv,
+} from "@/utils/workbenchActions";
 import {
   countWorkbenchRewardTargetHours,
   evaluateWorkbenchRewardRules,
@@ -94,6 +102,14 @@ const DIMENSIONS: Array<{
 
 const WORKBENCH_TEAM_MANAGER_NAMES = new Set(["dylan", "frank", "jay"]);
 
+const DATE_SHORTCUTS = [
+  { value: "today", label: "Today" },
+  { value: "yesterday", label: "Yesterday" },
+  { value: "last7Days", label: "Last 7 days" },
+  { value: "thisWeek", label: "This week" },
+  { value: "lastWeek", label: "Last week" },
+] as const;
+
 type WorkbenchDataset = LocalDatasetSummary & {
   hf?: {
     lastModified?: string | null;
@@ -115,6 +131,18 @@ function isTacCapReplayDataset(dataset: WorkbenchDataset): boolean {
   );
 }
 
+function datasetEpisodeHref(
+  dataset: WorkbenchDataset,
+  episodeId = 0,
+  frame?: number,
+): string {
+  const href = routePathFromRepoId(
+    makeLocalRepoId(dataset.relativePath),
+    episodeId,
+  );
+  return frame === undefined ? href : `${href}?frame=${Math.max(0, frame)}`;
+}
+
 type WorkbenchWorkstationMappingsPayload = {
   mappings?: Record<string, string>;
   legacyMappings?: Record<string, string>;
@@ -133,6 +161,8 @@ type WorkbenchRewardRulesPayload = WorkbenchRewardRulesConfig & {
 
 type WorkbenchStatisticsPayload = {
   datasets?: WorkbenchDataset[];
+  displayReplayDataset?: WorkbenchDataset | null;
+  dataUpdatedAt?: string | null;
   errors?: Array<{ path: string; message: string }>;
   workstationMappings?: WorkbenchWorkstationMappingsPayload;
   rewardRules?: WorkbenchRewardRulesPayload;
@@ -167,6 +197,16 @@ type AlertItem = {
   detail: string;
 };
 
+type WorkbenchDrilldown = {
+  title: string;
+  detail: string;
+  source: "workbench";
+  datasets: WorkbenchDataset[];
+  day?: string;
+  episodeId?: number;
+  frame?: number;
+};
+
 function dedupeWorkbenchEmails(
   people: readonly { email?: string | null }[],
 ): string[] {
@@ -194,6 +234,14 @@ function formatRate(value: number | null): string {
 
 function formatCount(value: number): string {
   return value.toLocaleString("en-US");
+}
+
+function formatDataUpdatedAt(value: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function parseNonNegativeNumber(value: string): number {
@@ -504,23 +552,36 @@ export default function WorkbenchGroupingPanel({
   episodeData?: EpisodeData;
 }) {
   const pathname = usePathname();
-  const [dimension, setDimension] =
-    useState<WorkbenchRollupDimension>("robot_id");
+  const searchParams = useSearchParams();
+  const [dimension, setDimension] = useState<WorkbenchRollupDimension>(() => {
+    const requested = searchParams.get("workbenchDimension");
+    return DIMENSIONS.some((item) => item.value === requested)
+      ? (requested as WorkbenchRollupDimension)
+      : "robot_id";
+  });
   const [datasets, setDatasets] = useState<WorkbenchDataset[]>([]);
+  const [displayReplayDataset, setDisplayReplayDataset] =
+    useState<WorkbenchDataset | null>(null);
   const [statisticsFilter, setStatisticsFilter] = useState(() =>
     createWorkbenchStatisticsFilterSummary([]),
   );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [localRefreshToken, setLocalRefreshToken] = useState(0);
+  const [dataUpdatedAt, setDataUpdatedAt] = useState<string | null>(null);
+  const latestRangeAppliedRef = useRef(
+    Boolean(
+      searchParams.get("workbenchStart") || searchParams.get("workbenchEnd"),
+    ),
+  );
   const [defaultDateTimeRange] = useState(() =>
     getWorkbenchDefaultDateTimeRange(),
   );
   const [startDateTime, setStartDateTime] = useState(
-    defaultDateTimeRange.startDateTime,
+    searchParams.get("workbenchStart") ?? defaultDateTimeRange.startDateTime,
   );
   const [endDateTime, setEndDateTime] = useState(
-    defaultDateTimeRange.endDateTime,
+    searchParams.get("workbenchEnd") ?? defaultDateTimeRange.endDateTime,
   );
   const [workstationMappings, setWorkstationMappings] = useState<
     Record<string, string>
@@ -559,6 +620,13 @@ export default function WorkbenchGroupingPanel({
   const [mappingsMessage, setMappingsMessage] = useState<string | null>(null);
   const [rewardError, setRewardError] = useState<string | null>(null);
   const [rewardMessage, setRewardMessage] = useState<string | null>(null);
+  const [workstationQuery, setWorkstationQuery] = useState("");
+  const [workstationSort, setWorkstationSort] = useState<
+    "hours" | "robot" | "datasets"
+  >("hours");
+  const [drilldown, setDrilldown] = useState<WorkbenchDrilldown | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [replayEnabled, setReplayEnabled] = useState(true);
   const [displaySnapshot, setDisplaySnapshot] =
     useState<WorkbenchDisplaySnapshot | null>(null);
   const [displayOpening, setDisplayOpening] = useState(false);
@@ -618,6 +686,8 @@ export default function WorkbenchGroupingPanel({
           payload.workstationMappings?.legacyDefaults,
         );
         setDatasets(payload.datasets ?? []);
+        setDisplayReplayDataset(payload.displayReplayDataset ?? null);
+        setDataUpdatedAt(payload.dataUpdatedAt ?? null);
         setStatisticsFilter(
           payload.statisticsFilter ??
             createWorkbenchStatisticsFilterSummary([]),
@@ -695,6 +765,13 @@ export default function WorkbenchGroupingPanel({
       ),
     [workstationRollupDatasets],
   );
+  useEffect(() => {
+    if (latestRangeAppliedRef.current || availableDays.length === 0) return;
+    const next = getWorkbenchLatestAvailableDateTimeRange(availableDays);
+    setStartDateTime(next.startDateTime);
+    setEndDateTime(next.endDateTime);
+    latestRangeAppliedRef.current = true;
+  }, [availableDays]);
   const range = useMemo(
     () =>
       normalizeWorkbenchDateRange(
@@ -837,6 +914,7 @@ export default function WorkbenchGroupingPanel({
   ]);
   const lineChartRows = totalTimeline.rows.map((row) => ({
     day: row.day.slice(5),
+    date: row.day,
     hours: row.hours,
     cumulativeHours: row.cumulativeHours,
     datasets: row.datasets,
@@ -911,6 +989,77 @@ export default function WorkbenchGroupingPanel({
     workstationMappings,
   ]);
 
+  const selectedWorkbenchDatasets = useMemo(
+    () =>
+      datasets.filter((dataset) =>
+        selectedDatasetPaths.includes(dataset.relativePath),
+      ),
+    [datasets, selectedDatasetPaths],
+  );
+  const datasetsForRobot = useCallback(
+    (robotId: string | null) =>
+      selectedWorkbenchDatasets.filter(
+        (dataset) => (dataset.robotId?.trim() || "—") === (robotId || "—"),
+      ),
+    [selectedWorkbenchDatasets],
+  );
+  const visibleRobotDashboardRows = useMemo(() => {
+    const query = workstationQuery.trim().toLocaleLowerCase();
+    const rows = robotDashboardRows.filter((row) => {
+      if (!query) return true;
+      return [
+        row.robotId,
+        row.leftGripperSn,
+        row.workstation,
+        ...row.sourceRepoIds,
+      ]
+        .filter(Boolean)
+        .some((value) => value?.toLocaleLowerCase().includes(query));
+    });
+    return [...rows].sort((left, right) => {
+      if (workstationSort === "robot") {
+        return (left.robotId ?? "—").localeCompare(right.robotId ?? "—");
+      }
+      if (workstationSort === "datasets") return right.count - left.count;
+      return right.hours - left.hours;
+    });
+  }, [robotDashboardRows, workstationQuery, workstationSort]);
+
+  const openWorkbenchDrilldown = useCallback(
+    (selection: Omit<WorkbenchDrilldown, "source">) => {
+      setActionMessage(null);
+      setDrilldown({ ...selection, source: "workbench" });
+    },
+    [],
+  );
+  const createReviewTaskFromDrilldown = useCallback(() => {
+    if (!drilldown) return;
+    const first = drilldown.datasets[0];
+    const task = createWorkbenchReviewTask({
+      organization,
+      source: "workbench",
+      title: drilldown.title,
+      detail: drilldown.detail,
+      datasetPath: first?.relativePath ?? null,
+      episodeId: drilldown.episodeId ?? null,
+      frame: drilldown.frame ?? null,
+    });
+    setActionMessage(
+      task
+        ? "Review task created in this browser."
+        : "Unable to create review task.",
+    );
+  }, [drilldown, organization]);
+  const copyWorkbenchShareLink = useCallback(async () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("workbenchStart", startDateTime);
+    url.searchParams.set("workbenchEnd", endDateTime);
+    url.searchParams.set("workbenchDimension", dimension);
+    const copied = await copyTextToClipboard(url.toString());
+    setActionMessage(
+      copied ? "Share link copied." : "Unable to copy share link.",
+    );
+  }, [dimension, endDateTime, startDateTime]);
   const personnelWorkstationMappings = useMemo(() => {
     const mappings: Record<string, string> = {};
     for (const dataset of workstationRollupDatasets) {
@@ -954,6 +1103,61 @@ export default function WorkbenchGroupingPanel({
       workstationRollupDatasets,
     ],
   );
+  const exportWorkbenchCsv = useCallback(() => {
+    const rows: unknown[][] = [];
+    for (const row of visibleRobotDashboardRows) {
+      rows.push([
+        "workstation",
+        row.robotId ?? "—",
+        row.workstation,
+        row.hours,
+        row.count,
+        row.reward.amount,
+        row.sourceRepoIds.join(" | "),
+      ]);
+    }
+    for (const row of personnelRollup.rows) {
+      rows.push([
+        "personnel",
+        row.personnel,
+        row.workstations.join(" | "),
+        row.hours,
+        row.targetHours,
+        row.reward.amount,
+        row.email,
+      ]);
+    }
+    for (const row of totalTimeline.rows) {
+      rows.push(["daily-trend", row.day, "", row.hours, row.datasets, "", ""]);
+    }
+    const csv = workbenchCsv(
+      [
+        "section",
+        "key",
+        "workstation",
+        "hours",
+        "count_or_target",
+        "reward",
+        "datasets_or_email",
+      ],
+      rows,
+    );
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(
+      new Blob([csv], { type: "text/csv;charset=utf-8" }),
+    );
+    link.href = url;
+    link.download = `workbench-${organization.replace(/[^a-z0-9_-]+/gi, "-")}-${range.startDate ?? "start"}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setActionMessage("CSV exported.");
+  }, [
+    organization,
+    personnelRollup.rows,
+    range.startDate,
+    totalTimeline.rows,
+    visibleRobotDashboardRows,
+  ]);
 
   const totalHours = totalTimeline.total.hours;
   const robotIds = robotDashboardRows.filter((row) =>
@@ -1250,10 +1454,19 @@ export default function WorkbenchGroupingPanel({
   }, [organization, rewardDraft]);
 
   const resetDateRange = useCallback(() => {
-    const next = getWorkbenchDefaultDateTimeRange();
+    const next = getWorkbenchLatestAvailableDateTimeRange(availableDays);
     setStartDateTime(next.startDateTime);
     setEndDateTime(next.endDateTime);
-  }, []);
+  }, [availableDays]);
+
+  const applyDateShortcut = useCallback(
+    (shortcut: (typeof DATE_SHORTCUTS)[number]["value"]) => {
+      const next = getWorkbenchDateTimeRangeShortcut(shortcut);
+      setStartDateTime(next.startDateTime);
+      setEndDateTime(next.endDateTime);
+    },
+    [],
+  );
 
   const restoreMappings = useCallback(() => {
     setWorkstationDraft(workstationMappings);
@@ -1323,13 +1536,18 @@ export default function WorkbenchGroupingPanel({
 
   const replayDataset = useMemo(
     () =>
-      datasets.find(
-        (dataset) =>
-          dataset.relativePath.trim() === TACCAP_WORKBENCH_REPLAY_DATASET,
-      ) ?? datasets.find(isTacCapReplayDataset),
-    [datasets],
+      replayEnabled
+        ? (datasets.find(
+            (dataset) =>
+              dataset.relativePath.trim() === TACCAP_WORKBENCH_REPLAY_DATASET,
+          ) ??
+          datasets.find(isTacCapReplayDataset) ??
+          displayReplayDataset)
+        : undefined,
+    [datasets, displayReplayDataset, replayEnabled],
   );
   const currentEpisodeIsReplaySource = Boolean(
+    replayEnabled &&
     episodeData &&
     isTacCapWorkbenchReplaySource(
       episodeData.datasetInfo.repoId,
@@ -1567,6 +1785,9 @@ export default function WorkbenchGroupingPanel({
             <span className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[10px] tabular-nums text-slate-500">
               {availableDays.length.toLocaleString()} reporting days
             </span>
+            <span className="rounded-full border border-cyan-400/15 bg-cyan-400/[0.04] px-2.5 py-1 text-[10px] tabular-nums text-cyan-200/75">
+              Data updated through {formatDataUpdatedAt(dataUpdatedAt)}
+            </span>
           </div>
 
           <div className="grid gap-3 lg:grid-cols-[0.8fr_1.25fr_1.25fr]">
@@ -1610,6 +1831,22 @@ export default function WorkbenchGroupingPanel({
                 className="h-10 rounded-lg border border-white/10 bg-[var(--surface-0)]/70 px-3 text-xs font-normal normal-case tracking-normal text-slate-200 transition-colors focus:border-cyan-400/70 focus:outline-none disabled:opacity-50"
               />
             </label>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="mr-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+              Quick range
+            </span>
+            {DATE_SHORTCUTS.map((shortcut) => (
+              <button
+                key={shortcut.value}
+                type="button"
+                onClick={() => applyDateShortcut(shortcut.value)}
+                className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-[11px] text-slate-300 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100"
+              >
+                {shortcut.label}
+              </button>
+            ))}
           </div>
 
           <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/10 pt-4">
@@ -1661,7 +1898,23 @@ export default function WorkbenchGroupingPanel({
               <FiAward aria-hidden="true" className="h-3.5 w-3.5" />
               Reward rules
             </button>
+            {isWorkbenchOrganizationDisplayPath(pathname) && (
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-violet-300/25 bg-violet-300/[0.06] px-3 py-2 text-xs font-medium text-violet-200">
+                <input
+                  type="checkbox"
+                  checked={replayEnabled}
+                  onChange={(event) => setReplayEnabled(event.target.checked)}
+                  className="accent-violet-300"
+                />
+                Include 3D Replay
+              </label>
+            )}
           </div>
+          {actionMessage && !drilldown && (
+            <p className="mt-3 text-[11px] text-emerald-300" role="status">
+              {actionMessage}
+            </p>
+          )}
         </section>
       </header>
 
@@ -1775,6 +2028,49 @@ export default function WorkbenchGroupingPanel({
                   : `${rowNames.size} group(s)`}
               </span>
             </div>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <label className="flex min-w-[14rem] flex-1 items-center gap-2 rounded-md border border-white/10 bg-black/10 px-2.5 py-1.5 text-[11px] text-slate-500">
+                <span className="shrink-0">Filter</span>
+                <input
+                  value={workstationQuery}
+                  onChange={(event) => setWorkstationQuery(event.target.value)}
+                  placeholder="robot, workstation, dataset…"
+                  className="min-w-0 flex-1 bg-transparent text-slate-200 outline-none placeholder:text-slate-600"
+                  aria-label="Filter workstation rows"
+                />
+              </label>
+              <label className="flex items-center gap-2 text-[11px] text-slate-500">
+                Sort
+                <select
+                  value={workstationSort}
+                  onChange={(event) =>
+                    setWorkstationSort(
+                      event.target.value as "hours" | "robot" | "datasets",
+                    )
+                  }
+                  className="rounded-md border border-white/10 bg-[var(--surface-0)] px-2 py-1.5 text-slate-200 outline-none"
+                  aria-label="Sort workstation rows"
+                >
+                  <option value="hours">Hours</option>
+                  <option value="datasets">Datasets</option>
+                  <option value="robot">Robot ID</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={exportWorkbenchCsv}
+                className="rounded-md border border-cyan-400/25 bg-cyan-400/[0.06] px-2.5 py-1.5 text-[11px] font-medium text-cyan-200 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/[0.12]"
+              >
+                Export CSV
+              </button>
+              <button
+                type="button"
+                onClick={() => void copyWorkbenchShareLink()}
+                className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-[11px] font-medium text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-100"
+              >
+                Copy share link
+              </button>
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[980px] border-collapse text-left text-xs">
                 <thead className="bg-[var(--surface-2)] text-slate-400">
@@ -1791,10 +2087,37 @@ export default function WorkbenchGroupingPanel({
                   </tr>
                 </thead>
                 <tbody>
-                  {robotDashboardRows.map((row) => (
+                  {visibleRobotDashboardRows.map((row) => (
                     <tr
                       key={row.robotId ?? row.leftGripperSn ?? row.group}
-                      className="border-t border-white/5"
+                      className="cursor-pointer border-t border-white/5 transition-colors hover:bg-cyan-400/[0.04] focus:bg-cyan-400/[0.06] focus:outline-none"
+                      tabIndex={0}
+                      role="button"
+                      onClick={(event) => {
+                        if (
+                          event.target instanceof Element &&
+                          event.target.closest("button,a,input,select")
+                        ) {
+                          return;
+                        }
+                        openWorkbenchDrilldown({
+                          title: `${row.robotId ?? "Unassigned"} workstation detail`,
+                          detail: `${row.workstation} · ${formatHours(row.hours)} hours · ${formatCount(row.count)} datasets`,
+                          datasets: datasetsForRobot(row.robotId),
+                          episodeId: 0,
+                        });
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          openWorkbenchDrilldown({
+                            title: `${row.robotId ?? "Unassigned"} workstation detail`,
+                            detail: `${row.workstation} · ${formatHours(row.hours)} hours · ${formatCount(row.count)} datasets`,
+                            datasets: datasetsForRobot(row.robotId),
+                            episodeId: 0,
+                          });
+                        }
+                      }}
                     >
                       <td className="px-3 py-2.5 text-slate-100 tabular-nums">
                         {row.robotId ?? "—"}
@@ -1836,6 +2159,11 @@ export default function WorkbenchGroupingPanel({
                 </tbody>
               </table>
             </div>
+            {visibleRobotDashboardRows.length === 0 && (
+              <p className="mt-3 text-xs text-slate-500">
+                No workstation rows match the filter.
+              </p>
+            )}
           </section>
 
           <WorkbenchPersonnelWorkload rollup={personnelRollup} />
@@ -1878,7 +2206,7 @@ export default function WorkbenchGroupingPanel({
                       {day.slice(5)}
                     </div>
                   ))}
-                  {heatmapRows.slice(0, 12).map((row, rowIndex) => (
+                  {heatmapRows.slice(0, 10).map((row, rowIndex) => (
                     <Fragment key={row.robotId + "-" + rowIndex}>
                       <div className="border-b border-white/5 px-3 py-2 text-xs text-slate-200">
                         <div className="truncate font-medium">
@@ -1899,13 +2227,30 @@ export default function WorkbenchGroupingPanel({
                                 0.08 + (hours / heatmapMaxHours) * 0.75,
                               );
                         return (
-                          <div
+                          <button
+                            type="button"
                             key={row.robotId + "-" + day}
-                            className="border-b border-white/5 px-2 py-2 text-center text-xs tabular-nums text-slate-100"
+                            className="border-b border-white/5 px-2 py-2 text-center text-xs tabular-nums text-slate-100 transition-colors hover:bg-cyan-200/20 focus:bg-cyan-200/25 focus:outline-none"
                             style={{
                               backgroundColor:
                                 "rgba(56, 189, 248, " + alpha + ")",
                             }}
+                            onClick={() =>
+                              openWorkbenchDrilldown({
+                                title: `${row.robotId} · ${day}`,
+                                detail: `${row.workstation} · ${formatHours(hours)} hours`,
+                                day,
+                                datasets: selectedWorkbenchDatasets.filter(
+                                  (dataset) =>
+                                    (dataset.robotId?.trim() || "—") ===
+                                      row.robotId &&
+                                    (dataset.dailyAdditions ?? []).some(
+                                      (addition) => addition.day === day,
+                                    ),
+                                ),
+                                episodeId: 0,
+                              })
+                            }
                             title={
                               row.robotId +
                               " " +
@@ -1916,7 +2261,7 @@ export default function WorkbenchGroupingPanel({
                             }
                           >
                             {hours > 0 ? formatHours(hours) : "—"}
-                          </div>
+                          </button>
                         );
                       })}
                     </Fragment>
@@ -1960,7 +2305,56 @@ export default function WorkbenchGroupingPanel({
                     dataKey="hours"
                     stroke="#38bdf8"
                     strokeWidth={2}
-                    dot={false}
+                    dot={(props: {
+                      cx?: number;
+                      cy?: number;
+                      payload?: { date?: string; hours?: number };
+                    }) => {
+                      if (
+                        typeof props.cx !== "number" ||
+                        typeof props.cy !== "number" ||
+                        !props.payload?.date
+                      ) {
+                        return <g />;
+                      }
+                      return (
+                        <circle
+                          cx={props.cx}
+                          cy={props.cy}
+                          r={4}
+                          fill="#38bdf8"
+                          stroke="#e0f2fe"
+                          strokeWidth={1}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Open daily trend for ${props.payload.date}`}
+                          onClick={() => {
+                            const day = props.payload?.date;
+                            if (!day) return;
+                            openWorkbenchDrilldown({
+                              title: `Daily trend · ${day}`,
+                              detail: `${formatHours(props.payload?.hours ?? 0)} hours`,
+                              day,
+                              datasets: selectedWorkbenchDatasets.filter(
+                                (dataset) =>
+                                  (dataset.dailyAdditions ?? []).some(
+                                    (addition) => addition.day === day,
+                                  ),
+                              ),
+                              episodeId: 0,
+                            });
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key !== "Enter" && event.key !== " ")
+                              return;
+                            event.preventDefault();
+                            event.currentTarget.dispatchEvent(
+                              new MouseEvent("click", { bubbles: true }),
+                            );
+                          }}
+                        />
+                      );
+                    }}
                   />
                   <Line
                     type="monotone"
@@ -2012,6 +2406,79 @@ export default function WorkbenchGroupingPanel({
               </ResponsiveContainer>
             </div>
           </section>
+
+          {drilldown && (
+            <section
+              aria-labelledby="workbench-drilldown-title"
+              className="rounded-md border border-cyan-400/25 bg-cyan-400/[0.04] p-4"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-300/70">
+                    Drilldown
+                  </div>
+                  <h4
+                    id="workbench-drilldown-title"
+                    className="mt-1 text-sm font-semibold text-slate-100"
+                  >
+                    {drilldown.title}
+                  </h4>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {drilldown.detail}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={createReviewTaskFromDrilldown}
+                    className="rounded-md border border-amber-300/30 bg-amber-300/[0.08] px-2.5 py-1.5 text-[11px] font-medium text-amber-200 transition-colors hover:border-amber-200/60 hover:bg-amber-300/[0.14]"
+                  >
+                    Create review task
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDrilldown(null)}
+                    className="rounded-md border border-white/10 px-2.5 py-1.5 text-[11px] text-slate-300 transition-colors hover:border-white/25 hover:text-white"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+              {actionMessage && (
+                <p className="mt-3 text-[11px] text-emerald-300" role="status">
+                  {actionMessage}
+                </p>
+              )}
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {drilldown.datasets.map((dataset) => (
+                  <a
+                    key={dataset.relativePath}
+                    href={datasetEpisodeHref(
+                      dataset,
+                      drilldown.episodeId ?? 0,
+                      drilldown.frame,
+                    )}
+                    className="rounded-md border border-white/10 bg-black/10 px-3 py-2 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/[0.06]"
+                  >
+                    <span className="block truncate font-mono text-[11px] text-cyan-200">
+                      {dataset.relativePath}
+                    </span>
+                    <span className="mt-1 block text-[10px] text-slate-500">
+                      Open episode {drilldown.episodeId ?? 0}
+                      {drilldown.frame === undefined
+                        ? ""
+                        : ` · frame ${drilldown.frame}`}
+                    </span>
+                  </a>
+                ))}
+              </div>
+              {drilldown.datasets.length === 0 && (
+                <p className="mt-3 text-xs text-slate-500">
+                  No dataset additions match this selection.
+                </p>
+              )}
+            </section>
+          )}
 
           {mappingEditorOpen && (
             <section className="rounded-md border border-white/10 bg-[var(--surface-1)]/35 p-4">

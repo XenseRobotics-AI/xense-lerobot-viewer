@@ -10,6 +10,7 @@ export const WORKBENCH_PERSONNEL_WORKLOAD_COLUMNS = [
   "Rate",
   "Rule",
   "Reward",
+  "Email",
 ] as const;
 
 function formatHours(value: number): string {
@@ -102,6 +103,9 @@ export default function WorkbenchPersonnelWorkload({
                   <td className="px-3 py-2.5 text-slate-300 tabular-nums">
                     {formatWorkbenchRewardAmount(row.reward.amount)}
                   </td>
+                  <td className="px-3 py-2.5 text-slate-400">
+                    {row.email || "—"}
+                  </td>
                 </tr>
               ))
             )}
@@ -109,7 +113,7 @@ export default function WorkbenchPersonnelWorkload({
           <tfoot>
             <tr className="border-t border-white/10 bg-white/[0.02]">
               <td
-                colSpan={6}
+                colSpan={7}
                 className="px-3 py-2.5 text-right font-medium text-slate-300"
               >
                 Personnel bonus total

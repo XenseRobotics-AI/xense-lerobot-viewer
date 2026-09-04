@@ -35,6 +35,8 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const TACCAP_REPLAY_DATASET_LEAF = "taccap-g1-operate-shoe-box-0812";
+
 type WorkbenchDatasetMetadata = {
   lastModified: string | null;
   uploader: string | null;
@@ -86,6 +88,24 @@ function catalogTime(entry: HfCatalogEntry | undefined): number {
   if (typeof value !== "string") return Number.NEGATIVE_INFINITY;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function latestDataUpdatedAt(
+  datasets: readonly WorkbenchDatasetSummary[],
+): string | null {
+  let latest = Number.NEGATIVE_INFINITY;
+  for (const dataset of datasets) {
+    const parsed = Date.parse(dataset.lastModified ?? "");
+    if (Number.isFinite(parsed) && parsed > latest) latest = parsed;
+  }
+  return Number.isFinite(latest) ? new Date(latest).toISOString() : null;
+}
+
+function isTacCapReplayDatasetPath(relativePath: string): boolean {
+  return (
+    relativePath.split(/[\\/]+/u).filter(Boolean).at(-1) ===
+    TACCAP_REPLAY_DATASET_LEAF
+  );
 }
 
 function asNumber(value: unknown): number | null {
@@ -319,6 +339,31 @@ export async function GET(request: Request): Promise<Response> {
       if (rightCatalog) return 1;
       return left.relativePath.localeCompare(right.relativePath);
     });
+    const replayCandidate = organizationDatasets.find((dataset) =>
+      isTacCapReplayDatasetPath(dataset.relativePath),
+    );
+    let displayReplayDataset: WorkbenchDatasetSummary | null =
+      workbenchDatasets.find((dataset) =>
+        isTacCapReplayDatasetPath(dataset.relativePath),
+      ) ?? null;
+    if (!displayReplayDataset && replayCandidate) {
+      const remote = catalogEntryForLocalDataset(
+        catalog,
+        organization,
+        replayCandidate.relativePath,
+      )?.entry;
+      const withTasks = {
+        ...replayCandidate,
+        tasks: await readDatasetTasks(
+          path.join(discovery.root, ...replayCandidate.relativePath.split("/")),
+        ),
+      };
+      displayReplayDataset = applyCatalogMetadata(
+        withTasks,
+        remote,
+        dailyAdditionsForDataset(withTasks, remote),
+      );
+    }
     const errors = discovery.errors.filter((entry) =>
       entry.path.split(/[\\/]/).filter(Boolean).includes(organization),
     );
@@ -354,6 +399,8 @@ export async function GET(request: Request): Promise<Response> {
     );
     return Response.json({
       datasets: workbenchDatasets,
+      displayReplayDataset,
+      dataUpdatedAt: latestDataUpdatedAt(workbenchDatasets),
       statisticsFilter: filteredDatasets.summary,
       errors,
       delta,
