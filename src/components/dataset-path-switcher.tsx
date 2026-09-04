@@ -2,7 +2,6 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { BrowseListing } from "@/lib/dataset-locations-store";
 import { browsePathCookieString } from "@/utils/browsePath";
 import { useLocale } from "@/context/locale-context";
 
@@ -11,9 +10,9 @@ import { useLocale } from "@/context/locale-context";
  *
  * `LOCAL_DATASET_ROOT` is fixed at server start, so a dataset written anywhere
  * else on the machine used to need a restart to be seen. This sits next to the
- * "Browsing …" line as one small button: it opens a list of known paths to
- * switch between, and takes a new one by typing or by stepping through
- * directories.
+ * "Browsing …" line as one small button: it opens the list of known paths to
+ * switch between, and takes a new one either from the desktop's own folder
+ * dialog or typed in.
  *
  * The choice is a cookie, read on the next server render. The default root
  * stays the anchor for the stores (locations list, corpus history, trash) —
@@ -21,6 +20,11 @@ import { useLocale } from "@/context/locale-context";
  */
 
 type Message = { tone: "ok" | "error"; text: string };
+
+type PickResult =
+  | { kind: "picked"; path: string }
+  | { kind: "cancelled" }
+  | { kind: "unavailable"; reason: string };
 
 export default function DatasetPathSwitcher({
   root,
@@ -37,7 +41,6 @@ export default function DatasetPathSwitcher({
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
-  const [listing, setListing] = useState<BrowseListing | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Close on Escape or a click elsewhere, the way a menu is expected to behave.
@@ -69,26 +72,8 @@ export default function DatasetPathSwitcher({
     [router],
   );
 
-  const browse = useCallback(async (target: string) => {
-    setBusy(true);
-    try {
-      const response = await fetch(
-        `/api/local-datasets/browse?path=${encodeURIComponent(target)}`,
-      );
-      const data = (await response.json()) as BrowseListing & {
-        error?: string;
-      };
-      if (!response.ok) throw new Error(data.error ?? response.statusText);
-      setListing(data);
-    } catch (err) {
-      setMessage({ tone: "error", text: (err as Error).message });
-    } finally {
-      setBusy(false);
-    }
-  }, []);
-
-  /** Remember a path and switch to it in one go — that is why it was typed. */
-  const addAndSwitch = useCallback(
+  /** Remember a path and switch to it in one go — that is why it was chosen. */
+  const rememberAndSwitch = useCallback(
     async (value: string) => {
       const target = value.trim();
       if (!target) return;
@@ -101,12 +86,11 @@ export default function DatasetPathSwitcher({
           body: JSON.stringify({ path: target }),
         });
         const data = (await response.json()) as {
-          inspection?: { path: string; datasetCount: number };
+          inspection?: { path: string };
           error?: string;
         };
         if (!response.ok) throw new Error(data.error ?? response.statusText);
         setInput("");
-        setListing(null);
         switchTo(data.inspection?.path ?? target);
       } catch (err) {
         setMessage({ tone: "error", text: (err as Error).message });
@@ -116,6 +100,42 @@ export default function DatasetPathSwitcher({
     },
     [switchTo],
   );
+
+  /**
+   * Ask the server to open the desktop's folder dialog. Only a browser on the
+   * same machine gets one — anywhere else it would appear on a screen the
+   * person cannot see, and the answer is to type the path.
+   */
+  const chooseFolder = useCallback(async () => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const response = await fetch("/api/local-datasets/pick-folder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          startDir: input.trim() || browsePath,
+          title: t("pathswitch.dialogTitle"),
+        }),
+      });
+      const result = (await response.json()) as PickResult & { error?: string };
+      if (result.kind === "picked") {
+        setInput(result.path);
+        await rememberAndSwitch(result.path);
+        return;
+      }
+      if (result.kind === "unavailable") {
+        setMessage({
+          tone: "error",
+          text: t("pathswitch.dialogUnavailable", { reason: result.reason }),
+        });
+      }
+    } catch (err) {
+      setMessage({ tone: "error", text: (err as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  }, [browsePath, input, t, rememberAndSwitch]);
 
   const remove = useCallback(
     async (target: string) => {
@@ -169,7 +189,7 @@ export default function DatasetPathSwitcher({
         <div
           role="dialog"
           aria-label={t("pathswitch.title")}
-          className="absolute left-0 top-full z-30 mt-2 w-[30rem] max-w-[calc(100vw-3rem)] rounded-lg border border-white/10 bg-[var(--surface-1)] p-3 text-xs shadow-xl"
+          className="absolute left-0 top-full z-30 mt-2 w-[28rem] max-w-[calc(100vw-3rem)] rounded-lg border border-white/10 bg-[var(--surface-1)] p-3 text-xs shadow-xl"
         >
           <p className="mb-2 text-[var(--text-muted)]">
             {t("pathswitch.hint")}
@@ -218,12 +238,20 @@ export default function DatasetPathSwitcher({
           </ul>
 
           <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void chooseFolder()}
+              className="shrink-0 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-slate-200 transition-colors hover:bg-white/10 disabled:opacity-40"
+            >
+              {busy ? t("pathswitch.choosing") : t("pathswitch.choose")}
+            </button>
             <input
               type="text"
               value={input}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter") void addAndSwitch(input);
+                if (event.key === "Enter") void rememberAndSwitch(input);
               }}
               placeholder={t("pathswitch.placeholder")}
               aria-label={t("pathswitch.inputAria")}
@@ -232,80 +260,13 @@ export default function DatasetPathSwitcher({
             />
             <button
               type="button"
-              disabled={busy}
-              onClick={() =>
-                listing ? setListing(null) : void browse(input.trim() || "")
-              }
-              className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-slate-300 transition-colors hover:bg-white/10 disabled:opacity-40"
-            >
-              {listing ? t("pathswitch.browseClose") : t("pathswitch.browse")}
-            </button>
-            <button
-              type="button"
               disabled={busy || !input.trim()}
-              onClick={() => void addAndSwitch(input)}
-              className="rounded-md bg-cyan-500/90 px-2 py-1 text-[11px] font-semibold text-slate-900 transition-colors hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={() => void rememberAndSwitch(input)}
+              className="shrink-0 rounded-md bg-cyan-500/90 px-2 py-1 text-[11px] font-semibold text-slate-900 transition-colors hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {t("pathswitch.use")}
             </button>
           </div>
-
-          {listing && (
-            <div className="mt-2 rounded-md border border-white/10 bg-black/20">
-              <div className="flex items-center gap-1.5 border-b border-white/5 px-2 py-1.5">
-                <button
-                  type="button"
-                  disabled={busy || !listing.parent}
-                  onClick={() => listing.parent && void browse(listing.parent)}
-                  className="rounded border border-white/10 px-1.5 py-0.5 text-[11px] text-slate-300 hover:bg-white/10 disabled:opacity-40"
-                >
-                  {t("pathswitch.up")}
-                </button>
-                <span
-                  className="min-w-0 flex-1 truncate font-mono text-[11px] text-slate-200"
-                  title={listing.path}
-                >
-                  {listing.path}
-                </span>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void addAndSwitch(listing.path)}
-                  className="rounded bg-cyan-500/90 px-1.5 py-0.5 text-[11px] font-semibold text-slate-900 hover:bg-cyan-400"
-                >
-                  {t("pathswitch.useThis")}
-                </button>
-              </div>
-              {listing.entries.length === 0 ? (
-                <p className="px-2 py-1.5 text-[var(--text-muted)]">
-                  {t("pathswitch.noSubdirs")}
-                </p>
-              ) : (
-                <ul className="max-h-56 overflow-y-auto py-0.5">
-                  {listing.entries.map((entry) => (
-                    <li key={entry.path}>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void browse(entry.path)}
-                        className="flex w-full items-center gap-2 px-2 py-1 text-left font-mono text-[11px] text-slate-300 hover:bg-white/5 hover:text-cyan-200"
-                        title={entry.path}
-                      >
-                        <span className="min-w-0 flex-1 truncate">
-                          {entry.name}/
-                        </span>
-                        {entry.isDataset && (
-                          <span className="shrink-0 rounded bg-emerald-500/20 px-1 py-0.5 font-sans text-[10px] text-emerald-200">
-                            {t("pathswitch.datasetBadge")}
-                          </span>
-                        )}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
 
           {message && (
             <p

@@ -74,9 +74,15 @@ beside the "Browsing …" line on the homepage points the scan somewhere else �
 an archive drive, a fresh conversion in `/archive/TacVerse` — without moving
 the data or restarting:
 
-- Pick any remembered path to switch to it, or type one (or find it with
-  **Browse…**, which steps through directories and marks the ones that are
-  datasets) and press **Use** to remember and switch in one go.
+- Pick any remembered path to switch to it, or add a new one: **Choose
+  folder…** opens the desktop's own folder dialog (`zenity`, or `kdialog` on
+  KDE) and the chosen path is remembered and switched to in one go. The path
+  can also be typed.
+- The dialog opens on the machine running the server, so it is offered only to
+  a browser on that machine; over a LAN the panel says so and the path is
+  typed instead. A browser cannot supply an absolute path by itself —
+  `webkitdirectory` and the File System Access API both withhold it — which is
+  why the server opens the dialog.
 - The selected path is scanned exactly like the root, including a path that is
   itself a single dataset. Its episodes are addressed by absolute path
   (`/_local/<base64url(absolute path)>/episode_N`).

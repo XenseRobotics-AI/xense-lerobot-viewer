@@ -5,7 +5,6 @@ import path from "node:path";
 import { browsePathCookieString } from "@/utils/browsePath";
 import {
   addLocation,
-  browseDirectory,
   countDatasetsUnder,
   locationsFilePath,
   normalizeLocationInput,
@@ -150,7 +149,7 @@ describe("browsePathCookieString", () => {
   });
 });
 
-describe("countDatasetsUnder / browseDirectory", () => {
+describe("countDatasetsUnder", () => {
   test("counts a dataset as itself and nested ones up to the scan depth", async () => {
     const dir = await tempDir("loc-count-");
     await makeDataset(path.join(dir, "a"));
@@ -158,25 +157,5 @@ describe("countDatasetsUnder / browseDirectory", () => {
     await makeDataset(path.join(dir, "too", "deep", "for", "scan"));
     expect(await countDatasetsUnder(dir)).toBe(2);
     expect(await countDatasetsUnder(path.join(dir, "a"))).toBe(1);
-  });
-
-  test("lists subdirectories, flags datasets, hides dot-directories", async () => {
-    const dir = await tempDir("loc-browse-");
-    await makeDataset(path.join(dir, "ds"));
-    await fs.mkdir(path.join(dir, "plain"));
-    await fs.mkdir(path.join(dir, ".hidden"));
-    await fs.writeFile(path.join(dir, "file.txt"), "x");
-
-    const listing = await browseDirectory(dir);
-    expect(listing.path).toBe(dir);
-    expect(listing.parent).toBe(path.dirname(dir));
-    expect(listing.isDataset).toBe(false);
-    expect(listing.entries).toEqual([
-      { name: "ds", path: path.join(dir, "ds"), isDataset: true },
-      { name: "plain", path: path.join(dir, "plain"), isDataset: false },
-    ]);
-
-    const rootListing = await browseDirectory("/");
-    expect(rootListing.parent).toBeNull();
   });
 });
