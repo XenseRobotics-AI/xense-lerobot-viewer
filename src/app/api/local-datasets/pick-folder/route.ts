@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import fs from "node:fs/promises";
-import { isLoopbackHost, pickFolder } from "@/lib/native-folder-dialog";
+import { pickFolder } from "@/lib/native-folder-dialog";
 import { resolveLocalDatasetRoot } from "@/lib/local-datasets-discovery";
 
 export const runtime = "nodejs";
@@ -22,18 +22,17 @@ async function startDirectory(requested: string | null): Promise<string> {
   }
 }
 
+/**
+ * Open the desktop's folder dialog and answer with what was chosen.
+ *
+ * The window appears on the machine running the server — the one holding the
+ * datasets — whichever address the browser used to get here. That is the point:
+ * a browser cannot hand a page an absolute path, and this viewer is normally
+ * opened by its LAN address even from the host itself. `pickFolder` allows one
+ * dialog at a time, and every failure comes back as `unavailable` with a
+ * reason, because the fallback (type the path) is the same for all of them.
+ */
 export async function POST(request: NextRequest): Promise<Response> {
-  if (!isLoopbackHost(request.headers.get("host"))) {
-    return Response.json(
-      {
-        kind: "unavailable",
-        reason:
-          "The folder dialog opens on the machine running the server, so it is only offered to a browser on that machine. Type the path instead.",
-      },
-      { status: 200 },
-    );
-  }
-
   let body: { startDir?: unknown; title?: unknown } = {};
   try {
     body = (await request.json()) as typeof body;

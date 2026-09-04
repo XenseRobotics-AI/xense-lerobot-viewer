@@ -7,10 +7,15 @@
  * server can pop the desktop's real dialog (`zenity`, or `kdialog` on KDE) and
  * read back the path the person picked.
  *
- * That only makes sense when the browser and the server share a screen, so the
- * route in front of this refuses non-loopback requests: on a LAN the dialog
- * would appear on somebody else's desktop. When no tool or no display is
- * available the caller is told so and the path can still be typed.
+ * The window opens on the server's desktop, wherever the browser happens to
+ * be. This viewer is routinely opened from another machine on the LAN (see
+ * `allowedDevOrigins` in next.config.ts), and refusing those callers only
+ * meant the button never worked for the person sitting at the machine who
+ * reaches it by its LAN address. So the dialog is offered whenever a desktop
+ * session exists, and `pickFolder` allows one at a time — a second request
+ * while one is open is told so rather than stacking windows or letting a
+ * caller spawn processes in a loop. When no tool or no display is available
+ * the caller is told that too, and the path can still be typed.
  */
 
 import { spawn } from "node:child_process";
@@ -75,29 +80,20 @@ export async function findDialogTool(): Promise<DialogTool | null> {
   return null;
 }
 
-/**
- * True when the `Host` header names this machine. The dialog opens on the
- * server's desktop, so anyone reaching the app across a LAN must not be able
- * to make windows appear on someone else's screen.
- */
-export function isLoopbackHost(host: string | null | undefined): boolean {
-  const hostname = (host ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/:\d+$/, "")
-    .replace(/^\[|\]$/g, "");
-  return (
-    hostname === "localhost" ||
-    hostname === "127.0.0.1" ||
-    hostname === "::1" ||
-    hostname.endsWith(".localhost")
-  );
-}
-
 export function hasDisplay(): boolean {
   return Boolean(
     process.env.DISPLAY?.trim() || process.env.WAYLAND_DISPLAY?.trim(),
   );
+}
+
+/**
+ * One dialog at a time. Two windows for the same question help nobody, and
+ * without this a caller could leave processes piling up on the host.
+ */
+let dialogOpen = false;
+
+export function isDialogOpen(): boolean {
+  return dialogOpen;
 }
 
 /**
@@ -124,7 +120,14 @@ export async function pickFolder(
       reason: "No folder dialog is installed on the server (zenity, kdialog).",
     };
   }
+  if (dialogOpen) {
+    return {
+      kind: "unavailable",
+      reason: "A folder dialog is already open on the server's desktop.",
+    };
+  }
 
+  dialogOpen = true;
   return new Promise<FolderDialogResult>((resolve) => {
     const child = spawn(tool.command, tool.args(startDir, title), {
       stdio: ["ignore", "pipe", "pipe"],
@@ -136,6 +139,7 @@ export async function pickFolder(
     const finish = (result: FolderDialogResult) => {
       if (settled) return;
       settled = true;
+      dialogOpen = false;
       clearTimeout(timer);
       resolve(result);
     };

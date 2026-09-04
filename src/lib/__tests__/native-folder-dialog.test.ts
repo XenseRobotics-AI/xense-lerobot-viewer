@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   findDialogTool,
   hasDisplay,
-  isLoopbackHost,
+  isDialogOpen,
   pickFolder,
 } from "@/lib/native-folder-dialog";
 
@@ -20,34 +20,6 @@ afterEach(() => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-});
-
-describe("isLoopbackHost", () => {
-  test("accepts this machine, with or without a port", () => {
-    for (const host of [
-      "localhost",
-      "localhost:3000",
-      "127.0.0.1:3000",
-      "[::1]:3000",
-      "app.localhost:3000",
-      "LOCALHOST:3000",
-    ]) {
-      expect(isLoopbackHost(host)).toBe(true);
-    }
-  });
-
-  test("refuses anything a LAN browser would send", () => {
-    for (const host of [
-      "192.168.110.20:3000",
-      "viewer.internal",
-      "127.0.0.1.example.com",
-      "",
-      null,
-      undefined,
-    ]) {
-      expect(isLoopbackHost(host)).toBe(false);
-    }
-  });
 });
 
 describe("display and tool detection", () => {
@@ -125,6 +97,44 @@ describe("pickFolder", () => {
       // Dismissed: no output, non-zero exit, nothing on stderr.
       await fs.writeFile(tool, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
       expect(await pickFolder("/tmp", "t")).toEqual({ kind: "cancelled" });
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("one dialog at a time", () => {
+  test("a second request is refused while the first is open, and the lock clears", async () => {
+    process.env.DISPLAY = ":0";
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "slow-zenity-"));
+    try {
+      await fs.writeFile(
+        path.join(dir, "zenity"),
+        "#!/bin/sh\nsleep 0.4\necho /archive/TacVerse\n",
+        { mode: 0o755 },
+      );
+      // The fake tool comes first, but the rest of PATH has to stay: the
+      // script itself needs `sleep`, and without it the "slow" dialog would
+      // finish before the assertion below.
+      process.env.PATH = `${dir}${path.delimiter}${saved.PATH ?? ""}`;
+
+      const first = pickFolder("/tmp", "t");
+      // Let the child start so the lock is really held.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(isDialogOpen()).toBe(true);
+      const second = await pickFolder("/tmp", "t");
+      expect(second).toEqual({
+        kind: "unavailable",
+        reason: "A folder dialog is already open on the server's desktop.",
+      });
+
+      expect(await first).toEqual({
+        kind: "picked",
+        path: "/archive/TacVerse",
+      });
+      // The lock is released, so the next request gets a dialog again.
+      expect(isDialogOpen()).toBe(false);
+      expect((await pickFolder("/tmp", "t")).kind).toBe("picked");
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

@@ -78,11 +78,12 @@ the data or restarting:
   folder…** opens the desktop's own folder dialog (`zenity`, or `kdialog` on
   KDE) and the chosen path is remembered and switched to in one go. The path
   can also be typed.
-- The dialog opens on the machine running the server, so it is offered only to
-  a browser on that machine; over a LAN the panel says so and the path is
-  typed instead. A browser cannot supply an absolute path by itself —
-  `webkitdirectory` and the File System Access API both withhold it — which is
-  why the server opens the dialog.
+- The dialog opens on the desktop of the machine running the server — the one
+  holding the datasets — whichever address the browser used to get there, and
+  only one can be open at a time. A browser cannot supply an absolute path by
+  itself (`webkitdirectory` and the File System Access API both withhold it),
+  which is why the server opens the dialog. If the server has no desktop
+  session, or the browser is on another machine, type the path instead.
 - The selected path is scanned exactly like the root, including a path that is
   itself a single dataset. Its episodes are addressed by absolute path
   (`/_local/<base64url(absolute path)>/episode_N`).
