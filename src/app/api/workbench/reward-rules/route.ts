@@ -5,6 +5,7 @@ import {
   writeWorkbenchRewardRules,
 } from "@/lib/workbench-reward-store";
 import { isSameOriginRequest } from "@/lib/request-security";
+import { recordWorkbenchSharedEvent } from "@/lib/workbench-shared-sync";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -79,6 +80,19 @@ export async function PUT(request: NextRequest): Promise<Response> {
     }
 
     const config = await writeWorkbenchRewardRules(org, rules);
+    await recordWorkbenchSharedEvent({
+      org,
+      source: "workbench",
+      kind: "config.reward-rules.updated",
+      outcome: "success",
+      details: {
+        updatedAt: config.updatedAt,
+        enabled: config.enabled,
+        dailyTargetHours: config.dailyTargetHours,
+        levels: config.levels,
+        qualityBonusByGrade: config.qualityBonusByGrade,
+      },
+    }).catch(() => undefined);
     return Response.json({
       ...config,
       defaults: defaultWorkbenchRewardRules(org),

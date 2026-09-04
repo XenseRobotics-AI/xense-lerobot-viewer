@@ -5,6 +5,7 @@ import {
   writeWorkbenchPersonnelConfig,
 } from "@/lib/workbench-personnel-store";
 import { isSameOriginRequest, noStoreHeaders } from "@/lib/request-security";
+import { recordWorkbenchSharedEvent } from "@/lib/workbench-shared-sync";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -76,7 +77,19 @@ export async function PUT(request: NextRequest): Promise<Response> {
       "config" in body
         ? (body as { config: unknown }).config
         : body;
-    return Response.json(await writeWorkbenchPersonnelConfig(org, input), {
+    const config = await writeWorkbenchPersonnelConfig(org, input);
+    await recordWorkbenchSharedEvent({
+      org,
+      source: "workbench",
+      kind: "config.personnel-mapping.updated",
+      outcome: "success",
+      details: {
+        updatedAt: config.updatedAt,
+        people: config.people,
+        schedules: config.schedules,
+      },
+    }).catch(() => undefined);
+    return Response.json(config, {
       headers: noStoreHeaders(),
     });
   } catch (error: unknown) {

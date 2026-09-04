@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { isSameOriginRequest } from "@/lib/request-security";
+import { recordWorkbenchSharedEvent } from "@/lib/workbench-shared-sync";
 import {
   type ActiveTacFlowRun,
   releaseTacFlowRun,
@@ -229,6 +230,7 @@ function streamStepRun(
   definition: StepDefinition,
   request: NextRequest,
   lock: ActiveTacFlowRun,
+  dataset: TacFlowDatasetSelection,
 ): Response {
   let child: ChildProcessWithoutNullStreams | null = null;
   return new Response(
@@ -349,7 +351,7 @@ function streamStepRun(
 
           void definition
             .summarize(streams)
-            .then((summary) => {
+            .then(async (summary) => {
               const resultSummary = ok
                 ? summary
                 : { ...summary, stderrTail: tail(streams.stderr) };
@@ -386,8 +388,25 @@ function streamStepRun(
                     `TacFlow command exited with code ${code ?? "unknown"}.`,
                 });
               }
+              await recordWorkbenchSharedEvent({
+                org: dataset.relativePath.split("/")[0] || "TacVerse",
+                source: "tacflow",
+                kind: "run." + definition.step,
+                outcome: ok ? "success" : "failed",
+                details: {
+                  datasetPath: dataset.relativePath,
+                  command: definition.command,
+                  cwd: definition.cwd,
+                  exitCode: code,
+                  durationMs,
+                  artifacts: definition.artifacts,
+                  summary: resultSummary,
+                  stdout: streams.stdout,
+                  stderr: streams.stderr,
+                },
+              }).catch(() => undefined);
             })
-            .catch((error) => {
+            .catch(async (error) => {
               const message =
                 error instanceof Error ? error.message : String(error);
               send({
@@ -401,6 +420,23 @@ function streamStepRun(
                 error: message,
               });
               send({ type: "error", step: definition.step, error: message });
+              await recordWorkbenchSharedEvent({
+                org: dataset.relativePath.split("/")[0] || "TacVerse",
+                source: "tacflow",
+                kind: "run." + definition.step,
+                outcome: "failed",
+                details: {
+                  datasetPath: dataset.relativePath,
+                  command: definition.command,
+                  cwd: definition.cwd,
+                  exitCode: code,
+                  durationMs,
+                  artifacts: definition.artifacts,
+                  error: message,
+                  stdout: streams.stdout,
+                  stderr: streams.stderr,
+                },
+              }).catch(() => undefined);
             })
             .finally(() => {
               request.signal.removeEventListener("abort", abort);
@@ -466,5 +502,5 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const definition = buildStepDefinitions(dataset.dataset)[normalized.step];
-  return streamStepRun(definition, request, lock.run);
+  return streamStepRun(definition, request, lock.run, dataset.dataset);
 }

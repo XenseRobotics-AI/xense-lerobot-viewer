@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { NextRequest } from "next/server";
 import { isSameOriginRequest } from "@/lib/request-security";
+import { recordWorkbenchSharedEvent } from "@/lib/workbench-shared-sync";
 import {
   type ActiveTacFlowRun,
   releaseTacFlowRun,
@@ -221,7 +222,7 @@ function streamScoreRun(
           });
 
           void readDoctorReport(dataset)
-            .then((report) => {
+            .then(async (report) => {
               send({
                 type: "result",
                 ok: true,
@@ -243,8 +244,23 @@ function streamScoreRun(
                       code ?? "unknown"
                     } after report generation`,
               });
+              await recordWorkbenchSharedEvent({
+                org: dataset.relativePath.split("/")[0] || "TacVerse",
+                source: "tacflow",
+                kind: "score.run",
+                outcome: ok ? "success" : "failed",
+                details: {
+                  datasetPath: dataset.relativePath,
+                  exitCode: code,
+                  durationMs,
+                  artifacts,
+                  report,
+                  stdout: streams.stdout,
+                  stderr: streams.stderr,
+                },
+              }).catch(() => undefined);
             })
-            .catch((error) => {
+            .catch(async (error) => {
               const message =
                 error instanceof Error ? error.message : String(error);
               send({
@@ -263,6 +279,21 @@ function streamScoreRun(
                 message,
               });
               send({ type: "error", error: message });
+              await recordWorkbenchSharedEvent({
+                org: dataset.relativePath.split("/")[0] || "TacVerse",
+                source: "tacflow",
+                kind: "score.run",
+                outcome: "failed",
+                details: {
+                  datasetPath: dataset.relativePath,
+                  exitCode: code,
+                  durationMs,
+                  artifacts,
+                  error: message,
+                  stdout: streams.stdout,
+                  stderr: streams.stderr,
+                },
+              }).catch(() => undefined);
             })
             .finally(() => {
               request.signal.removeEventListener("abort", abort);

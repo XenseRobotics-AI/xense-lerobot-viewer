@@ -5,6 +5,7 @@ import {
   writeWorkbenchWorkstationMappings,
 } from "@/lib/workbench-config-store";
 import { isSameOriginRequest } from "@/lib/request-security";
+import { recordWorkbenchSharedEvent } from "@/lib/workbench-shared-sync";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,6 +83,17 @@ export async function PUT(request: NextRequest): Promise<Response> {
       org,
       mappings as Record<string, string>,
     );
+    await recordWorkbenchSharedEvent({
+      org,
+      source: "workbench",
+      kind: "config.workstation-mappings.updated",
+      outcome: "success",
+      details: {
+        updatedAt: config.updatedAt,
+        mappingCount: Object.keys(config.mappings).length,
+        mappings: config.mappings,
+      },
+    }).catch(() => undefined);
     return Response.json({
       ...config,
       defaults: defaultWorkbenchWorkstationMappings(org),

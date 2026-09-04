@@ -26,6 +26,7 @@ import {
 } from "@/lib/workbench-score-batch";
 import { tryAcquireTacFlowRun, releaseTacFlowRun } from "@/lib/tacflow/lock";
 import { isSameOriginRequest, noStoreHeaders } from "@/lib/request-security";
+import { recordWorkbenchSharedEvent } from "@/lib/workbench-shared-sync";
 import { DOCTOR_CHECK_IDS, type DoctorReport } from "@/types/doctor.types";
 import type { WorkbenchTacFlowScoreLedgerEntry } from "@/types/workbench-score.types";
 
@@ -463,6 +464,37 @@ async function processBatch(
     percent: 100,
     message: "Workbench Doctor batch complete",
   });
+  await recordWorkbenchSharedEvent(
+    {
+      org: input.organization,
+      source: "workbench",
+      kind: "tacflow-score.batch",
+      outcome: failed > 0 ? "failed" : "success",
+      details: {
+        startDate: input.startDate,
+        endDate: input.endDate,
+        forceRescore: input.forceRescore,
+        weights,
+        total: datasets.length,
+        completed,
+        failed,
+        cached,
+        scored: completed - failed,
+        results: datasets.map((dataset) => {
+          const entry = entries.get(dataset.relativePath);
+          return {
+            datasetPath: dataset.relativePath,
+            status: entry?.status ?? "missing",
+            score: entry?.score ?? null,
+            grade: entry?.grade ?? null,
+            scoredAt: entry?.scoredAt ?? null,
+            error: entry?.error ?? null,
+          };
+        }),
+      },
+    },
+    root,
+  ).catch(() => undefined);
   releaseTacFlowRun(lock);
 }
 

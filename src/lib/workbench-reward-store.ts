@@ -282,13 +282,17 @@ export async function writeWorkbenchRewardRules(
   org: string,
   rules: unknown,
   root = resolveLocalDatasetRoot(),
+  updatedAtOverride?: string | null,
 ): Promise<WorkbenchRewardRules> {
   const normalizedOrg = normalizeOrg(org);
   const normalized = normalizeWorkbenchRewardRulesInput({
     ...(rules as Record<string, unknown>),
     org: normalizedOrg,
   });
-  const updatedAt = new Date().toISOString();
+  const updatedAt =
+    typeof updatedAtOverride === "string" && updatedAtOverride.trim()
+      ? updatedAtOverride.trim()
+      : new Date().toISOString();
   const workbenchDir = path.join(root, STORE_DIR, WORKBENCH_DIR);
   await fs.mkdir(workbenchDir, { recursive: true });
 

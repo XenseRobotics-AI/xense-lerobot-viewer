@@ -104,10 +104,14 @@ export async function writeWorkbenchWorkstationMappings(
   org: string,
   mappings: Record<string, string>,
   root = resolveLocalDatasetRoot(),
+  updatedAtOverride?: string | null,
 ): Promise<WorkbenchWorkstationMappings> {
   const normalizedOrg = normalizeOrg(org);
   const normalizedMappings = normalizeWorkbenchWorkstationMappings(mappings);
-  const updatedAt = new Date().toISOString();
+  const updatedAt =
+    typeof updatedAtOverride === "string" && updatedAtOverride.trim()
+      ? updatedAtOverride.trim()
+      : new Date().toISOString();
   const workbenchDir = path.join(root, STORE_DIR, WORKBENCH_DIR);
   await fs.mkdir(workbenchDir, { recursive: true });
 

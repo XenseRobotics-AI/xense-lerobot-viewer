@@ -301,9 +301,13 @@ export async function writeWorkbenchPersonnelConfig(
   org: string,
   input: unknown,
   filePath = WORKBENCH_PERSONNEL_CONFIG_PATH,
+  updatedAtOverride?: string | null,
 ): Promise<WorkbenchPersonnelConfig> {
   const normalizedOrg = normalizeOrg(org);
-  const updatedAt = new Date().toISOString();
+  const updatedAt =
+    typeof updatedAtOverride === "string" && updatedAtOverride.trim()
+      ? updatedAtOverride.trim()
+      : new Date().toISOString();
   const normalized = validateWorkbenchPersonnelOrganizationConfig(
     input,
     updatedAt,

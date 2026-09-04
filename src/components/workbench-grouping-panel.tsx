@@ -39,6 +39,7 @@ import {
 import { copyTextToClipboard } from "@/utils/clipboard";
 import WorkbenchStatisticsFilterNotice from "@/components/workbench-statistics-filter-notice";
 import WorkbenchRuleBadge from "@/components/workbench-rule-badge";
+import WorkbenchSharedSync from "@/components/workbench-shared-sync";
 import { formatBytes } from "@/utils/byteSize";
 import {
   computeWorkbenchAdditionTimeline,
@@ -2103,6 +2104,11 @@ export default function WorkbenchGroupingPanel({
             </p>
           )}
         </div>
+
+        <WorkbenchSharedSync
+          organization={organization}
+          onSynced={() => setLocalRefreshToken((value) => value + 1)}
+        />
 
         <section
           aria-labelledby="workbench-controls-title"

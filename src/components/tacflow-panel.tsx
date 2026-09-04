@@ -34,6 +34,7 @@ import {
 } from "@/types/tacflow.types";
 import { routePathFromRepoId, makeLocalRepoId } from "@/utils/datasetRoute";
 import { createWorkbenchReviewTask } from "@/utils/workbenchActions";
+import WorkbenchSharedSync from "@/components/workbench-shared-sync";
 
 type StepUiDefinition = {
   id: TacFlowStepId;
@@ -1087,6 +1088,8 @@ export default function TacFlowPanel() {
     ];
   }, [datasetOptions, selectedDatasetPath]);
   const selectedDatasetName = datasetNameFromPath(selectedDatasetPath);
+  const selectedOrganization =
+    selectedDatasetPath.split("/")[0]?.trim() || "TacVerse";
   const selectedReportLabel = `${selectedDatasetName}/.tacflow/doctor-before.json`;
   const datasetSelectorDisabled = Boolean(runningStep) || scoreRunning;
   const createReviewTaskFromFinding = useCallback(
@@ -1396,6 +1399,8 @@ export default function TacFlowPanel() {
           )}
         </div>
       </div>
+
+      <WorkbenchSharedSync organization={selectedOrganization} compact />
 
       <div className="panel-raised min-h-0 flex-1 overflow-y-auto p-4">
         <ScoreSection
