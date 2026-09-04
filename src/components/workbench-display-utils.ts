@@ -11,7 +11,8 @@ export type WorkbenchDisplaySlideId =
   | "workstation-heatmap"
   | "daily-trend"
   | "top-groups"
-  | "3d-replay";
+  | "3d-replay"
+  | "taccap-video";
 
 export type WorkbenchDisplaySlideConfig = Readonly<{
   id: WorkbenchDisplaySlideId;
@@ -24,7 +25,7 @@ export const WORKBENCH_DISPLAY_SLIDES: readonly WorkbenchDisplaySlideConfig[] =
     Object.freeze({
       id: "overview" as const,
       title: "Overview",
-      durationMs: 10_000,
+      durationMs: 9_000,
     }),
     Object.freeze({
       id: "workstation-detail" as const,
@@ -51,6 +52,11 @@ export const WORKBENCH_DISPLAY_SLIDES: readonly WorkbenchDisplaySlideConfig[] =
       title: "Top groups",
       durationMs: 11_000,
     }),
+    Object.freeze({
+      id: "taccap-video" as const,
+      title: "TacCap Video",
+      durationMs: 20_000,
+    }),
   ]);
 
 export const WORKBENCH_DISPLAY_REPLAY_SLIDE: WorkbenchDisplaySlideConfig =
@@ -61,7 +67,11 @@ export const WORKBENCH_DISPLAY_REPLAY_SLIDE: WorkbenchDisplaySlideConfig =
   });
 
 const WORKBENCH_DISPLAY_SLIDES_WITH_REPLAY: readonly WorkbenchDisplaySlideConfig[] =
-  Object.freeze([...WORKBENCH_DISPLAY_SLIDES, WORKBENCH_DISPLAY_REPLAY_SLIDE]);
+  Object.freeze([
+    ...WORKBENCH_DISPLAY_SLIDES.slice(0, -1),
+    WORKBENCH_DISPLAY_REPLAY_SLIDE,
+    WORKBENCH_DISPLAY_SLIDES[WORKBENCH_DISPLAY_SLIDES.length - 1],
+  ]);
 
 export function getWorkbenchDisplaySlides(
   hasReplay: boolean,
@@ -90,6 +100,30 @@ export const WORKBENCH_DISPLAY_HEATMAP_DAY_WINDOW = 14;
 export const WORKBENCH_DISPLAY_HEATMAP_WINDOW_DURATION_MS = 4_000;
 export const WORKBENCH_DISPLAY_HEATMAP_ROW_LIMIT = 10;
 export const WORKBENCH_DISPLAY_TOP_GROUP_LIMIT = 8;
+export const WORKBENCH_DISPLAY_OVERVIEW_CARD_COUNT = 9;
+export const WORKBENCH_DISPLAY_OVERVIEW_CARD_DURATION_MS = 1_000;
+
+export type WorkbenchDisplayRewardTone = "positive" | "negative" | "neutral";
+
+export function getWorkbenchDisplayRewardTone(
+  value: number,
+): WorkbenchDisplayRewardTone {
+  if (value > 0) return "positive";
+  if (value < 0) return "negative";
+  return "neutral";
+}
+
+export function getWorkbenchOverviewActiveCardIndex(
+  elapsedMs: number,
+  reducedMotion = false,
+): number | null {
+  if (reducedMotion) return null;
+  const normalizedElapsed = Math.max(0, finiteOrZero(elapsedMs));
+  return Math.min(
+    WORKBENCH_DISPLAY_OVERVIEW_CARD_COUNT - 1,
+    Math.floor(normalizedElapsed / WORKBENCH_DISPLAY_OVERVIEW_CARD_DURATION_MS),
+  );
+}
 
 export type WorkbenchDisplayWorkstationRow = Readonly<{
   robotId: string;

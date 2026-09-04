@@ -19,6 +19,9 @@ package-lock.json
 /out/
 /public/*
 !/public/urdf/
+!/public/media/
+/public/media/*
+!/public/media/xense-taccap.mp4
 
 # production
 /build

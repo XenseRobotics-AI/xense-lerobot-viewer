@@ -4,6 +4,7 @@ import {
   TACCAP_WORKBENCH_REPLAY_DATASET,
   WORKBENCH_DISPLAY_SLIDES,
   WORKBENCH_DISPLAY_TOTAL_DURATION_MS,
+  WORKBENCH_DISPLAY_REPLAY_TOTAL_DURATION_MS,
   createWorkbenchDisplayClock,
   createWorkbenchDisplayReplaySnapshot,
   createWorkbenchDisplaySnapshot,
@@ -13,6 +14,8 @@ import {
   getWorkbenchDisplayClockRemaining,
   getWorkbenchDisplaySlideAtElapsed,
   getWorkbenchDisplaySlideIndex,
+  getWorkbenchDisplayRewardTone,
+  getWorkbenchOverviewActiveCardIndex,
   getWorkbenchHeatmapWindow,
   getWorkbenchTopGroups,
   isTacCapWorkbenchReplaySource,
@@ -50,7 +53,7 @@ function snapshotInput(
 }
 
 describe("Workbench display slide sequence", () => {
-  test("uses the fixed six-chapter order and a 74 second loop", () => {
+  test("keeps the twenty-second TacCap video last without a replay", () => {
     expect(WORKBENCH_DISPLAY_SLIDES.map((slide) => slide.id)).toEqual([
       "overview",
       "workstation-detail",
@@ -58,36 +61,70 @@ describe("Workbench display slide sequence", () => {
       "workstation-heatmap",
       "daily-trend",
       "top-groups",
+      "taccap-video",
     ]);
     expect(WORKBENCH_DISPLAY_SLIDES.map((slide) => slide.durationMs)).toEqual([
-      10_000, 15_000, 15_000, 12_000, 11_000, 11_000,
+      9_000, 15_000, 15_000, 12_000, 11_000, 11_000, 20_000,
     ]);
-    expect(WORKBENCH_DISPLAY_TOTAL_DURATION_MS).toBe(74_000);
+    expect(WORKBENCH_DISPLAY_TOTAL_DURATION_MS).toBe(93_000);
+  });
+
+  test("ships the showcase asset at its Next.js static path", async () => {
+    const asset = Bun.file("public/media/xense-taccap.mp4");
+    expect(await asset.exists()).toBe(true);
+    expect(asset.size).toBe(3_404_306);
   });
 
   test("moves manually in either direction and wraps at both ends", () => {
     expect(getWorkbenchDisplaySlideIndex(0, 1)).toBe(1);
-    expect(getWorkbenchDisplaySlideIndex(0, -1)).toBe(5);
+    expect(getWorkbenchDisplaySlideIndex(0, -1)).toBe(6);
     expect(getWorkbenchDisplaySlideIndex(3, 1)).toBe(4);
   });
 
-  test("maps elapsed loop time and returns to the first chapter", () => {
-    expect(getWorkbenchDisplaySlideAtElapsed(14_999)).toEqual({
-      slideIndex: 1,
-      slideElapsedMs: 4_999,
-    });
-    expect(getWorkbenchDisplaySlideAtElapsed(15_000)).toEqual({
-      slideIndex: 1,
-      slideElapsedMs: 5_000,
-    });
-    expect(getWorkbenchDisplaySlideAtElapsed(48_999)).toEqual({
-      slideIndex: 3,
+  test("maps elapsed loop time and returns from video to Overview", () => {
+    expect(getWorkbenchDisplaySlideAtElapsed(8_999)).toEqual({
+      slideIndex: 0,
       slideElapsedMs: 8_999,
     });
-    expect(getWorkbenchDisplaySlideAtElapsed(74_000)).toEqual({
+    expect(getWorkbenchDisplaySlideAtElapsed(9_000)).toEqual({
+      slideIndex: 1,
+      slideElapsedMs: 0,
+    });
+    expect(getWorkbenchDisplaySlideAtElapsed(72_999)).toEqual({
+      slideIndex: 5,
+      slideElapsedMs: 10_999,
+    });
+    expect(getWorkbenchDisplaySlideAtElapsed(73_000)).toEqual({
+      slideIndex: 6,
+      slideElapsedMs: 0,
+    });
+    expect(getWorkbenchDisplaySlideAtElapsed(93_000)).toEqual({
       slideIndex: 0,
       slideElapsedMs: 0,
     });
+  });
+});
+
+describe("Workbench display Overview", () => {
+  test("focuses one of nine cards for each one-second interval", () => {
+    expect(getWorkbenchOverviewActiveCardIndex(-1)).toBe(0);
+    expect(getWorkbenchOverviewActiveCardIndex(0)).toBe(0);
+    expect(getWorkbenchOverviewActiveCardIndex(999)).toBe(0);
+    expect(getWorkbenchOverviewActiveCardIndex(1_000)).toBe(1);
+    expect(getWorkbenchOverviewActiveCardIndex(7_999)).toBe(7);
+    expect(getWorkbenchOverviewActiveCardIndex(8_000)).toBe(8);
+    expect(getWorkbenchOverviewActiveCardIndex(9_000)).toBe(8);
+  });
+
+  test("disables card rotation when reduced motion is requested", () => {
+    expect(getWorkbenchOverviewActiveCardIndex(0, true)).toBeNull();
+    expect(getWorkbenchOverviewActiveCardIndex(8_500, true)).toBeNull();
+  });
+
+  test("maps positive, negative, and zero bonuses to semantic tones", () => {
+    expect(getWorkbenchDisplayRewardTone(1)).toBe("positive");
+    expect(getWorkbenchDisplayRewardTone(-1)).toBe("negative");
+    expect(getWorkbenchDisplayRewardTone(0)).toBe("neutral");
   });
 });
 
@@ -476,9 +513,9 @@ describe("TacCap Workbench replay", () => {
     expect(Object.isFrozen(snapshot.replay?.videosInfo[0])).toBe(true);
   });
 
-  test("adds a fifteen-second replay chapter after the six base chapters", () => {
-    const five = getWorkbenchDisplaySlides(true);
-    expect(five.map((slide) => slide.id)).toEqual([
+  test("places replay immediately before the final video chapter", () => {
+    const slides = getWorkbenchDisplaySlides(true);
+    expect(slides.map((slide) => slide.id)).toEqual([
       "overview",
       "workstation-detail",
       "personnel-workload",
@@ -486,18 +523,22 @@ describe("TacCap Workbench replay", () => {
       "daily-trend",
       "top-groups",
       "3d-replay",
+      "taccap-video",
     ]);
-    expect(five.reduce((total, slide) => total + slide.durationMs, 0)).toBe(
-      89_000,
-    );
-    expect(getWorkbenchDisplaySlideAtElapsed(88_999, five)).toEqual({
+    expect(slides[6].durationMs).toBe(15_000);
+    expect(slides[7].durationMs).toBe(20_000);
+    expect(WORKBENCH_DISPLAY_REPLAY_TOTAL_DURATION_MS).toBe(108_000);
+    expect(getWorkbenchDisplaySlideAtElapsed(87_999, slides)).toEqual({
       slideIndex: 6,
       slideElapsedMs: 14_999,
     });
-    expect(getWorkbenchDisplaySlideAtElapsed(89_000, five)).toEqual({
+    expect(getWorkbenchDisplaySlideAtElapsed(88_000, slides)).toEqual({
+      slideIndex: 7,
+      slideElapsedMs: 0,
+    });
+    expect(getWorkbenchDisplaySlideAtElapsed(108_000, slides)).toEqual({
       slideIndex: 0,
       slideElapsedMs: 0,
     });
-    expect(WORKBENCH_DISPLAY_TOTAL_DURATION_MS).toBe(74_000);
   });
 });

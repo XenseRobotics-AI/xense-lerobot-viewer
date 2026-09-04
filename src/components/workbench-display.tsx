@@ -46,11 +46,14 @@ import {
   getWorkbenchDisplaySlideIndex,
   getWorkbenchHeatmapWindow,
   getWorkbenchDisplayDailyTargetHours,
+  getWorkbenchDisplayRewardTone,
+  getWorkbenchOverviewActiveCardIndex,
   pauseWorkbenchDisplayClock,
   resumeWorkbenchDisplayClock,
   type WorkbenchDisplayClock,
   type WorkbenchDisplaySnapshot,
   type WorkbenchDisplaySlideId,
+  type WorkbenchDisplayRewardTone,
 } from "@/components/workbench-display-utils";
 import {
   extractTacCapGripperTracks,
@@ -66,7 +69,6 @@ type WorkbenchDisplayProps = {
 };
 
 type DelayStyle = CSSProperties & { "--display-delay": string };
-type OverviewCardStyle = CSSProperties & { "--overview-delay": string };
 type BarStyle = CSSProperties & {
   "--display-delay": string;
   "--display-bar-width": string;
@@ -96,6 +98,12 @@ function rewardSymbol(value: number): "✅" | "❌" | "—" {
   if (value > 0) return "✅";
   if (value < 0) return "❌";
   return "—";
+}
+
+function rewardToneClass(tone: WorkbenchDisplayRewardTone): string {
+  if (tone === "positive") return styles.rewardPositive;
+  if (tone === "negative") return styles.rewardNegative;
+  return styles.rewardNeutral;
 }
 
 function formatRange(snapshot: WorkbenchDisplaySnapshot): string {
@@ -154,6 +162,9 @@ function SummaryHeader({ snapshot }: { snapshot: WorkbenchDisplaySnapshot }) {
     ["Selected range hours", formatHours(snapshot.summary.selectedRangeHours)],
     ["Total bonus", formatReward(snapshot.summary.totalBonus)],
   ] as const;
+  const bonusToneClass = rewardToneClass(
+    getWorkbenchDisplayRewardTone(snapshot.summary.totalBonus),
+  );
 
   return (
     <header className={styles.header}>
@@ -170,7 +181,13 @@ function SummaryHeader({ snapshot }: { snapshot: WorkbenchDisplaySnapshot }) {
       </div>
       <div className={styles.summaryGrid}>
         {cards.map(([label, value]) => (
-          <div className={styles.summaryCard} key={label}>
+          <div
+            className={[
+              styles.summaryCard,
+              label === "Total bonus" ? bonusToneClass : "",
+            ].join(" ")}
+            key={label}
+          >
             <span>{label}</span>
             <strong>{value}</strong>
           </div>
@@ -207,9 +224,13 @@ function SlideHeading({
 
 function OverviewSlide({
   snapshot,
+  elapsedMs,
+  reducedMotion,
   total,
 }: {
   snapshot: WorkbenchDisplaySnapshot;
+  elapsedMs: number;
+  reducedMotion: boolean;
   total: number;
 }) {
   const metrics = [
@@ -234,6 +255,13 @@ function OverviewSlide({
         : formatCount(snapshot.summary.daysInRange),
     ],
   ] as const;
+  const activeCardIndex = getWorkbenchOverviewActiveCardIndex(
+    elapsedMs,
+    reducedMotion,
+  );
+  const bonusToneClass = rewardToneClass(
+    getWorkbenchDisplayRewardTone(snapshot.summary.totalBonus),
+  );
 
   return (
     <section className={styles.slideSection}>
@@ -247,13 +275,18 @@ function OverviewSlide({
         <div className={styles.overviewGrid}>
           {metrics.map(([label, value], index) => (
             <div
-              className={`${styles.overviewCard} ${index < 2 ? styles.overviewCardFeatured : ""}`}
+              className={[
+                styles.overviewCard,
+                index < 2 ? styles.overviewCardFeatured : "",
+                activeCardIndex === null
+                  ? ""
+                  : index === activeCardIndex
+                    ? styles.overviewCardActive
+                    : styles.overviewCardDimmed,
+                label === "Total bonus" ? bonusToneClass : "",
+              ].join(" ")}
+              data-focused={index === activeCardIndex || undefined}
               key={label}
-              style={
-                {
-                  "--overview-delay": `${index * 180}ms`,
-                } as OverviewCardStyle
-              }
             >
               <span>{label}</span>
               <strong>{value}</strong>
@@ -929,6 +962,101 @@ const TopGroupsSlide = memo(function TopGroupsSlide({
   );
 });
 
+function TacCapVideoSlide({
+  elapsedMs,
+  paused,
+  total,
+}: {
+  elapsedMs: number;
+  paused: boolean;
+  total: number;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [muted, setMuted] = useState(false);
+  const [showSoundPrompt, setShowSoundPrompt] = useState(false);
+
+  const playVideo = useCallback((allowMutedFallback: boolean) => {
+    const video = videoRef.current;
+    if (!video) return;
+    void video.play().catch(() => {
+      if (!allowMutedFallback) return;
+      video.muted = true;
+      setMuted(true);
+      setShowSoundPrompt(true);
+      void video.play().catch(() => undefined);
+    });
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = 0;
+    video.muted = false;
+    setMuted(false);
+    setShowSoundPrompt(false);
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (paused) {
+      video.pause();
+      return;
+    }
+    playVideo(true);
+  }, [paused, playVideo]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const targetSeconds = Math.min(20, Math.max(0, elapsedMs / 1_000));
+    if (Math.abs(video.currentTime - targetSeconds) > 0.75) {
+      video.currentTime = targetSeconds;
+    }
+  }, [elapsedMs]);
+
+  const restoreSound = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = false;
+    setMuted(false);
+    setShowSoundPrompt(false);
+    if (!paused) playVideo(false);
+  };
+
+  return (
+    <section className={styles.slideSection}>
+      <SlideHeading
+        index={total - 1}
+        total={total}
+        title="TacCap Video"
+        meta="Showcase · First 20 seconds"
+      />
+      <div className={styles.showcaseVideoFrame}>
+        <video
+          aria-label="TacCap showcase video"
+          autoPlay
+          className={styles.showcaseVideo}
+          muted={muted}
+          playsInline
+          preload="auto"
+          ref={videoRef}
+          src="/media/xense-taccap.mp4"
+        />
+        {showSoundPrompt && (
+          <button
+            className={styles.soundPrompt}
+            onClick={restoreSound}
+            type="button"
+          >
+            Autoplay continued muted · Turn sound on
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export default function WorkbenchDisplay({
   snapshot,
   onExit,
@@ -1145,7 +1273,14 @@ export default function WorkbenchDisplay({
   const slideContent = useMemo(() => {
     switch (slide.id as WorkbenchDisplaySlideId) {
       case "overview":
-        return <OverviewSlide snapshot={snapshot} total={slides.length} />;
+        return (
+          <OverviewSlide
+            snapshot={snapshot}
+            elapsedMs={elapsedMs}
+            reducedMotion={reducedMotion}
+            total={slides.length}
+          />
+        );
       case "workstation-detail":
         return (
           <WorkstationDetailSlide
@@ -1187,6 +1322,14 @@ export default function WorkbenchDisplay({
         return (
           <TacCapReplaySlide
             snapshot={snapshot}
+            elapsedMs={elapsedMs}
+            paused={paused}
+            total={slides.length}
+          />
+        );
+      case "taccap-video":
+        return (
+          <TacCapVideoSlide
             elapsedMs={elapsedMs}
             paused={paused}
             total={slides.length}
