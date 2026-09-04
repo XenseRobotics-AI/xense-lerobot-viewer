@@ -4,6 +4,7 @@ import {
   bucketOf,
   dateFromName,
   isAfterCutoff,
+  expectedShapeOf,
   shapeAnomalyOf,
 } from "@/lib/dataset-facets";
 
@@ -34,26 +35,72 @@ describe("dateFromName", () => {
 });
 
 describe("shapeAnomalyOf", () => {
-  test("the supported 20-dim + 6-stream shape is not flagged", () => {
-    expect(shapeAnomalyOf(20, 6)).toBe(false);
+  test("each robot type's own shape is not flagged", () => {
+    expect(shapeAnomalyOf(20, 6, "bi_taccap_gripper")).toBe(false);
+    expect(shapeAnomalyOf(29, 8, "xtac_umi_g1")).toBe(false);
+    expect(shapeAnomalyOf(20, 7, "bi_rdt_gripper")).toBe(false);
   });
 
-  test("the supported 29-dim + 8-stream shape is not flagged", () => {
-    expect(shapeAnomalyOf(29, 8)).toBe(false);
+  test("reads either separator spelling of a robot type", () => {
+    expect(shapeAnomalyOf(29, 8, "xtac-umi-g1")).toBe(false);
+    expect(shapeAnomalyOf(29, 8, "XTac_UMI_G1")).toBe(false);
+    expect(shapeAnomalyOf(20, 7, "BI-RDT-GRIPPER")).toBe(false);
+  });
+
+  test("flags a shape that belongs to a different robot", () => {
+    // The whole point of checking against the robot type rather than a union
+    // of allowed pairs: 20 + 7 is correct for RDT and wrong for TacCap, so a
+    // TacCap capture that gained a seventh camera has to stay visible.
+    expect(shapeAnomalyOf(20, 7, "bi_taccap_gripper")).toBe(true);
+    expect(shapeAnomalyOf(20, 6, "bi_rdt_gripper")).toBe(true);
+    expect(shapeAnomalyOf(29, 8, "bi_rdt_gripper")).toBe(true);
   });
 
   test("flags both half-configured directions", () => {
-    // The numbers live on the facets; this only says "not the norm".
-    // Neither is a superset of the other: head video without head state dims,
-    // and head state dims without head video. Both are real captures on disk.
-    expect(shapeAnomalyOf(20, 8)).toBe(true);
-    expect(shapeAnomalyOf(29, 6)).toBe(true);
+    // The numbers live on the facets; this only says "not what this rig
+    // records". Neither is a superset of the other: head video without head
+    // state dims, and head state dims without head video. Both are real
+    // captures on disk.
+    expect(shapeAnomalyOf(20, 8, "bi_taccap_gripper")).toBe(true);
+    expect(shapeAnomalyOf(29, 6, "xtac_umi_g1")).toBe(true);
   });
 
-  test("flags every other complete shape", () => {
-    expect(shapeAnomalyOf(29, 6)).toBe(true);
-    expect(shapeAnomalyOf(20, 8)).toBe(true);
-    expect(shapeAnomalyOf(21, 6)).toBe(true);
+  test("an unknown robot type falls back to any known shape", () => {
+    // Nothing to check against, so the question becomes "does this look like
+    // any rig we know" rather than a rule invented for an unseen robot.
+    expect(shapeAnomalyOf(20, 6, null)).toBe(false);
+    expect(shapeAnomalyOf(20, 7, "some_new_arm")).toBe(false);
+    expect(shapeAnomalyOf(29, 8, "")).toBe(false);
+    expect(shapeAnomalyOf(2, 1, "unknown")).toBe(true);
+    expect(shapeAnomalyOf(21, 6, null)).toBe(true);
+  });
+
+  test("a missing state dimension is always flagged", () => {
+    expect(shapeAnomalyOf(null, 6, "bi_taccap_gripper")).toBe(true);
+    expect(shapeAnomalyOf(null, 0, null)).toBe(true);
+  });
+});
+
+describe("expectedShapeOf", () => {
+  test("resolves each known robot type", () => {
+    expect(expectedShapeOf("bi_taccap_gripper")).toEqual({
+      stateDim: 20,
+      videoStreams: 6,
+    });
+    expect(expectedShapeOf("xtac_umi_g1")).toEqual({
+      stateDim: 29,
+      videoStreams: 8,
+    });
+    expect(expectedShapeOf("bi_rdt_gripper")).toEqual({
+      stateDim: 20,
+      videoStreams: 7,
+    });
+  });
+
+  test("is null for an unknown or absent robot type", () => {
+    expect(expectedShapeOf(null)).toBeNull();
+    expect(expectedShapeOf("")).toBeNull();
+    expect(expectedShapeOf("so101_follower")).toBeNull();
   });
 });
 

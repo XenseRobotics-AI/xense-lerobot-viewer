@@ -81,17 +81,22 @@ describe("computeFacets", () => {
   test("counts video streams and head streams from features", async () => {
     const dir = path.join(await scratch(), "taccap-g1-x-0822");
     await fs.mkdir(dir, { recursive: true });
-    const facets = await computeFacets(dir, "TacVerse/raw/taccap-g1-x-0822", {
-      "observation.state": { shape: [20] },
-      "observation.images.left_wrist": {},
-      "observation.images.right_wrist": {},
-      "observation.images.left_head": {},
-      "observation.images.right_head": {},
-      "observation.images.left_tactile_left": {},
-      "observation.images.left_tactile_right": {},
-      "observation.images.right_tactile_left": {},
-      "observation.images.right_tactile_right": {},
-    });
+    const facets = await computeFacets(
+      dir,
+      "TacVerse/raw/taccap-g1-x-0822",
+      {
+        "observation.state": { shape: [20] },
+        "observation.images.left_wrist": {},
+        "observation.images.right_wrist": {},
+        "observation.images.left_head": {},
+        "observation.images.right_head": {},
+        "observation.images.left_tactile_left": {},
+        "observation.images.left_tactile_right": {},
+        "observation.images.right_tactile_left": {},
+        "observation.images.right_tactile_right": {},
+      },
+      "bi_taccap_gripper",
+    );
     expect(facets.bucket).toBe("raw");
     expect(facets.videoStreams).toBe(8);
     expect(facets.headStreams).toBe(2);
@@ -103,10 +108,15 @@ describe("computeFacets", () => {
   test("survives a dataset with no features block", async () => {
     const dir = path.join(await scratch(), "taccap-g1-x");
     await fs.mkdir(dir, { recursive: true });
-    const facets = await computeFacets(dir, "TacVerse/merged/x", undefined);
+    const facets = await computeFacets(
+      dir,
+      "TacVerse/merged/x",
+      undefined,
+      "bi_taccap_gripper",
+    );
     expect(facets.stateDim).toBeNull();
     expect(facets.videoStreams).toBe(0);
-    // A missing shape is not one of the two supported combinations.
+    // A missing shape can match no rig at all.
     expect(facets.shapeAnomaly).toBe(true);
   });
 
@@ -132,9 +142,68 @@ describe("computeFacets", () => {
       dir,
       "TacVerse/raw/xtac-umi-g1-0822",
       features,
+      "xtac_umi_g1",
     );
     expect(facets.videoStreams).toBe(8);
     expect(facets.stateDim).toBe(29);
     expect(facets.shapeAnomaly).toBe(false);
+  });
+
+  test("recognises the bi_rdt_gripper 20-dim + 7-stream shape", async () => {
+    const dir = path.join(await scratch(), "TacVerse-RDT-035");
+    await fs.mkdir(dir, { recursive: true });
+    const features: Record<string, { shape?: number[] }> = {
+      "observation.state": { shape: [20] },
+    };
+    for (const key of [
+      "left_wrist",
+      "right_wrist",
+      "side",
+      "left_tactile_left",
+      "left_tactile_right",
+      "right_tactile_left",
+      "right_tactile_right",
+    ]) {
+      features[`observation.images.${key}`] = {};
+    }
+    const facets = await computeFacets(
+      dir,
+      "TacVerse/TacVerse-RDT-035",
+      features,
+      "bi_rdt_gripper",
+    );
+    expect(facets.videoStreams).toBe(7);
+    expect(facets.stateDim).toBe(20);
+    expect(facets.headStreams).toBe(0);
+    expect(facets.shapeAnomaly).toBe(false);
+  });
+
+  test("flags the same 20-dim + 7-stream shape under a TacCap robot type", async () => {
+    // Same numbers as the RDT dataset above. Only the robot type differs, and
+    // that is what has to make the difference — a global whitelist of allowed
+    // pairs would wave this through.
+    const dir = path.join(await scratch(), "taccap-g1-x-0822");
+    await fs.mkdir(dir, { recursive: true });
+    const features: Record<string, { shape?: number[] }> = {
+      "observation.state": { shape: [20] },
+    };
+    for (const key of [
+      "left_wrist",
+      "right_wrist",
+      "side",
+      "left_tactile_left",
+      "left_tactile_right",
+      "right_tactile_left",
+      "right_tactile_right",
+    ]) {
+      features[`observation.images.${key}`] = {};
+    }
+    const facets = await computeFacets(
+      dir,
+      "TacVerse/raw/taccap-g1-x-0822",
+      features,
+      "bi_taccap_gripper",
+    );
+    expect(facets.shapeAnomaly).toBe(true);
   });
 });

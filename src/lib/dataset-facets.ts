@@ -13,6 +13,8 @@
  * cannot drift out of sync with the data it describes.
  */
 
+import { normalizeRobotType } from "@/lib/so101-robot";
+
 /** The bucket a dataset lives in — the second segment of its relative path. */
 export type CorpusBucket =
   | "merged"
@@ -48,15 +50,15 @@ export type DatasetFacets = {
   capturedTo: string | null;
   dateEvidence: DateEvidence;
   /**
-   * True when the dataset's shape is neither supported corpus combination
-   * (20-dim + 6 streams or 29-dim + 8 streams). The numbers themselves are
-   * `stateDim` / `videoStreams`
+   * True when the dataset's shape disagrees with what its own `robot_type` is
+   * supposed to record. The numbers themselves are `stateDim` / `videoStreams`
    * below — this stays a plain flag so the badge text can be built in the UI
    * through i18n rather than baked into one language here.
    *
-   * Deliberately *not* a filter dimension: 538 of 542 datasets share the one
-   * shape, so a dropdown would be 99.3% single-valued. As a badge it earns its
-   * place, because the handful it marks are the known half-configured captures.
+   * Deliberately *not* a filter dimension: nearly every dataset in a source
+   * shares one shape, so a dropdown would be all but single-valued. As a badge
+   * it earns its place, because the handful it marks are the known
+   * half-configured captures.
    */
   shapeAnomaly: boolean;
   stateDim: number | null;
@@ -75,11 +77,45 @@ export const EMPTY_FACETS: DatasetFacets = {
   headStreams: 0,
 };
 
-/** Supported corpus shapes. Either complete combination is considered normal. */
-export const NORMAL_STATE_DIM = 20;
-export const NORMAL_VIDEO_STREAMS = 6;
-export const XTAC_UMI_STATE_DIM = 29;
-export const XTAC_UMI_VIDEO_STREAMS = 8;
+/** What one robot type is supposed to record. */
+export type RobotShape = {
+  stateDim: number;
+  videoStreams: number;
+};
+
+/**
+ * Canonical shape per robot type, keyed by the separator-stripped name
+ * (`normalizeRobotType`) and matched as a substring so a versioned spelling
+ * like `xtac_umi_g1_v2` still resolves.
+ *
+ * The shape *is* the robot's signature — each entry is fixed by the rig that
+ * recorded it, not by convention:
+ *
+ * - `bi_taccap_gripper` — 20 dims (two 9-DoF TCP poses + two gripper
+ *   positions), 6 cameras (two tactile pairs, two wrists).
+ * - `xtac_umi_g1` — 29 dims, 8 cameras (the two above plus the head pair).
+ * - `bi_rdt_gripper` — 20 dims, the same bimanual TCP layout as TacCap, but 7
+ *   cameras: the four tactile, two wrists, and one `side` view.
+ *
+ * Keeping this a table rather than a flat list of allowed pairs is what lets a
+ * 20-dim + 7-stream *TacCap* capture still be flagged: 20/7 is correct for RDT
+ * and wrong for TacCap, and a global whitelist could not tell them apart.
+ */
+const ROBOT_SHAPES: { match: string; shape: RobotShape }[] = [
+  { match: "bitaccapgripper", shape: { stateDim: 20, videoStreams: 6 } },
+  { match: "xtacumi", shape: { stateDim: 29, videoStreams: 8 } },
+  { match: "birdtgripper", shape: { stateDim: 20, videoStreams: 7 } },
+];
+
+/** The shape this robot type should record, or null when it is not a known one. */
+export function expectedShapeOf(robotType: string | null): RobotShape | null {
+  const normalized = normalizeRobotType(robotType);
+  if (!normalized) return null;
+  for (const entry of ROBOT_SHAPES) {
+    if (normalized.includes(entry.match)) return entry.shape;
+  }
+  return null;
+}
 
 /** First release requires captures on or after this date. */
 export const CAPTURE_CUTOFF = "2026-08-15";
@@ -102,22 +138,40 @@ export function dateFromName(name: string): string | null {
 }
 
 /**
- * Flags a dataset whose state/video shape is not one of the two supported
- * corpus combinations: the historical 20/6 shape or XTac-UMI's 29/8 shape.
+ * Flags a dataset whose state/video shape disagrees with its own robot type.
  *
- * Both directions matter and neither is a superset of the other: the corpus
- * holds three datasets with head *video* but only 20 state dims, and one with
- * 29 state dims but no head video. Each is a capture that was configured half
- * way, so the label names what was actually found rather than "anomaly".
+ * The check is robot-aware rather than a global whitelist because the shapes
+ * overlap on one axis: TacCap and RDT both record 20 state dims and differ only
+ * in stream count (6 vs 7). Judged against the union, a TacCap capture that
+ * silently gained a seventh camera reads as a valid RDT dataset and is never
+ * flagged — which is the half-configured case the badge exists to catch.
+ *
+ * Both directions of a mismatch matter and neither is a superset of the other:
+ * the corpus holds datasets with head *video* but only 20 state dims, and one
+ * with 29 state dims but no head video. Each is a capture that was configured
+ * half way, so the badge names what was actually found rather than "anomaly".
+ *
+ * An unrecognised or missing `robotType` has no expectation to check against,
+ * so it falls back to "matches some known rig" — enough to keep a genuinely
+ * foreign shape (lerobot's 2-dim PushT, say) flagged without inventing a rule
+ * for a robot this build has never been told about.
  */
 export function shapeAnomalyOf(
   stateDim: number | null,
   videoStreams: number,
+  robotType: string | null,
 ): boolean {
   if (stateDim === null) return true;
-  return !(
-    (stateDim === NORMAL_STATE_DIM && videoStreams === NORMAL_VIDEO_STREAMS) ||
-    (stateDim === XTAC_UMI_STATE_DIM && videoStreams === XTAC_UMI_VIDEO_STREAMS)
+  const expected = expectedShapeOf(robotType);
+  if (expected) {
+    return !(
+      stateDim === expected.stateDim && videoStreams === expected.videoStreams
+    );
+  }
+  return !ROBOT_SHAPES.some(
+    (entry) =>
+      stateDim === entry.shape.stateDim &&
+      videoStreams === entry.shape.videoStreams,
   );
 }
 

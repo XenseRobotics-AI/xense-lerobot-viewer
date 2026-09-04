@@ -1,3 +1,17 @@
+/**
+ * Lowercase and strip separators, so the same robot spelled `xtac-umi-g1`,
+ * `xtac_umi_g1` and `XTac UMI G1` compares equal.
+ *
+ * Recordings in the wild use all three spellings for one robot, and a matcher
+ * that misses silently routes the dataset to the wrong scene or the wrong
+ * expected shape. Shared with `dataset-facets.ts` so the robot→shape table and
+ * the URDF predicates cannot drift apart on how a name is read.
+ */
+export function normalizeRobotType(robotType: string | null): string {
+  if (!robotType) return "";
+  return robotType.toLowerCase().replace(/[-_\s]+/g, "");
+}
+
 export function isSO101Robot(robotType: string | null): boolean {
   if (!robotType) return false;
   const lower = robotType.toLowerCase();
@@ -29,7 +43,7 @@ export function isTacCapRobot(robotType: string | null): boolean {
   // robot `xtac-umi-g1` and `xtac_umi_g1` (the on-disk corpus uses the
   // underscored one), and a spelling that misses here silently falls through
   // to the Unitree full-body URDF, which is the wrong scene entirely.
-  const normalized = robotType.toLowerCase().replace(/[-_\s]+/g, "");
+  const normalized = normalizeRobotType(robotType);
   return (
     normalized.includes("bitaccapgripper") || normalized.includes("xtacumi")
   );
