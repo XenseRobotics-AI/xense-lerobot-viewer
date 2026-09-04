@@ -22,7 +22,10 @@ import type { EpisodeData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import UrdfPlaybackBar from "@/components/urdf-playback-bar";
 import UrdfVideoOverlay from "@/components/urdf-video-overlay";
 import { useT } from "@/context/locale-context";
-import { isTacCapRobot } from "@/lib/so101-robot";
+import {
+  type BundledGripperProfile,
+  bundledGripperProfile,
+} from "@/utils/bundledGrippers";
 import { CHART_CONFIG } from "@/utils/constants";
 import {
   extractTacCapGripperTracks,
@@ -44,7 +47,6 @@ import {
 import {
   tacCapDatasetPointToScene,
   tacCapRecordedTcpSceneMatrix,
-  tacCapRecordedTcpToRootMatrix,
 } from "@/utils/taccapGripperTransforms";
 import {
   isGripperDriveJoint,
@@ -129,7 +131,10 @@ function getRobotConfig(robotType: string | null) {
   // hands back an empty urdfUrl for robot types whose 3D tab is hidden — or,
   // worse, for one that is mounted through another branch, which then calls
   // URDFLoader.load("").
-  if (isTacCapRobot(robotType)) {
+  // Empty url = a bundled gripper, loaded by TacCapGripperScene rather than
+  // from the shared bucket. Must stay in step with `bundledGripperProfile`,
+  // and through it with `hasURDFSupport`.
+  if (bundledGripperProfile(robotType)) {
     return { urdfUrl: "", scale: 1 };
   }
   if (lower.includes("g1") || lower.includes("unitree")) {
@@ -322,10 +327,6 @@ const TACCAP_TRAIL_MIN_COLOR_INTENSITY = 0.35;
 const TRAIL_COLORS = [new THREE.Color("#ff6600"), new THREE.Color("#00aaff")];
 const MAX_TRAIL_POINTS = 300;
 
-const TACCAP_GRIPPER_URDF: Record<TacCapSide, string> = {
-  left: "/urdf/taccap-grippers/left/gripper.urdf",
-  right: "/urdf/taccap-grippers/right/gripper.urdf",
-};
 const TACCAP_TRAIL_COLOR: Record<TacCapSide, string> = {
   left: "#22d3ee",
   right: "#f472b6",
@@ -402,11 +403,14 @@ function applyTacCapGripperFrame(
   robot: URDFRobot,
   recordedTcpToRoot: THREE.Matrix4,
   frame: TacCapGripperFrame,
+  driveJointName: string,
 ) {
-  // joint2 mimics joint1 with multiplier -1 in both bundled URDFs.
-  const driveJoint = robot.joints.joint1;
+  // One driven joint per gripper; every other joint in these URDFs mimics it,
+  // so the whole jaw follows from this single value.
+  const driveJoint = robot.joints[driveJointName];
+  if (!driveJoint) return;
   robot.setJointValue(
-    "joint1",
+    driveJointName,
     mapNormalizedGripperToJoint(frame.opening, driveJoint.limit),
   );
   robot.matrix.copy(tacCapLink4SceneMatrix(frame)).multiply(recordedTcpToRoot);
@@ -539,6 +543,7 @@ function TacCapWorldAxes({
 function tacCapSceneBounds(
   tracks: TacCapGripperTrack[],
   headTrack: TacCapHeadTrack | null,
+  padding: number,
 ): SceneBounds {
   const min = new THREE.Vector3(Infinity, Infinity, Infinity);
   const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
@@ -561,10 +566,11 @@ function tacCapSceneBounds(
     min.set(-0.5, -0.5, -0.5);
     max.set(0.5, 0.5, 0.5);
   }
-  // The link4 origin sits about 16.5 cm ahead of base_link. Leave enough
-  // framing room for the model around each recorded endpoint.
-  min.addScalar(-0.2);
-  max.addScalar(0.2);
+  // The recorded endpoint is the TCP, so the model body extends behind it by
+  // roughly the root -> TCP distance. Pad by that much (per gripper, since the
+  // two bundled models differ) or the body is clipped at the grid edge.
+  min.addScalar(-padding);
+  max.addScalar(padding);
   const center = min.clone().add(max).multiplyScalar(0.5);
   const size = max.clone().sub(min);
   return {
@@ -608,10 +614,12 @@ function TacCapCameraFit({ bounds }: { bounds: SceneBounds }) {
 
 function TacCapGripperModel({
   frame,
+  profile,
   side,
   onReady,
 }: {
   frame: TacCapGripperFrame | null;
+  profile: BundledGripperProfile;
   side: TacCapSide;
   onReady: (side: TacCapSide) => void;
 }) {
@@ -655,7 +663,7 @@ function TacCapGripperModel({
     };
 
     loader.load(
-      TACCAP_GRIPPER_URDF[side],
+      profile.urdf(side),
       (robot) => {
         if (cancelled) return;
         mountedRobot = robot;
@@ -663,27 +671,45 @@ function TacCapGripperModel({
         robot.matrixAutoUpdate = false;
         robot.updateMatrixWorld(true);
 
-        const link4 = robot.links.link4;
-        if (!link4) {
-          console.error(`TacCap ${side} URDF has no link4 frame`);
+        if (!robot.links[profile.tcpFrameLink]) {
+          console.error(
+            `${side} gripper URDF has no ${profile.tcpFrameLink} frame`,
+          );
           return;
         }
-        // Incoming frames use the canonical TCP convention. Both bundled
-        // URDFs now give link4 the same X/Y orientation, so only the measured
-        // root -> TCP translation is needed here.
+        // Incoming frames use the canonical TCP convention; the profile says
+        // where the model root sits relative to it. Constant, not read from the
+        // model — the link above is only a guard against the wrong URDF.
         recordedTcpToRootRef.current = new THREE.Matrix4().set(
-          ...tacCapRecordedTcpToRootMatrix(side),
+          ...profile.rootFromTcp(side),
         );
         robot.traverse((child) => {
           child.castShadow = true;
           child.receiveShadow = true;
         });
+        if (profile.tintFingersPerSide) {
+          // One URDF serves both arms, so the side colour cannot be baked in
+          // the way the per-side TacCap files bake theirs. Tint after load:
+          // URDFLoader assigns the URDF material during load and would
+          // overwrite anything set earlier.
+          const tint = new THREE.Color(TACCAP_TRAIL_COLOR[side]);
+          robot.traverse((child) => {
+            const mesh = child as THREE.Mesh;
+            if (!mesh.isMesh) return;
+            const material = mesh.material as THREE.MeshPhongMaterial;
+            if (material?.color && material.name === "finger") {
+              mesh.material = material.clone();
+              (mesh.material as THREE.MeshPhongMaterial).color.copy(tint);
+            }
+          });
+        }
         scene.add(robot);
         if (frameRef.current) {
           applyTacCapGripperFrame(
             robot,
             recordedTcpToRootRef.current,
             frameRef.current,
+            profile.driveJoint,
           );
         } else {
           robot.visible = false;
@@ -694,7 +720,7 @@ function TacCapGripperModel({
       undefined,
       (error) => {
         if (!cancelled) {
-          console.error(`Failed to load TacCap ${side} gripper:`, error);
+          console.error(`Failed to load ${side} gripper:`, error);
         }
       },
     );
@@ -706,7 +732,7 @@ function TacCapGripperModel({
       if (robotRef.current === mountedRobot) robotRef.current = null;
       recordedTcpToRootRef.current = null;
     };
-  }, [onReady, scene, side]);
+  }, [onReady, profile, scene, side]);
 
   useLayoutEffect(() => {
     const robot = robotRef.current;
@@ -716,8 +742,13 @@ function TacCapGripperModel({
     robot.visible = frame !== null;
     if (!frame) return;
 
-    applyTacCapGripperFrame(robot, recordedTcpToRoot, frame);
-  }, [frame]);
+    applyTacCapGripperFrame(
+      robot,
+      recordedTcpToRoot,
+      frame,
+      profile.driveJoint,
+    );
+  }, [frame, profile.driveJoint]);
 
   return null;
 }
@@ -1241,6 +1272,7 @@ function TacCapGripperScene({
   headFrame,
   headTrack,
   onReadyChange,
+  profile,
   timeSeconds,
   tracks,
   trailEnabled,
@@ -1249,14 +1281,15 @@ function TacCapGripperScene({
   headFrame: TacCapHeadFrame | null;
   headTrack: TacCapHeadTrack | null;
   onReadyChange: (ready: boolean) => void;
+  profile: BundledGripperProfile;
   timeSeconds: number;
   tracks: TacCapGripperTrack[];
   trailEnabled: boolean;
 }) {
   const [readySides, setReadySides] = useState<Set<TacCapSide>>(new Set());
   const bounds = useMemo(
-    () => tacCapSceneBounds(tracks, headTrack),
-    [headTrack, tracks],
+    () => tacCapSceneBounds(tracks, headTrack, profile.scenePadding),
+    [headTrack, profile.scenePadding, tracks],
   );
   const frameBySide = useMemo(
     () => new Map(frames.map((frame) => [frame.side, frame])),
@@ -1288,6 +1321,7 @@ function TacCapGripperScene({
         <TacCapGripperModel
           key={side}
           frame={frameBySide.get(side) ?? null}
+          profile={profile}
           side={side}
           onReady={handleReady}
         />
@@ -1871,7 +1905,11 @@ export default function URDFViewer({
   const t = useT();
   const { datasetInfo } = data;
   const fps = datasetInfo.fps || 30;
-  const isTacCap = isTacCapRobot(datasetInfo.robot_type);
+  const gripperProfile = useMemo(
+    () => bundledGripperProfile(datasetInfo.robot_type),
+    [datasetInfo.robot_type],
+  );
+  const isBundledGripper = gripperProfile !== null;
   const robotConfig = useMemo(
     () => getRobotConfig(datasetInfo.robot_type),
     [datasetInfo.robot_type],
@@ -1934,13 +1972,13 @@ export default function URDFViewer({
   const groupNames = useMemo(() => Object.keys(columnGroups), [columnGroups]);
   const defaultGroup = useMemo(
     () =>
-      (isTacCap
+      (isBundledGripper
         ? groupNames.find((g) => g.toLowerCase().includes("action"))
         : groupNames.find((g) => g.toLowerCase().includes("state"))) ??
       groupNames.find((g) => g.toLowerCase().includes("action")) ??
       groupNames[0] ??
       "",
-    [groupNames, isTacCap],
+    [groupNames, isBundledGripper],
   );
 
   const [selectedGroup, setSelectedGroup] = useState(defaultGroup);
@@ -1950,17 +1988,22 @@ export default function URDFViewer({
     [columnGroups, selectedGroup],
   );
   const tacCapSources = useMemo(
-    () => (isTacCap ? tacCapGripperSources(chartData) : []),
-    [chartData, isTacCap],
+    () => (isBundledGripper ? tacCapGripperSources(chartData) : []),
+    [chartData, isBundledGripper],
   );
   const tacCapTracks = useMemo(
     () =>
-      isTacCap ? extractTacCapGripperTracks(chartData, selectedGroup) : [],
-    [chartData, isTacCap, selectedGroup],
+      isBundledGripper
+        ? extractTacCapGripperTracks(chartData, selectedGroup)
+        : [],
+    [chartData, isBundledGripper, selectedGroup],
   );
   const tacCapHeadTrack = useMemo(
-    () => (isTacCap ? extractTacCapHeadTrack(chartData, selectedGroup) : null),
-    [chartData, isTacCap, selectedGroup],
+    () =>
+      isBundledGripper
+        ? extractTacCapHeadTrack(chartData, selectedGroup)
+        : null,
+    [chartData, isBundledGripper, selectedGroup],
   );
 
   // Joint mapping
@@ -2020,13 +2063,13 @@ export default function URDFViewer({
         : null,
     [replayTimeSeconds, tacCapHeadTrack],
   );
-  const tacCapDataUnavailable = isTacCap && tacCapTracks.length === 0;
+  const tacCapDataUnavailable = isBundledGripper && tacCapTracks.length === 0;
   const trajectoryUnavailable = totalFrames === 0 || tacCapDataUnavailable;
 
   // URDF meshes load asynchronously. Generic robots report their joints when
   // ready; the TacCap scene reports once every required left/right model and
   // mesh has loaded from the project-local public assets.
-  const urdfLoading = isTacCap
+  const urdfLoading = isBundledGripper
     ? !tacCapDataUnavailable && !tacCapModelsReady
     : urdfJointNames.length === 0;
   const playbackDisabled = !active || urdfLoading || trajectoryUnavailable;
@@ -2160,7 +2203,7 @@ export default function URDFViewer({
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* 3D Viewport */}
       <div className="flex-1 min-h-0 bg-[var(--surface-0)] rounded-lg overflow-hidden border border-white/10 relative">
-        {isTacCap && !tacCapDataUnavailable && (
+        {isBundledGripper && !tacCapDataUnavailable && (
           <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded border border-white/10 bg-slate-950/75 px-2 py-1 font-mono text-[10px] shadow backdrop-blur-sm">
             <span className="text-red-400">X · {t("urdf.axisForward")}</span>
             <span className="text-green-400">Y · {t("urdf.axisLeft")}</span>
@@ -2226,17 +2269,18 @@ export default function URDFViewer({
             position={[0, 3, -4]}
             intensity={0.4}
           />
-          {isTacCap ? (
+          {gripperProfile ? (
             <TacCapGripperScene
               frames={tacCapFrames}
               headFrame={tacCapHeadFrame}
               headTrack={tacCapHeadTrack}
               onReadyChange={setTacCapModelsReady}
+              profile={gripperProfile}
               timeSeconds={replayTimeSeconds}
               tracks={tacCapTracks}
               trailEnabled={trailEnabled}
             />
-          ) : !isTacCap ? (
+          ) : (
             <>
               {/* Ground-shadow catcher — invisible plane receives key-light shadow */}
               <mesh
@@ -2267,10 +2311,12 @@ export default function URDFViewer({
                 position={[0, 0, 0]}
               />
             </>
-          ) : null}
+          )}
           <OrbitControls
             makeDefault
-            target={isTacCap ? [0, 0, 0] : isG1 ? [0, 0.5, 0] : [0, 0.8, 0]}
+            target={
+              isBundledGripper ? [0, 0, 0] : isG1 ? [0, 0.5, 0] : [0, 0.8, 0]
+            }
           />
           <PlaybackDriver
             playing={playing}
@@ -2291,7 +2337,7 @@ export default function URDFViewer({
         {trajectoryUnavailable && (
           <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg)]/75 px-6 text-center text-sm text-amber-300">
             {t(
-              isTacCap && tacCapDataUnavailable
+              isBundledGripper && tacCapDataUnavailable
                 ? "urdf.tacCapNoPose"
                 : "urdf.noTrajectory",
             )}
@@ -2327,9 +2373,9 @@ export default function URDFViewer({
           >
             ▶
           </span>
-          {isTacCap ? t("urdf.tacCapMapping") : t("urdf.jointMapping")}
+          {isBundledGripper ? t("urdf.tacCapMapping") : t("urdf.jointMapping")}
           <span className="text-slate-600">
-            {isTacCap
+            {isBundledGripper
               ? t("urdf.tacCapMapped", {
                   mapped: tacCapTracks.length,
                   total: 2,
@@ -2348,7 +2394,7 @@ export default function URDFViewer({
                 {t("urdf.dataSource")}
               </label>
               <div className="flex gap-1 flex-wrap">
-                {(isTacCap ? tacCapSources : groupNames).map((name) => (
+                {(isBundledGripper ? tacCapSources : groupNames).map((name) => (
                   <button
                     key={name}
                     type="button"
@@ -2365,7 +2411,7 @@ export default function URDFViewer({
               </div>
             </div>
 
-            {isTacCap ? (
+            {isBundledGripper ? (
               <div className="flex-1 overflow-x-auto max-h-48 overflow-y-auto">
                 <table className="w-full text-xs">
                   <thead className="sticky top-0 bg-[var(--surface-1)]">

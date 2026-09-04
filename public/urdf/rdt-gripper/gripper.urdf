@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="utf-8"?>
+<robot name="rdt_gripper">
+  <material name="shell">
+    <color rgba="0.58 0.64 0.72 1" />
+  </material>
+  <!-- The jaw chain carries the finger colour; TacCapGripperModel tints it
+       per side after load, so a gripper reads as the same object as its
+       trajectory trail. One file serves both arms, so the tint cannot be
+       baked in the way the per-side TacCap URDFs bake theirs. -->
+  <material name="finger">
+    <color rgba="0.20 0.83 0.94 1" />
+  </material>
+
+  <link name="base_link">
+    <visual>
+      <geometry><mesh filename="meshes/base_link.STL" /></geometry>
+      <material name="shell" />
+    </visual>
+  </link>
+
+  <link name="R2_Link">
+    <visual>
+      <geometry><mesh filename="meshes/R2_Link.STL" /></geometry>
+      <material name="finger" />
+    </visual>
+  </link>
+  <joint name="R2" type="revolute">
+    <origin xyz="0.031809 0 0.15424" rpy="1.5708 0 0" />
+    <parent link="base_link" />
+    <child link="R2_Link" />
+    <axis xyz="0 0 -1" />
+    <limit lower="0" upper="0.7" effort="1" velocity="1" />
+  </joint>
+
+  <link name="Right_in_Link">
+    <visual>
+      <geometry><mesh filename="meshes/Right_in_Link.STL" /></geometry>
+      <material name="finger" />
+    </visual>
+  </link>
+  <joint name="Right_in" type="revolute">
+    <origin xyz="-0.006488 0.064675 0" rpy="0 0 0" />
+    <parent link="R2_Link" />
+    <child link="Right_in_Link" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="0" effort="1" velocity="1" />
+    <mimic joint="R2" multiplier="1" offset="0" />
+  </joint>
+
+  <link name="Right_Pad_Link">
+    <visual>
+      <geometry><mesh filename="meshes/Right_Pad_Link.STL" /></geometry>
+      <material name="finger" />
+    </visual>
+  </link>
+  <joint name="Right_Pad" type="fixed">
+    <origin xyz="-0.024321 0.03825 0" rpy="0 0 0" />
+    <parent link="Right_in_Link" />
+    <child link="Right_Pad_Link" />
+  </joint>
+
+  <link name="R3_Link">
+    <visual>
+      <geometry><mesh filename="meshes/R3_Link.STL" /></geometry>
+      <material name="shell" />
+    </visual>
+  </link>
+  <joint name="R3" type="revolute">
+    <origin xyz="0.014489 0 0.16424" rpy="1.5708 0 0" />
+    <parent link="base_link" />
+    <child link="R3_Link" />
+    <axis xyz="0 0 -1" />
+    <limit lower="0" upper="0" effort="1" velocity="1" />
+    <mimic joint="R2" multiplier="1" offset="0" />
+  </joint>
+
+  <link name="Right_Main_Link">
+    <visual>
+      <geometry><mesh filename="meshes/Right_Main_Link.STL" /></geometry>
+      <material name="shell" />
+    </visual>
+  </link>
+  <joint name="Right_Main" type="revolute">
+    <origin xyz="0.014489 0 0.16424" rpy="1.5708 0 0" />
+    <parent link="base_link" />
+    <child link="Right_Main_Link" />
+    <axis xyz="0 0 -1" />
+    <limit lower="0" upper="0" effort="1" velocity="1" />
+    <mimic joint="R2" multiplier="1" offset="0" />
+  </joint>
+
+  <link name="R1_Link">
+    <visual>
+      <geometry><mesh filename="meshes/R1_Link.STL" /></geometry>
+      <material name="shell" />
+    </visual>
+  </link>
+  <joint name="R1" type="revolute">
+    <origin xyz="0.039847 -0.0034894 0" rpy="0 0 0" />
+    <parent link="Right_Main_Link" />
+    <child link="R1_Link" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="0" effort="1" velocity="1" />
+    <mimic joint="R2" multiplier="-0.15" offset="0" />
+  </joint>
+
+  <link name="Right_Slip_Link">
+    <visual>
+      <geometry><mesh filename="meshes/Right_Slip_Link.STL" /></geometry>
+      <material name="shell" />
+    </visual>
+  </link>
+  <joint name="Right_Slip" type="revolute">
+    <origin xyz="0.039847 -0.0034894 0" rpy="0 0 0" />
+    <parent link="Right_Main_Link" />
+    <child link="Right_Slip_Link" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="0" effort="1" velocity="1" />
+    <mimic joint="R2" multiplier="1" offset="0" />
+  </joint>
+
+  <link name="L2_Link">
+    <visual>
+      <geometry><mesh filename="meshes/L2_Link.STL" /></geometry>
+      <material name="finger" />
+    </visual>
+  </link>
+  <joint name="L2" type="revolute">
+    <origin xyz="-0.031808 0 0.15424" rpy="1.5708 0 -3.1416" />
+    <parent link="base_link" />
+    <child link="L2_Link" />
+    <axis xyz="0 0 -1" />
+    <limit lower="-1" upper="1" effort="1" velocity="1" />
+    <mimic joint="R2" multiplier="1" offset="0" />
+  </joint>
+
+  <link name="Left_in_Link">
+    <visual>
+      <geometry><mesh filename="meshes/Left_in_Link.STL" /></geometry>
+      <material name="finger" />
+    </visual>
+  </link>
+  <joint name="Left_in" type="revolute">
+    <origin xyz="-0.0064872 0.064675 0" rpy="0 0 0" />
+    <parent link="L2_Link" />
+    <child link="Left_in_Link" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="0" effort="1" velocity="1" />
+    <mimic joint="L2" multiplier="1" offset="0" />
+  </joint>
+
+  <link name="Left_Pad_Link">
+    <visual>
+      <geometry><mesh filename="meshes/Left_Pad_Link.STL" /></geometry>
+      <material name="finger" />
+    </visual>
+  </link>
+  <joint name="Left_Pad" type="fixed">
+    <origin xyz="-0.024321 0.03825 0" rpy="0 0 0" />
+    <parent link="Left_in_Link" />
+    <child link="Left_Pad_Link" />
+  </joint>
+
+  <link name="L3_Link">
+    <visual>
+      <geometry><mesh filename="meshes/L3_Link.STL" /></geometry>
+      <material name="shell" />
+    </visual>
+  </link>
+  <joint name="L3" type="revolute">
+    <origin xyz="-0.014488 0 0.16424" rpy="1.5708 0 -3.1416" />
+    <parent link="base_link" />
+    <child link="L3_Link" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="0" effort="1" velocity="1" />
+    <mimic joint="R3" multiplier="-1" offset="0" />
+  </joint>
+
+  <link name="Left_Main_Link">
+    <visual>
+      <geometry><mesh filename="meshes/Left_Main_Link.STL" /></geometry>
+      <material name="shell" />
+    </visual>
+  </link>
+  <joint name="Left_Main" type="revolute">
+    <origin xyz="-0.014488 0 0.16424" rpy="1.5708 0 -3.1416" />
+    <parent link="base_link" />
+    <child link="Left_Main_Link" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="0" effort="1" velocity="1" />
+    <mimic joint="Right_Main" multiplier="-1" offset="0" />
+  </joint>
+
+  <link name="L1_Link">
+    <visual>
+      <geometry><mesh filename="meshes/L1_Link.STL" /></geometry>
+      <material name="shell" />
+    </visual>
+  </link>
+  <joint name="L1" type="revolute">
+    <origin xyz="0.039848 -0.0034894 0" rpy="0 0 0" />
+    <parent link="Left_Main_Link" />
+    <child link="L1_Link" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="0" effort="1" velocity="1" />
+    <mimic joint="R1" multiplier="1" offset="0" />
+  </joint>
+
+  <link name="Left_Slip_Link">
+    <visual>
+      <geometry><mesh filename="meshes/Left_Slip_Link.STL" /></geometry>
+      <material name="shell" />
+    </visual>
+  </link>
+  <joint name="Left_Slip" type="revolute">
+    <origin xyz="0.039848 -0.0034894 0" rpy="0 0 0" />
+    <parent link="Left_Main_Link" />
+    <child link="Left_Slip_Link" />
+    <axis xyz="0 0 1" />
+    <limit lower="0" upper="0" effort="1" velocity="1" />
+    <mimic joint="L2" multiplier="1" offset="0" />
+  </joint>
+</robot>
