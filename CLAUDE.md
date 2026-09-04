@@ -50,6 +50,16 @@ Each LeRobot dataset under `LOCAL_DATASET_ROOT` (default `${HOME}/.cache/hugging
 
 `sizeBytes` comes from `directorySizeBytes()`, a recursive walk of the dataset directory. It counts **everything on disk**, including the `.cache/huggingface` bookkeeping a Hub sync leaves behind — the figure answers "what does this cost me on disk", and `IGNORE_DIRS` only governs where datasets are _found_. Symlinks are skipped rather than followed, so a linked-in `videos/` is attributed to whoever owns the bytes instead of being double-counted. Apparent size is summed, not allocated blocks, so it reads slightly under `du` (which also charges for directory inodes). The walk is cheap enough to run inline on every homepage render — ~8 ms for 20 datasets / 4k files — so there is no cache to invalidate.
 
+### Switching the scanned path
+
+`LOCAL_DATASET_ROOT` is the anchor for the stores; which directory is _scanned_ can be switched at runtime from the homepage header (`src/components/dataset-path-switcher.tsx`).
+
+- `src/lib/dataset-locations-store.ts` keeps the alternative paths at `<root>/.xense-viewer/locations.json` (atomic tmp+rename like the other stores) and exposes `resolveBrowsePath(root, requested)`, which accepts the request only when it names a listed location — a cookie is user input, so an unlisted path falls back to the root instead of scanning wherever it points.
+- The selection rides in the `xense-browse-path` cookie. `src/utils/browsePath.ts` holds the cookie name and serializer because the switcher is a client component and the store imports `node:fs` (same split as `i18n/config` vs `i18n/locale-server`).
+- `discoverLocalDatasets(requestedPath?)` scans that one directory and returns `{ root, browsePath, locations, datasets, errors }`. Away from the root, `encodedPath` carries the **absolute** path — `resolveServerLocalDatasetPath` already accepted those, so no file route changes — and a browsed directory that is itself a dataset is listed under its own basename.
+- Routes: `GET/POST/DELETE /api/local-datasets/locations`, `GET /api/local-datasets/browse?path=` (one directory level, names only, for the picker).
+- `DatasetCardGrid` takes `canDelete`; it is false away from the root, hiding both the per-card Delete and the `TrashStrip`, because `local-dataset-trash.ts` guards on the root and would refuse those datasets.
+
 ### Repo IDs and routing
 
 Internally a local dataset is referred to by a `local:`-prefixed `repoId` (legacy wrapper, retained for minimal blast radius across `fetch-data`, `versionUtils`, sidebar, viewer). Helpers in `src/utils/datasetRoute.ts`:
