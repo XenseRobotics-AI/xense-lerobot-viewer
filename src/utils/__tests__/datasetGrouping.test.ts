@@ -9,6 +9,7 @@ import {
   getDatasetPrefix,
   getDatasetTaskName,
   groupDatasetsByPrefix,
+  rankRobotTypes,
 } from "@/utils/datasetGrouping";
 
 const INTEGRITY: Record<DatasetIntegrity["status"], DatasetIntegrity> = {
@@ -208,5 +209,58 @@ describe("groupDatasetsByPrefix", () => {
 
   test("returns an empty array for no datasets", () => {
     expect(groupDatasetsByPrefix([])).toEqual([]);
+  });
+});
+
+describe("rankRobotTypes", () => {
+  test("orders by how many datasets declare each type", () => {
+    const datasets = [
+      makeDataset("TacVerse/a", { robot_type: "bi_rdt_gripper" }),
+      makeDataset("TacVerse/b", { robot_type: "bi_taccap_gripper" }),
+      makeDataset("TacVerse/c", { robot_type: "bi_taccap_gripper" }),
+      makeDataset("TacVerse/d", { robot_type: "bi_rdt_gripper" }),
+      makeDataset("TacVerse/e", { robot_type: "bi_taccap_gripper" }),
+    ];
+    expect(rankRobotTypes(datasets)).toEqual([
+      "bi_taccap_gripper",
+      "bi_rdt_gripper",
+    ]);
+  });
+
+  test("breaks ties on name so the order is stable", () => {
+    const datasets = [
+      makeDataset("TacVerse/a", { robot_type: "xtac_umi_g1" }),
+      makeDataset("TacVerse/b", { robot_type: "bi_rdt_gripper" }),
+    ];
+    expect(rankRobotTypes(datasets)).toEqual(["bi_rdt_gripper", "xtac_umi_g1"]);
+  });
+
+  test("omits datasets with no declared robot type", () => {
+    // Absent means "nothing declared" — never a chip reading `unknown`.
+    const datasets = [
+      makeDataset("TacVerse/a", { robot_type: null }),
+      makeDataset("TacVerse/b", { robot_type: "   " }),
+      makeDataset("TacVerse/c", { robot_type: "bi_rdt_gripper" }),
+    ];
+    expect(rankRobotTypes(datasets)).toEqual(["bi_rdt_gripper"]);
+  });
+});
+
+describe("groupDatasetsByPrefix robot types", () => {
+  test("summarises each group's robot types", () => {
+    const groups = groupDatasetsByPrefix([
+      makeDataset("TacVerse/a", { robot_type: "bi_rdt_gripper" }),
+      makeDataset("TacVerse/b", { robot_type: "bi_taccap_gripper" }),
+      makeDataset("TacVerse/c", { robot_type: "bi_taccap_gripper" }),
+      makeDataset("XTac-UMI/d", { robot_type: "xtac_umi_g1" }),
+    ]);
+    const tacverse = groups.find((g) => g.prefix === "TacVerse");
+    expect(tacverse?.robotTypes).toEqual([
+      "bi_taccap_gripper",
+      "bi_rdt_gripper",
+    ]);
+    expect(groups.find((g) => g.prefix === "XTac-UMI")?.robotTypes).toEqual([
+      "xtac_umi_g1",
+    ]);
   });
 });

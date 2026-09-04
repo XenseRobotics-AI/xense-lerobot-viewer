@@ -20,6 +20,7 @@ import {
   getDatasetTaskName,
 } from "@/utils/datasetGrouping";
 import { formatBytes } from "@/utils/byteSize";
+import { expectedShapeOf } from "@/lib/dataset-facets";
 import {
   BUCKET_ORDER,
   CAPTURE_CUTOFF,
@@ -651,6 +652,7 @@ export default function DatasetCardGrid({
           {filtered.map((ds) => {
             const health = describeIntegrity(ds.integrity, t);
             const taskName = getDatasetTaskName(ds.relativePath);
+            const expectedShape = expectedShapeOf(ds.robot_type);
             const borderTone =
               health.tone === "error"
                 ? "border-red-500/60 hover:border-red-400"
@@ -743,14 +745,35 @@ export default function DatasetCardGrid({
                   )}
                 </div>
 
-                {/* Shape anomaly — sits under the health badge rather than
-                    beside it, because the two are independent: a
-                    half-configured capture is perfectly healthy on disk, which
-                    is exactly why it needs saying out loud. */}
-                {ds.facets.shapeAnomaly && (
-                  <div className="absolute right-2 top-9 z-20 rounded-full bg-amber-400/90 px-2 py-0.5 text-[10px] font-semibold text-slate-900 shadow">
+                {/* Shape — sits under the health badge rather than beside
+                    it, because the two are independent: a half-configured
+                    capture is perfectly healthy on disk, which is exactly why
+                    it needs saying out loud.
+
+                    Always rendered, because the shape is now what tells the
+                    robot types apart (TacCap and RDT differ only in stream
+                    count). Amber is reserved for a shape that contradicts the
+                    dataset's own robot type; a matching one stays neutral so
+                    the warning still reads as a warning. */}
+                {ds.facets.stateDim !== null && (
+                  <div
+                    title={
+                      ds.facets.shapeAnomaly && expectedShape
+                        ? t("grid.shapeExpected", {
+                            robot: ds.robot_type ?? "",
+                            dim: expectedShape.stateDim,
+                            streams: expectedShape.videoStreams,
+                          })
+                        : undefined
+                    }
+                    className={`absolute right-2 top-9 z-20 rounded-full px-2 py-0.5 text-[10px] font-semibold shadow ${
+                      ds.facets.shapeAnomaly
+                        ? "bg-amber-400/90 text-slate-900"
+                        : "bg-black/70 text-slate-200 ring-1 ring-white/15 backdrop-blur-sm"
+                    }`}
+                  >
                     {t("grid.shapeBadge", {
-                      dim: ds.facets.stateDim ?? "?",
+                      dim: ds.facets.stateDim,
                       streams: ds.facets.videoStreams,
                     })}
                   </div>

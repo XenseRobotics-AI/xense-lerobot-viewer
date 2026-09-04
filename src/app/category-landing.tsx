@@ -197,6 +197,33 @@ export default function CategoryLanding({
                 </div>
 
                 <div className="relative z-20 w-full px-3 py-3 text-slate-100">
+                  {/* Robot types in this source — a source directory is an
+                      owner, not a rig, and one can hold several. Named here so
+                      the rig is readable without drilling in. Capped at two
+                      because the card is 4-up on a wide screen; the rest are
+                      counted rather than wrapped into a second row. */}
+                  {group.robotTypes.length > 0 && (
+                    <div className="mb-1.5 flex flex-wrap items-center gap-1">
+                      {group.robotTypes.slice(0, 2).map((robot) => (
+                        <span
+                          key={robot}
+                          className="rounded bg-cyan-500/20 px-1.5 py-0.5 text-[10px] text-cyan-200 ring-1 ring-cyan-400/20"
+                        >
+                          {robot}
+                        </span>
+                      ))}
+                      {group.robotTypes.length > 2 && (
+                        <span
+                          className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-slate-300"
+                          title={group.robotTypes.join(", ")}
+                        >
+                          {t("home.groupRobotsMore", {
+                            count: group.robotTypes.length - 2,
+                          })}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   <div className="flex items-center gap-1.5">
                     <svg
                       className="h-4 w-4 shrink-0 text-cyan-300"
