@@ -11,6 +11,10 @@ import {
   normalizeTags,
 } from "@/lib/dataset-tags";
 import { pickThumbnailVideoKey } from "@/lib/thumbnail-camera";
+import {
+  readLocations,
+  resolveBrowsePath,
+} from "@/lib/dataset-locations-store";
 import type { DatasetFacets } from "@/lib/dataset-facets";
 import { computeFacets } from "@/lib/dataset-facets-server";
 
@@ -44,7 +48,14 @@ type LocalDatasetInfoJson = {
 };
 
 export type LocalDatasetSummary = {
+  /** Path relative to the browsed directory — what the homepage groups on. */
   relativePath: string;
+  /**
+   * Route segment: base64url of the relative path when browsing the default
+   * root, of the **absolute** path when browsing anywhere else.
+   * `resolveServerLocalDatasetPath` accepts either, so the file routes serve
+   * both without change.
+   */
   encodedPath: string;
   codebase_version: string;
   robot_type: string | null;
@@ -65,7 +76,12 @@ export type LocalDatasetSummary = {
 };
 
 export type LocalDatasetsResponse = {
+  /** The default root, `LOCAL_DATASET_ROOT`. Anchors the stores. */
   root: string;
+  /** The directory actually scanned — the root, or a switched-to location. */
+  browsePath: string;
+  /** Alternative directories the switcher offers, in the order added. */
+  locations: string[];
   datasets: LocalDatasetSummary[];
   errors: { path: string; message: string }[];
 };
@@ -191,6 +207,7 @@ async function walkForDatasets(
   depth: number,
   found: LocalDatasetSummary[],
   errors: { path: string; message: string }[],
+  useAbsoluteRoutes = false,
 ): Promise<void> {
   if (depth > MAX_SCAN_DEPTH) return;
 
@@ -207,12 +224,16 @@ async function walkForDatasets(
 
   const info = await readDatasetInfo(currentDir);
   if (info && typeof info.codebase_version === "string") {
-    const relativePath = path
-      .relative(rootDir, currentDir)
-      .split(path.sep)
-      .join("/");
+    // The browsed directory can itself be a dataset (someone switched straight
+    // to `/archive/TacVerse/TacVerse-RDT`); it has no relative path, so it is
+    // named after itself.
+    const relativePath =
+      path.relative(rootDir, currentDir).split(path.sep).join("/") ||
+      (useAbsoluteRoutes ? path.basename(currentDir) : "");
     if (relativePath) {
-      const encodedPath = encodeLocalDatasetPath(relativePath);
+      const encodedPath = encodeLocalDatasetPath(
+        useAbsoluteRoutes ? currentDir : relativePath,
+      );
       const [integrity, tags, sizeBytes, facets] = await Promise.all([
         probeIntegrity(currentDir, info),
         readDatasetTags(currentDir),
@@ -260,6 +281,7 @@ async function walkForDatasets(
           depth + 1,
           found,
           errors,
+          useAbsoluteRoutes,
         ),
       ),
   );
@@ -279,13 +301,23 @@ export function resolveLocalDatasetRoot(): string {
   return path.resolve(configuredRoot);
 }
 
-export async function discoverLocalDatasets(): Promise<LocalDatasetsResponse> {
+/**
+ * Scan one directory for datasets: the default root, or the location named by
+ * `requestedBrowsePath` when it is one the switcher knows (see
+ * `resolveBrowsePath` — an unknown value falls back to the root rather than
+ * scanning wherever it points).
+ */
+export async function discoverLocalDatasets(
+  requestedBrowsePath?: string,
+): Promise<LocalDatasetsResponse> {
   let root: string;
   try {
     root = resolveLocalDatasetRoot();
   } catch (err) {
     return {
       root: "",
+      browsePath: "",
+      locations: [],
       datasets: [],
       errors: [
         {
@@ -299,16 +331,27 @@ export async function discoverLocalDatasets(): Promise<LocalDatasetsResponse> {
     };
   }
 
+  const [locations, browsePath] = await Promise.all([
+    readLocations(root),
+    resolveBrowsePath(root, requestedBrowsePath),
+  ]);
+  const paths = locations.map((entry) => entry.path);
+  const isRoot = browsePath === root;
+
   try {
-    await fs.access(root);
+    await fs.access(browsePath);
   } catch {
     return {
       root,
+      browsePath,
+      locations: paths,
       datasets: [],
       errors: [
         {
-          path: root,
-          message: `Local dataset root does not exist: ${root}`,
+          path: browsePath,
+          message: isRoot
+            ? `Local dataset root does not exist: ${browsePath}`
+            : `Dataset location does not exist: ${browsePath}`,
         },
       ],
     };
@@ -316,8 +359,8 @@ export async function discoverLocalDatasets(): Promise<LocalDatasetsResponse> {
 
   const datasets: LocalDatasetSummary[] = [];
   const errors: { path: string; message: string }[] = [];
-  await walkForDatasets(root, root, 0, datasets, errors);
+  await walkForDatasets(browsePath, browsePath, 0, datasets, errors, !isRoot);
   datasets.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 
-  return { root, datasets, errors };
+  return { root, browsePath, locations: paths, datasets, errors };
 }

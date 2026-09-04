@@ -67,6 +67,31 @@ LOCAL_DATASET_ROOT=/data/lerobot bun dev
 
 Datasets are discovered by recursively scanning for `meta/info.json` (up to 3 levels deep). The `calibration/` directory is skipped automatically.
 
+### Switching the path without a restart
+
+`LOCAL_DATASET_ROOT` is fixed when the server starts, so the **Change** button
+beside the "Browsing …" line on the homepage points the scan somewhere else —
+an archive drive, a fresh conversion in `/archive/TacVerse` — without moving
+the data or restarting:
+
+- Pick any remembered path to switch to it, or add a new one: **Choose
+  folder…** opens the desktop's own folder dialog (`zenity`, or `kdialog` on
+  KDE) and the chosen path is remembered and switched to in one go. The path
+  can also be typed.
+- The dialog opens on the desktop of the machine running the server — the one
+  holding the datasets — whichever address the browser used to get there, and
+  only one can be open at a time. A browser cannot supply an absolute path by
+  itself (`webkitdirectory` and the File System Access API both withhold it),
+  which is why the server opens the dialog. If the server has no desktop
+  session, or the browser is on another machine, type the path instead.
+- The selected path is scanned exactly like the root, including a path that is
+  itself a single dataset. Its episodes are addressed by absolute path
+  (`/_local/<base64url(absolute path)>/episode_N`).
+- The list lives in `<root>/.xense-viewer/locations.json` and the selection in
+  a cookie, so both survive a restart. The default root stays the anchor: the
+  list, the corpus history and the trash are always written there, and datasets
+  outside it have no Delete button because the trash would refuse them.
+
 ### Downloading datasets
 
 Use the standard `huggingface-cli` to populate the cache:
