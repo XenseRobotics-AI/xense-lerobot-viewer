@@ -212,6 +212,24 @@ export const en = {
     "Ignore the local commit check and fetch the dataset again",
   "repofetch.another": "Download another",
 
+  // ── dataset path switcher ───────────────────────────────────────────────
+  "pathswitch.button": "Change",
+  "pathswitch.title": "Change the dataset path",
+  "pathswitch.hint":
+    "Scan a different directory. Pick one below, or give a path to browse and remember.",
+  "pathswitch.defaultRoot": "default",
+  "pathswitch.forget": "Forget this path",
+  "pathswitch.forgetAria": "Forget {path}",
+  "pathswitch.placeholder": "/absolute/path/to/datasets",
+  "pathswitch.inputAria": "Dataset path",
+  "pathswitch.use": "Use",
+  "pathswitch.useThis": "Use this",
+  "pathswitch.browse": "Browse…",
+  "pathswitch.browseClose": "Close",
+  "pathswitch.up": "Up",
+  "pathswitch.datasetBadge": "dataset",
+  "pathswitch.noSubdirs": "No subdirectories.",
+
   // ── homepage: trash ─────────────────────────────────────────────────────
   "trash.dialogTitle": "Delete dataset",
   "trash.moveBody": "Moves the whole directory into {path}.",

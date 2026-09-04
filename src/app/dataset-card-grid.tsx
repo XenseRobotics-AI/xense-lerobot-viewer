@@ -40,6 +40,12 @@ type DatasetCardGridProps = {
   root: string;
   prefix: string;
   datasets: LocalDatasetSummary[];
+  /**
+   * False while browsing a switched-to location: the trash lives under the
+   * default root and refuses anything outside it, so the card hides the
+   * button rather than offering an action that cannot work.
+   */
+  canDelete: boolean;
   onBack: () => void;
 };
 
@@ -114,6 +120,7 @@ export default function DatasetCardGrid({
   root,
   prefix,
   datasets,
+  canDelete,
   onBack,
 }: DatasetCardGridProps) {
   const { t, tpRich, tRich } = useLocale();
@@ -633,7 +640,7 @@ export default function DatasetCardGrid({
         </div>
       )}
 
-      <TrashStrip refreshKey={trashVersion} />
+      {canDelete && <TrashStrip refreshKey={trashVersion} />}
 
       {filtered.length === 0 ? (
         <div className="rounded-md border border-white/10 bg-[var(--surface-1)]/40 p-10 text-center text-slate-400">
@@ -705,33 +712,35 @@ export default function DatasetCardGrid({
                     </svg>
                     {t("grid.tagsButton")}
                   </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setDeletingDatasetKey(ds.encodedPath);
-                    }}
-                    title={t("grid.deleteTitle")}
-                    aria-label={t("grid.deleteAria", {
-                      path: ds.relativePath,
-                    })}
-                    className="inline-flex items-center gap-1 rounded-full bg-black/70 px-2 py-0.5 text-[10px] font-medium text-slate-200 backdrop-blur-sm transition-colors hover:bg-red-500/90 hover:text-white"
-                  >
-                    <svg
-                      className="h-3 w-3"
-                      viewBox="0 0 20 20"
-                      fill="currentColor"
-                      aria-hidden
+                  {canDelete && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setDeletingDatasetKey(ds.encodedPath);
+                      }}
+                      title={t("grid.deleteTitle")}
+                      aria-label={t("grid.deleteAria", {
+                        path: ds.relativePath,
+                      })}
+                      className="inline-flex items-center gap-1 rounded-full bg-black/70 px-2 py-0.5 text-[10px] font-medium text-slate-200 backdrop-blur-sm transition-colors hover:bg-red-500/90 hover:text-white"
                     >
-                      <path
-                        fillRule="evenodd"
-                        d="M8.5 2a1 1 0 00-.95.68L7.2 3.75H4.5a.75.75 0 000 1.5h11a.75.75 0 000-1.5h-2.7l-.35-1.07A1 1 0 0011.5 2h-3zM5.75 6.75h8.5l-.6 8.4A2 2 0 0111.66 17H8.34a2 2 0 01-1.99-1.85l-.6-8.4z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
-                    {t("grid.deleteButton")}
-                  </button>
+                      <svg
+                        className="h-3 w-3"
+                        viewBox="0 0 20 20"
+                        fill="currentColor"
+                        aria-hidden
+                      >
+                        <path
+                          fillRule="evenodd"
+                          d="M8.5 2a1 1 0 00-.95.68L7.2 3.75H4.5a.75.75 0 000 1.5h11a.75.75 0 000-1.5h-2.7l-.35-1.07A1 1 0 0011.5 2h-3zM5.75 6.75h8.5l-.6 8.4A2 2 0 0111.66 17H8.34a2 2 0 01-1.99-1.85l-.6-8.4z"
+                          clipRule="evenodd"
+                        />
+                      </svg>
+                      {t("grid.deleteButton")}
+                    </button>
+                  )}
                 </div>
 
                 {/* Shape anomaly — sits under the health badge rather than

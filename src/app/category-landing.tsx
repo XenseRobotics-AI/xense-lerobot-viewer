@@ -6,6 +6,7 @@ import HoverPlayVideo from "@/components/hover-play-video";
 import CorpusDashboard from "@/components/corpus-dashboard";
 import RepoFetchPanel from "@/components/repo-fetch-panel";
 import LanguageSwitcher from "@/components/language-switcher";
+import DatasetPathSwitcher from "@/components/dataset-path-switcher";
 import { formatCompact } from "@/utils/corpusStats";
 import type { DailyDelta } from "@/utils/corpusHistory";
 import { useLocale } from "@/context/locale-context";
@@ -18,6 +19,8 @@ type OverallCounts = {
 
 type CategoryLandingProps = {
   root: string;
+  browsePath: string;
+  locations: string[];
   groups: DatasetGroup[];
   overall: OverallCounts;
   errors: { path: string; message: string }[];
@@ -32,6 +35,8 @@ function formatTotalEpisodes(value: number): string {
 
 export default function CategoryLanding({
   root,
+  browsePath,
+  locations,
   groups,
   overall,
   errors,
@@ -66,8 +71,15 @@ export default function CategoryLanding({
           </h1>
           <p className="mt-2 text-sm text-slate-400">
             {tRich("home.browsing", {
-              root: <span className="font-mono text-cyan-200/90">{root}</span>,
+              root: (
+                <span className="font-mono text-cyan-200/90">{browsePath}</span>
+              ),
             })}
+            <DatasetPathSwitcher
+              root={root}
+              browsePath={browsePath}
+              locations={locations}
+            />
           </p>
         </div>
         <LanguageSwitcher className="mt-1.5" />
@@ -137,7 +149,9 @@ export default function CategoryLanding({
           {groups.length === 0 ? (
             <>
               {tRich("home.emptyTitle", {
-                root: <span className="font-mono text-slate-200">{root}</span>,
+                root: (
+                  <span className="font-mono text-slate-200">{browsePath}</span>
+                ),
               })}
               <br />
               <span className="text-xs text-slate-500">
