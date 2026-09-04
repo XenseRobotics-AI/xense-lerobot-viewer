@@ -69,7 +69,9 @@ export default function CategoryLanding({
           <h1 className="mt-3 text-xl font-medium tracking-tight text-slate-300">
             {t("home.subtitle")}
           </h1>
-          <p className="mt-2 text-sm text-slate-400">
+          {/* A div, not a p: DatasetPathSwitcher renders a popover div, which
+              is invalid inside a paragraph and breaks hydration. */}
+          <div className="mt-2 text-sm text-slate-400">
             {tRich("home.browsing", {
               root: (
                 <span className="font-mono text-cyan-200/90">{browsePath}</span>
@@ -80,7 +82,7 @@ export default function CategoryLanding({
               browsePath={browsePath}
               locations={locations}
             />
-          </p>
+          </div>
         </div>
         <LanguageSwitcher className="mt-1.5" />
       </header>
