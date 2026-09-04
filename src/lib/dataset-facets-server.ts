@@ -98,11 +98,16 @@ export async function readCaptureDates(datasetDir: string): Promise<{
   return { capturedFrom: null, capturedTo: null, dateEvidence: "none" };
 }
 
-/** Every facet for one dataset. `features` comes from `meta/info.json`. */
+/**
+ * Every facet for one dataset. `features` and `robotType` both come from
+ * `meta/info.json`; the shape check needs the robot type because what counts as
+ * a correct shape is defined per rig (see `shapeAnomalyOf`).
+ */
 export async function computeFacets(
   datasetDir: string,
   relativePath: string,
   features: Record<string, { shape?: number[] }> | undefined,
+  robotType: string | null,
 ): Promise<DatasetFacets> {
   const stateShape = features?.["observation.state"]?.shape;
   const stateDim =
@@ -117,7 +122,7 @@ export async function computeFacets(
   return {
     bucket: bucketOf(relativePath),
     ...(await readCaptureDates(datasetDir)),
-    shapeAnomaly: shapeAnomalyOf(stateDim, videoKeys.length),
+    shapeAnomaly: shapeAnomalyOf(stateDim, videoKeys.length, robotType),
     stateDim,
     videoStreams: videoKeys.length,
     headStreams,
