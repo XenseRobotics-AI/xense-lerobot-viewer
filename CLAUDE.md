@@ -78,16 +78,52 @@ spelling still resolves. It is shared with `isTacCapRobot` deliberately: two
 matchers that disagree on how a name is read is the failure this file already
 warns about for the URDF predicates.
 
-Note `bi_rdt_gripper` matches none of the URDF predicates, so it gets no **3D
-Replay** tab — no RDT URDF is bundled. Its state layout is the same bimanual
-`left_tcp.*` / `right_tcp.*` / `*_gripper.pos` naming TacCap uses, so the
-Episodes `3D` chart mode and the Action Insights spatial trajectories, which key
-off feature names rather than robot type, work already.
+`bi_rdt_gripper` records the same bimanual `left_tcp.*` / `right_tcp.*` /
+`*_gripper.pos` layout TacCap does, so everything keyed off feature names — the
+Episodes `3D` chart mode, the Action Insights spatial trajectories, and the whole
+of `taccapGripperReplay.ts` — worked for it before any model existed. It now has
+a bundled model too; see **Bundled grippers** below.
 
 Where it surfaces: every dataset card carries the shape as a badge — neutral
 when it matches the robot type, amber when it does not — and the homepage
 category cards list the robot types present in each source, because a source
 directory is an owner rather than a rig and can hold several.
+
+### Bundled grippers (TacCap and RDT)
+
+Two robot types have no arm: what is recorded is a `{side}_tcp` pose plus a
+normalized `{side}_gripper.pos`, so the viewer places a gripper model at each
+recorded TCP and drives one joint. That is a separate scene from the generic
+`RobotScene`, which maps dataset columns onto a full kinematic chain, and its
+assets are project-local rather than fetched from the HF bucket.
+
+Everything gripper-specific lives in one place — `bundledGripperProfile` in
+`src/utils/bundledGrippers.ts`:
+
+|               | `bi_taccap_gripper`                          | `bi_rdt_gripper`                                 |
+| ------------- | -------------------------------------------- | ------------------------------------------------ |
+| asset         | `public/urdf/taccap-grippers/{left,right}/`  | `public/urdf/rdt-gripper/` (one file, both arms) |
+| drive joint   | `joint1` → `0.5047 rad`, `joint2` mimics ×-1 | `R2` → `0.7 rad`, 13 joints mimic it             |
+| root ← TCP    | translation only, **measured**               | rotation + translation, **derived**              |
+| finger colour | baked per side in the two files              | tinted per side after load                       |
+
+`getRobotConfig` returns an empty `urdfUrl` for both, which is the signal to use
+this scene; it must stay in step with `bundledGripperProfile`, and through it
+with `hasURDFSupport`, or a robot whose tab is shown calls `URDFLoader.load("")`.
+
+**The RDT TCP transform is derived from the model's forward kinematics, not
+measured.** TacCap's is a number copied from the collector's `ee_transform.py`;
+no equivalent exists for the RDT gripper anywhere — not in
+`xense-taccap-lerobot`, not as a `taccap_extrinsics.json`, not beside the raw
+HDF5. The jaw midpoint sits `0.2572 m` above `base_link` at the closed pose, and
+the model approaches along its own `+Z` while the canonical TCP frame is
+`+X forward`, so the rotation is an axis cycle rather than the identity TacCap
+gets. Both numbers fail _visibly_ — a gripper detached from its own trail, or
+approaching sideways — and both are a one-constant fix. Replace them when a
+measurement exists; see `public/urdf/rdt-gripper/README.md`.
+
+One URDF serves both RDT arms: `Left_*` / `Right_*` in that model are the two
+jaws of a single gripper, not two arms.
 
 ### Switching the scanned path
 
