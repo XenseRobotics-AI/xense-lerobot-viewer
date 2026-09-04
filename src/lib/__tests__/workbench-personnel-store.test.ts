@@ -66,6 +66,14 @@ describe("workbench personnel store", () => {
     ).toEqual([]);
   });
 
+  test("defaults omitted collector counts to the mapped personnel count", async () => {
+    const filePath = await configPath();
+    await writeWorkbenchPersonnelConfig("TacVerse", validConfig(), filePath);
+
+    const stored = await readWorkbenchPersonnelConfig("TacVerse", filePath);
+    expect(stored.schedules["2026-09-03"][0].collectorCount).toBe(1);
+  });
+
   test.each([
     [
       "invalid calendar dates",
@@ -139,19 +147,70 @@ describe("workbench personnel store", () => {
       "unknown personnel ID",
     ],
     [
-      "non-unit credit factors",
+      "non-positive collector counts",
       () => ({
         ...validConfig(),
         schedules: {
           "2026-09-03": [
             {
               workstation: "A1",
-              members: [{ personId: "zhang-san", creditFactor: 0.5 }],
+              collectorCount: 0,
+              members: [{ personId: "zhang-san", creditFactor: 1 }],
             },
           ],
         },
       }),
-      "creditFactor must be 1",
+      "collectorCount must be a positive integer",
+    ],
+    [
+      "fractional collector counts",
+      () => ({
+        ...validConfig(),
+        schedules: {
+          "2026-09-03": [
+            {
+              workstation: "A1",
+              collectorCount: 1.5,
+              members: [{ personId: "zhang-san", creditFactor: 1 }],
+            },
+          ],
+        },
+      }),
+      "collectorCount must be a positive integer",
+    ],
+    [
+      "collector counts below mapped personnel",
+      () => ({
+        ...validConfig(),
+        schedules: {
+          "2026-09-03": [
+            {
+              workstation: "A1",
+              collectorCount: 1,
+              members: [
+                { personId: "zhang-san", creditFactor: 1 },
+                { personId: "li-si", creditFactor: 1 },
+              ],
+            },
+          ],
+        },
+      }),
+      "collectorCount cannot be less than the mapped personnel count",
+    ],
+    [
+      "non-positive credit factors",
+      () => ({
+        ...validConfig(),
+        schedules: {
+          "2026-09-03": [
+            {
+              workstation: "A1",
+              members: [{ personId: "zhang-san", creditFactor: 0 }],
+            },
+          ],
+        },
+      }),
+      "creditFactor must be a positive number",
     ],
   ])("rejects %s", async (_label, createInput, expectedMessage) => {
     const filePath = await configPath();

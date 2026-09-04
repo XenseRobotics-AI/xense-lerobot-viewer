@@ -10,11 +10,13 @@ import { resolveWorkbenchPersonnelSchedule } from "@/utils/workbenchPersonnel";
 export const WORKBENCH_PERSONNEL_BASELINE_DAY = "1970-01-01";
 export const DEFAULT_WORKBENCH_PERSONNEL_EMAIL = "jay@xenserobotics.com";
 const ANONYMOUS_PERSONNEL_NAME = "匿名";
+const IGNORED_PERSONNEL_WORKSTATIONS = new Set(["ERROR", "N0", "NO"]);
 
 export type WorkbenchPersonnelMappingRow = {
   workstation: string;
   personnel: string;
   email: string;
+  collectorCount: number;
 };
 
 type WorkbenchPersonnelMappingEditorProps = {
@@ -40,11 +42,18 @@ function compareWorkstations(left: string, right: string): number {
   });
 }
 
+function isIgnoredPersonnelWorkstation(workstation: string): boolean {
+  return IGNORED_PERSONNEL_WORKSTATIONS.has(workstation.trim().toUpperCase());
+}
+
 function cleanWorkstationSuggestions(
   workstationSuggestions: readonly string[],
 ): string[] {
   return [...new Set(workstationSuggestions.map((value) => value.trim()))]
-    .filter(Boolean)
+    .filter(
+      (workstation) =>
+        Boolean(workstation) && !isIgnoredPersonnelWorkstation(workstation),
+    )
     .sort(compareWorkstations);
 }
 
@@ -60,16 +69,20 @@ export function buildWorkbenchPersonnelMappingRows(
     config.schedules,
     selectedDay,
   ).assignments;
-  const mappedWorkstations = new Set(
-    assignments.map((assignment) => assignment.workstation),
+  const validAssignments = assignments.filter(
+    (assignment) => !isIgnoredPersonnelWorkstation(assignment.workstation),
   );
-  const rows = assignments.flatMap((assignment) =>
+  const mappedWorkstations = new Set(
+    validAssignments.map((assignment) => assignment.workstation),
+  );
+  const rows = validAssignments.flatMap((assignment) =>
     assignment.members.map((member) => {
       const person = peopleById.get(member.personId);
       return {
         workstation: assignment.workstation,
         personnel: person?.displayName.trim() || ANONYMOUS_PERSONNEL_NAME,
         email: person?.email.trim() || DEFAULT_WORKBENCH_PERSONNEL_EMAIL,
+        collectorCount: assignment.collectorCount ?? assignment.members.length,
       };
     }),
   );
@@ -82,6 +95,7 @@ export function buildWorkbenchPersonnelMappingRows(
       workstation,
       personnel: ANONYMOUS_PERSONNEL_NAME,
       email: DEFAULT_WORKBENCH_PERSONNEL_EMAIL,
+      collectorCount: 1,
     });
   }
 
@@ -102,11 +116,14 @@ function normalizedMappingRows(
   rows: readonly WorkbenchPersonnelMappingRow[],
   workstationSuggestions: readonly string[],
 ): WorkbenchPersonnelMappingRow[] {
-  const normalized = rows.map((row) => ({
-    workstation: row.workstation.trim(),
-    personnel: row.personnel.trim() || ANONYMOUS_PERSONNEL_NAME,
-    email: row.email.trim() || DEFAULT_WORKBENCH_PERSONNEL_EMAIL,
-  }));
+  const normalized = rows
+    .map((row) => ({
+      workstation: row.workstation.trim(),
+      personnel: row.personnel.trim() || ANONYMOUS_PERSONNEL_NAME,
+      email: row.email.trim() || DEFAULT_WORKBENCH_PERSONNEL_EMAIL,
+      collectorCount: row.collectorCount,
+    }))
+    .filter((row) => !isIgnoredPersonnelWorkstation(row.workstation));
   const mappedWorkstations = new Set(
     normalized.map((row) => row.workstation).filter(Boolean),
   );
@@ -118,6 +135,7 @@ function normalizedMappingRows(
         workstation,
         personnel: ANONYMOUS_PERSONNEL_NAME,
         email: DEFAULT_WORKBENCH_PERSONNEL_EMAIL,
+        collectorCount: 1,
       });
     }
   }
@@ -135,6 +153,18 @@ export function buildWorkbenchPersonnelConfigFromMapping(
   );
   const usedIds = new Set(config.people.map((person) => person.id));
   const mappedEmailsByName = new Map<string, string>();
+  const factorByWorkstationAndPerson = new Map<string, number>();
+  for (const assignment of resolveWorkbenchPersonnelSchedule(
+    config.schedules,
+    selectedDay,
+  ).assignments) {
+    for (const member of assignment.members) {
+      factorByWorkstationAndPerson.set(
+        [assignment.workstation, member.personId].join("\u0000"),
+        member.creditFactor,
+      );
+    }
+  }
   const assignmentsByWorkstation = new Map<
     string,
     WorkbenchPersonnelScheduleAssignment
@@ -143,6 +173,13 @@ export function buildWorkbenchPersonnelConfigFromMapping(
   for (const row of normalizedMappingRows(rows, workstationSuggestions)) {
     if (!row.workstation) {
       throw new Error("Workstation is required for every personnel mapping.");
+    }
+    if (!Number.isInteger(row.collectorCount) || row.collectorCount <= 0) {
+      throw new Error(
+        "Original collector count for " +
+          row.workstation +
+          " must be a positive integer.",
+      );
     }
     const mappedEmail = mappedEmailsByName.get(row.personnel);
     if (mappedEmail && mappedEmail.toLowerCase() !== row.email.toLowerCase()) {
@@ -169,20 +206,45 @@ export function buildWorkbenchPersonnelConfigFromMapping(
       person.email = row.email;
     }
 
-    const assignment = assignmentsByWorkstation.get(row.workstation) ?? {
+    const existingAssignment = assignmentsByWorkstation.get(row.workstation);
+    if (
+      existingAssignment &&
+      existingAssignment.collectorCount !== row.collectorCount
+    ) {
+      throw new Error(
+        "Original collector count for " +
+          row.workstation +
+          " must be consistent across personnel mappings.",
+      );
+    }
+    const assignment = existingAssignment ?? {
       workstation: row.workstation,
+      collectorCount: row.collectorCount,
       members: [],
     };
     if (!assignment.members.some((member) => member.personId === person.id)) {
-      assignment.members.push({ personId: person.id, creditFactor: 1 });
+      assignment.members.push({
+        personId: person.id,
+        creditFactor:
+          factorByWorkstationAndPerson.get(
+            [row.workstation, person.id].join("\u0000"),
+          ) ?? 1,
+      });
     }
     assignmentsByWorkstation.set(row.workstation, assignment);
   }
 
-  const schedules = {
-    ...config.schedules,
-    [selectedDay]: Array.from(assignmentsByWorkstation.values()),
-  };
+  const schedules = Object.fromEntries(
+    Object.entries({
+      ...config.schedules,
+      [selectedDay]: Array.from(assignmentsByWorkstation.values()),
+    }).map(([day, assignments]) => [
+      day,
+      assignments.filter(
+        (assignment) => !isIgnoredPersonnelWorkstation(assignment.workstation),
+      ),
+    ]),
+  );
   const referencedPeople = new Set(
     Object.values(schedules).flatMap((assignments) =>
       assignments.flatMap((assignment) =>
@@ -374,8 +436,9 @@ export default function WorkbenchPersonnelMappingEditor({
             </span>
           </div>
           <p className="mt-1 max-w-3xl text-[11px] leading-5 text-slate-500">
-            Each row binds one workstation to one person. Unconfigured dates
-            copy the latest earlier mapping automatically.
+            Each row binds one workstation to one person. Set the original
+            collector count once per workstation; unconfigured dates copy the
+            latest earlier mapping automatically.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -439,6 +502,9 @@ export default function WorkbenchPersonnelMappingEditor({
               <th className="w-40 px-3 py-2.5 font-medium">Workstation</th>
               <th className="px-3 py-2.5 font-medium">Personnel</th>
               <th className="px-3 py-2.5 font-medium">Email</th>
+              <th className="w-36 px-3 py-2.5 font-medium">
+                Original collectors
+              </th>
               <th className="w-24 px-3 py-2.5 font-medium">Action</th>
             </tr>
           </thead>
@@ -499,6 +565,29 @@ export default function WorkbenchPersonnelMappingEditor({
                   />
                 </td>
                 <td className="px-3 py-2.5">
+                  <input
+                    aria-label={"Mapping " + (index + 1) + " collector count"}
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={row.collectorCount}
+                    onChange={(event) => {
+                      const collectorCount = Number(event.target.value);
+                      const workstation = row.workstation;
+                      setRows((current) =>
+                        current.map((item, itemIndex) =>
+                          itemIndex === index ||
+                          (workstation && item.workstation === workstation)
+                            ? { ...item, collectorCount }
+                            : item,
+                        ),
+                      );
+                      setStatus(null);
+                    }}
+                    className="w-full rounded-md border border-white/10 bg-[var(--surface-0)] px-3 py-2 text-slate-100 focus:border-cyan-400 focus:outline-none"
+                  />
+                </td>
+                <td className="px-3 py-2.5">
                   <button
                     type="button"
                     onClick={() => removeRow(index)}
@@ -521,6 +610,7 @@ export default function WorkbenchPersonnelMappingEditor({
               workstation: "",
               personnel: ANONYMOUS_PERSONNEL_NAME,
               email: DEFAULT_WORKBENCH_PERSONNEL_EMAIL,
+              collectorCount: 1,
             },
           ]);
           setStatus(null);

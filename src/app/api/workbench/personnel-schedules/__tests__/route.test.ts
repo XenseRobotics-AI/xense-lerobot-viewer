@@ -59,7 +59,7 @@ describe("workbench personnel schedules route", () => {
             "2026-09-03": [
               {
                 workstation: "A1",
-                members: [{ personId: "person", creditFactor: 0.5 }],
+                members: [{ personId: "person", creditFactor: 0 }],
               },
             ],
           },
@@ -68,6 +68,6 @@ describe("workbench personnel schedules route", () => {
     );
     const payload = (await response.json()) as { error?: string };
     expect(response.status).toBe(400);
-    expect(payload.error).toContain("creditFactor must be 1");
+    expect(payload.error).toContain("creditFactor must be a positive number");
   });
 });

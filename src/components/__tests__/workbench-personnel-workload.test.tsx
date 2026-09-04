@@ -46,9 +46,11 @@ describe("WorkbenchPersonnelWorkload", () => {
     expect(headerPositions.every((position) => position >= 0)).toBeTrue();
     expect(headerPositions).toEqual([...headerPositions].sort((a, b) => a - b));
     expect(html).toContain("张三");
+    expect(html).toContain(">Avg hours</th>");
+    expect(html).toContain('title="Per-person hours"');
+    expect(html).toContain(">Avg target</th>");
+    expect(html).toContain('title="Per-person target hours"');
     expect(html).toContain("A1, B2");
-    expect(html).toContain(">Email</th>");
-    expect(html).toContain("zhang@example.com");
     expect(html).toContain("Personnel bonus total");
     expect(html).toContain("¥+200 🪙");
     expect(html).toContain("达标");

@@ -60,6 +60,7 @@ function personnelConfig(): WorkbenchPersonnelConfig {
       "2026-09-03": [
         {
           workstation: "A1",
+          collectorCount: 2,
           members: [
             { personId: "zhang", creditFactor: 1 },
             { personId: "li", creditFactor: 1 },
@@ -109,25 +110,43 @@ describe("personnel schedule inheritance", () => {
 });
 
 describe("personnel workload rollup", () => {
-  test("credits every co-assigned person with full merged workstation hours", () => {
+  test("divides co-assigned workstation hours evenly by original collectors", () => {
+    const config = personnelConfig();
+    config.schedules["2026-09-03"][0].members[1].creditFactor = 3;
     const result = computeWorkbenchPersonnelRollup(
       [
         dataset("robot-1", [{ day: "2026-09-03", hours: 2 }]),
         dataset("robot-2", [{ day: "2026-09-03", hours: 4 }]),
       ],
       { "robot-1": "A1", "robot-2": "A1" },
-      personnelConfig(),
+      config,
       { startDate: "2026-09-03", endDate: "2026-09-04" },
       rules,
     );
 
     expect(result.rows.map((row) => [row.personnel, row.hours])).toEqual([
-      ["李四", 6],
-      ["张三", 6],
+      ["李四", 3],
+      ["张三", 3],
     ]);
-    expect(result.rows.every((row) => row.targetHours === 6)).toBeTrue();
-    expect(result.rows.every((row) => row.reward.amount === 20)).toBeTrue();
-    expect(result.totalBonus).toBe(40);
+    expect(result.rows.every((row) => row.targetHours === 3)).toBeTrue();
+    expect(result.rows.every((row) => row.reward.amount === 10)).toBeTrue();
+    expect(result.rows.every((row) => row.durationBonus === 10)).toBeTrue();
+    expect(result.totalBonus).toBe(20);
+  });
+
+  test("divides workstation hours by the original collector count", () => {
+    const config = personnelConfig();
+    config.schedules["2026-09-03"][0].collectorCount = 4;
+
+    const result = computeWorkbenchPersonnelRollup(
+      [dataset("robot-1", [{ day: "2026-09-03", hours: 6 }])],
+      { "robot-1": "A1" },
+      config,
+      { startDate: "2026-09-03", endDate: "2026-09-04" },
+      rules,
+    );
+
+    expect(result.rows.map((row) => row.hours)).toEqual([1.5, 1.5]);
   });
 
   test("adds hours across changed workstations but counts one target day per person", () => {
@@ -160,7 +179,7 @@ describe("personnel workload rollup", () => {
     expect(zhang).toMatchObject({
       hours: 6,
       scheduledDays: 2,
-      targetHours: 12,
+      targetHours: 15,
       workstations: ["A1", "B2", "C3"],
     });
     expect(result.unattributedWorkstations).toEqual([
@@ -168,7 +187,7 @@ describe("personnel workload rollup", () => {
     ]);
   });
 
-  test("uses the legacy left-SN workstation mapping when robot_id is absent", () => {
+  test("uses the legacy left-SN workstation mapping with normalized credits", () => {
     const legacy = dataset("legacy", [{ day: "2026-09-03", hours: 6 }]);
     legacy.robotId = null;
     legacy.leftGripperSn = "left-sn";
@@ -180,7 +199,7 @@ describe("personnel workload rollup", () => {
       rules,
     );
 
-    expect(result.rows.every((row) => row.hours === 6)).toBeTrue();
+    expect(result.rows.every((row) => row.hours === 3)).toBeTrue();
     expect(result.unattributedHours).toBe(0);
   });
 
@@ -200,7 +219,7 @@ describe("personnel workload rollup", () => {
 
     expect(result.rows).toHaveLength(2);
     expect(result.rows.every((row) => row.hours === 0)).toBeTrue();
-    expect(result.rows.every((row) => row.reward.amount === -10)).toBeTrue();
+    expect(result.rows.every((row) => row.reward.amount === -5)).toBeTrue();
     expect(result.unattributedHours).toBe(0);
   });
 });

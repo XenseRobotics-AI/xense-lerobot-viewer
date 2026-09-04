@@ -12,7 +12,9 @@ import {
   readWorkbenchRewardRules,
 } from "@/lib/workbench-reward-store";
 import { readWorkbenchPersonnelConfig } from "@/lib/workbench-personnel-store";
-import { bucketOf } from "@/lib/dataset-facets";
+import { readWorkbenchTacFlowScoreLedger } from "@/lib/workbench-score-ledger";
+import type { WorkbenchDatasetScore } from "@/types/workbench-score.types";
+import { bucketOf, type DateEvidence } from "@/lib/dataset-facets";
 import { computeCorpusStats } from "@/utils/corpusStats";
 import {
   computeDailyDelta,
@@ -25,7 +27,10 @@ import {
 } from "@/utils/datasetGrouping";
 import {
   workbenchDatasetSuffixDay,
+  workbenchDatasetSourceKey,
+  workbenchDatasetSourceLabel,
   type WorkbenchDailyAddition,
+  type WorkbenchDatasetSourceKey,
 } from "@/utils/workbenchRollup";
 import {
   filterWorkbenchStatisticsDatasets,
@@ -54,6 +59,13 @@ type WorkbenchDatasetSummary = Awaited<
   uploaderDisplayName?: string | null;
   durationHours?: number | null;
   dailyAdditions?: WorkbenchDailyAddition[];
+  tacflowScore?: WorkbenchDatasetScore;
+  source?: WorkbenchDatasetSourceKey;
+  sourceLabel?: string;
+  captureSpan?: { from: string; to: string } | null;
+  dateEvidence?: DateEvidence;
+  capturedFrom?: string | null;
+  capturedTo?: string | null;
 };
 
 export type WorkbenchStatisticsResponseFilter =
@@ -103,8 +115,10 @@ function latestDataUpdatedAt(
 
 function isTacCapReplayDatasetPath(relativePath: string): boolean {
   return (
-    relativePath.split(/[\\/]+/u).filter(Boolean).at(-1) ===
-    TACCAP_REPLAY_DATASET_LEAF
+    relativePath
+      .split(/[\\/]+/u)
+      .filter(Boolean)
+      .at(-1) === TACCAP_REPLAY_DATASET_LEAF
   );
 }
 
@@ -169,8 +183,20 @@ function applyCatalogMetadata(
   dailyAdditions: WorkbenchDailyAddition[] = [],
 ): WorkbenchDatasetSummary {
   const metadata = metadataFromCatalogEntry(remote);
+  const source = workbenchDatasetSourceKey(dataset.relativePath);
+  const capturedFrom = dataset.facets.capturedFrom;
+  const capturedTo = dataset.facets.capturedTo;
   return {
     ...dataset,
+    source,
+    sourceLabel: workbenchDatasetSourceLabel(source),
+    captureSpan:
+      capturedFrom && capturedTo
+        ? { from: capturedFrom, to: capturedTo }
+        : null,
+    dateEvidence: dataset.facets.dateEvidence,
+    capturedFrom,
+    capturedTo,
     codebase_version: dataset.codebase_version,
     robot_type:
       typeof remote?.robotType === "string"
@@ -296,6 +322,18 @@ export async function GET(request: Request): Promise<Response> {
       discovery.root,
     );
     const personnelConfig = await readWorkbenchPersonnelConfig(organization);
+    let scoreEntries = new Map<string, WorkbenchDatasetScore>();
+    try {
+      const ledger = await readWorkbenchTacFlowScoreLedger(
+        organization,
+        discovery.root,
+      );
+      scoreEntries = new Map(
+        ledger.entries.map((entry) => [entry.datasetPath, entry]),
+      );
+    } catch {
+      // A corrupt or absent score ledger must not hide Workbench statistics.
+    }
     const catalog = await readCatalogByRepo(discovery.root, organization);
     const workbenchDatasets: WorkbenchDatasetSummary[] = await Promise.all(
       datasets.map(async (dataset) => {
@@ -317,6 +355,10 @@ export async function GET(request: Request): Promise<Response> {
         );
       }),
     );
+    for (const dataset of workbenchDatasets) {
+      const score = scoreEntries.get(dataset.relativePath);
+      if (score) dataset.tacflowScore = score;
+    }
     workbenchDatasets.sort((left, right) => {
       const leftCatalog = catalogEntryForLocalDataset(
         catalog,

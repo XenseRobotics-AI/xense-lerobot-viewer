@@ -6,14 +6,25 @@ import type {
   WorkbenchPersonnelScheduleAssignment,
   WorkbenchPersonnelSchedules,
 } from "@/types/workbench-personnel.types";
-import type {
-  WorkbenchRollupDataset,
-  WorkbenchRollupDateRange,
+import {
+  workbenchDayKey,
+  workbenchDatasetSuffixDay,
+  workbenchDatasetRangeContributions,
+  type WorkbenchDailyAddition,
+  type WorkbenchRollupDataset,
+  type WorkbenchRollupDateRange,
 } from "@/utils/workbenchRollup";
 import {
+  allocateWorkbenchCents,
   evaluateWorkbenchRewardRules,
+  qualityBonusForGrade,
+  roundWorkbenchMoney,
   type WorkbenchRewardRulesConfig,
 } from "@/utils/workbenchRewards";
+import type {
+  WorkbenchDatasetScore,
+  WorkbenchQualitySettlement,
+} from "@/types/workbench-score.types";
 
 const DAY_MS = 86_400_000;
 
@@ -22,6 +33,7 @@ function cloneAssignments(
 ): WorkbenchPersonnelScheduleAssignment[] {
   return assignments.map((assignment) => ({
     workstation: assignment.workstation,
+    collectorCount: assignment.collectorCount,
     members: assignment.members.map((member) => ({ ...member })),
   }));
 }
@@ -81,20 +93,27 @@ export function computeWorkbenchPersonnelRollup(
   personnelConfig: Pick<WorkbenchPersonnelConfig, "people" | "schedules">,
   range: WorkbenchRollupDateRange,
   rewardRules: WorkbenchRewardRulesConfig,
+  datasetScores: ReadonlyMap<string, WorkbenchDatasetScore> = new Map(),
 ): WorkbenchPersonnelRollup {
   const workstationHours = new Map<string, number>();
+  const datasetAdditions = new Map<string, WorkbenchDailyAddition[]>();
   for (const dataset of datasets) {
     const workstationKey =
       dataset.robotId?.trim() || dataset.leftGripperSn?.trim();
     const workstation = workstationKey
       ? workstationMappings[workstationKey]?.trim()
       : "";
-    for (const addition of dataset.dailyAdditions ?? []) {
-      if (range.startDate && addition.day < range.startDate) continue;
-      if (range.endDate && addition.day >= range.endDate) continue;
+    const additions = workbenchDatasetRangeContributions(dataset, range).filter(
+      (addition) => {
+        const hours = Number(addition.hours);
+        return Number.isFinite(hours) && hours > 0;
+      },
+    );
+    if (additions.length > 0)
+      datasetAdditions.set(dataset.relativePath, additions);
+    for (const addition of additions) {
       const hours = Number(addition.hours);
-      if (!Number.isFinite(hours) || hours <= 0) continue;
-      const key = `${addition.day}\u0000${workstation || "—"}`;
+      const key = [addition.day, workstation || "—"].join("\u0000");
       workstationHours.set(key, (workstationHours.get(key) ?? 0) + hours);
     }
   }
@@ -106,12 +125,21 @@ export function computeWorkbenchPersonnelRollup(
     workstations: Set<string>;
     scheduledDays: Set<string>;
     hours: number;
+    targetHours: number;
+    durationBonus: number;
   };
   const peopleById = new Map(
     personnelConfig.people.map((person) => [person.id, person]),
   );
   const rows = new Map<string, MutableRow>();
   const unattributed = new Map<string, number>();
+  type MutableWorkstation = {
+    hours: number;
+    targetHours: number;
+    assignmentDays: number;
+    memberShareSums: Map<string, number>;
+  };
+  const workstationRollups = new Map<string, MutableWorkstation>();
 
   for (const day of daysInRange(range)) {
     const schedule = resolveWorkbenchPersonnelSchedule(
@@ -126,9 +154,35 @@ export function computeWorkbenchPersonnelRollup(
     );
 
     for (const assignment of schedule.assignments) {
+      const mappedCollectorCount = assignment.members.length;
+      const configuredCollectorCount = assignment.collectorCount;
+      const collectorCount =
+        typeof configuredCollectorCount === "number" &&
+        Number.isInteger(configuredCollectorCount) &&
+        configuredCollectorCount > 0 &&
+        configuredCollectorCount >= mappedCollectorCount
+          ? configuredCollectorCount
+          : mappedCollectorCount;
+      const workstationKey = assignment.workstation.trim();
+      const workstationRollup = workstationRollups.get(workstationKey) ?? {
+        hours: 0,
+        targetHours: 0,
+        assignmentDays: 0,
+        memberShareSums: new Map<string, number>(),
+      };
+      workstationRollup.hours +=
+        workstationHours.get([day, assignment.workstation].join("\u0000")) ?? 0;
+      workstationRollup.targetHours += rewardRules.dailyTargetHours;
+      workstationRollup.assignmentDays += 1;
+
       for (const member of assignment.members) {
         const person = peopleById.get(member.personId);
         if (!person) continue;
+        workstationRollup.memberShareSums.set(
+          person.id,
+          (workstationRollup.memberShareSums.get(person.id) ?? 0) +
+            1 / collectorCount,
+        );
         const row = rows.get(person.id) ?? {
           personId: person.id,
           personnel: person.displayName,
@@ -136,14 +190,18 @@ export function computeWorkbenchPersonnelRollup(
           workstations: new Set<string>(),
           scheduledDays: new Set<string>(),
           hours: 0,
+          targetHours: 0,
+          durationBonus: 0,
         };
         row.workstations.add(assignment.workstation);
         row.scheduledDays.add(day);
         row.hours +=
-          (workstationHours.get(`${day}\u0000${assignment.workstation}`) ?? 0) *
-          member.creditFactor;
+          (workstationHours.get([day, assignment.workstation].join("\u0000")) ??
+            0) / collectorCount;
+        row.targetHours += rewardRules.dailyTargetHours / collectorCount;
         rows.set(person.id, row);
       }
+      workstationRollups.set(workstationKey, workstationRollup);
     }
 
     for (const [key, hours] of workstationHours) {
@@ -154,16 +212,125 @@ export function computeWorkbenchPersonnelRollup(
     }
   }
 
+  for (const workstation of workstationRollups.values()) {
+    const workstationReward = evaluateWorkbenchRewardRules(
+      workstation.hours,
+      workstation.targetHours,
+      rewardRules,
+    );
+    if (workstation.assignmentDays <= 0) continue;
+    for (const [personId, shareSum] of workstation.memberShareSums) {
+      const row = rows.get(personId);
+      if (!row) continue;
+      row.durationBonus +=
+        workstationReward.amount * (shareSum / workstation.assignmentDays);
+    }
+  }
+
+  const qualityByPerson = new Map<string, number>();
+  const qualitySettlements: WorkbenchQualitySettlement[] = [];
+  for (const [datasetPath, score] of datasetScores) {
+    const dataset = datasets.find(
+      (entry) => entry.relativePath === datasetPath,
+    );
+    if (!dataset) continue;
+    const addition = datasetAdditions.get(datasetPath)?.[0];
+    const datasetDay =
+      addition?.day ??
+      workbenchDatasetSuffixDay(dataset.relativePath, dataset.lastModified) ??
+      workbenchDayKey(dataset.lastModified);
+    if (
+      !datasetDay ||
+      (range.startDate && datasetDay < range.startDate) ||
+      (range.endDate && datasetDay >= range.endDate)
+    )
+      continue;
+    if (score.status !== "scored" || !score.grade) {
+      qualitySettlements.push({
+        datasetPath,
+        grade: score.grade,
+        pool: 0,
+        allocated: false,
+        status: "pending",
+        allocations: {},
+      });
+      continue;
+    }
+    const key = dataset.robotId?.trim() || dataset.leftGripperSn?.trim();
+    const workstation = key ? workstationMappings[key]?.trim() : "";
+    const assignment = resolveWorkbenchPersonnelSchedule(
+      personnelConfig.schedules,
+      datasetDay,
+    ).assignments.find((entry) => entry.workstation === workstation);
+    const pool = roundWorkbenchMoney(
+      qualityBonusForGrade(score.grade, rewardRules.qualityBonusByGrade),
+    );
+    const members =
+      assignment?.members.filter((member) => peopleById.has(member.personId)) ??
+      [];
+    if (members.length === 0 || !workstation) {
+      qualitySettlements.push({
+        datasetPath,
+        grade: score.grade,
+        pool,
+        allocated: false,
+        status: "unassigned",
+        allocations: {},
+      });
+      continue;
+    }
+    const cents = allocateWorkbenchCents(
+      Math.round(pool * 100),
+      members.map((member) => member.creditFactor),
+    );
+    const allocations: Record<string, number> = {};
+    members.forEach((member, index) => {
+      allocations[member.personId] =
+        (allocations[member.personId] ?? 0) + cents[index];
+      qualityByPerson.set(
+        member.personId,
+        (qualityByPerson.get(member.personId) ?? 0) + cents[index],
+      );
+    });
+    qualitySettlements.push({
+      datasetPath,
+      grade: score.grade,
+      pool,
+      allocated: true,
+      status: "allocated",
+      allocations: Object.fromEntries(
+        Object.entries(allocations).map(([personId, value]) => [
+          personId,
+          value / 100,
+        ]),
+      ),
+    });
+  }
+
   const completedRows: WorkbenchPersonnelRollupRow[] = Array.from(rows.values())
     .map((row) => {
       const hours = roundHours(row.hours);
-      const targetHours = roundHours(
-        row.scheduledDays.size * rewardRules.dailyTargetHours,
-      );
-      const reward = evaluateWorkbenchRewardRules(
+      const targetHours = roundHours(row.targetHours);
+      const performance = evaluateWorkbenchRewardRules(
         hours,
         targetHours,
         rewardRules,
+      );
+      const durationBonus = roundWorkbenchMoney(row.durationBonus);
+      const reward = {
+        ...performance,
+        amount: durationBonus,
+        symbol:
+          durationBonus > 0
+            ? ("✅" as const)
+            : durationBonus < 0
+              ? ("❌" as const)
+              : performance.symbol === "—"
+                ? ("—" as const)
+                : ("…" as const),
+      };
+      const qualityBonus = roundWorkbenchMoney(
+        (qualityByPerson.get(row.personId) ?? 0) / 100,
       );
       return {
         personId: row.personId,
@@ -178,6 +345,9 @@ export function computeWorkbenchPersonnelRollup(
         ratePercent: reward.percent,
         rule: reward.level?.label ?? reward.symbol,
         reward,
+        durationBonus,
+        qualityBonus,
+        totalBonus: roundWorkbenchMoney(durationBonus + qualityBonus),
       };
     })
     .sort(
@@ -197,9 +367,18 @@ export function computeWorkbenchPersonnelRollup(
         left.day.localeCompare(right.day) ||
         left.workstation.localeCompare(right.workstation),
     );
+  const durationBonusTotal = roundWorkbenchMoney(
+    completedRows.reduce((sum, row) => sum + row.durationBonus, 0),
+  );
+  const qualityBonusTotal = roundWorkbenchMoney(
+    completedRows.reduce((sum, row) => sum + row.qualityBonus, 0),
+  );
   return {
     rows: completedRows,
-    totalBonus: completedRows.reduce((sum, row) => sum + row.reward.amount, 0),
+    totalBonus: roundWorkbenchMoney(durationBonusTotal + qualityBonusTotal),
+    durationBonusTotal,
+    qualityBonusTotal,
+    qualitySettlements,
     unattributedHours: roundHours(
       unattributedWorkstations.reduce((sum, row) => sum + row.hours, 0),
     ),

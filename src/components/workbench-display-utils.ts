@@ -94,6 +94,9 @@ export const WORKBENCH_DISPLAY_TOP_GROUP_LIMIT = 8;
 export type WorkbenchDisplayWorkstationRow = Readonly<{
   robotId: string;
   workstation: string;
+  sourceLabel?: string;
+  personnel: string;
+  sourceRepoIds: readonly string[];
   datasets: number;
   hours: number;
   targetHours: number | null;
@@ -103,8 +106,34 @@ export type WorkbenchDisplayWorkstationRow = Readonly<{
   ruleSymbol?: WorkbenchRewardPreview["symbol"];
 }>;
 
+/**
+ * Keep the fullscreen detail pages in the same business-priority order as
+ * grouped statistics: the largest bonus first, then deterministic fallbacks.
+ */
+export function sortWorkbenchDisplayWorkstations(
+  rows: readonly WorkbenchDisplayWorkstationRow[],
+): readonly WorkbenchDisplayWorkstationRow[] {
+  return [...rows].sort(
+    (left, right) =>
+      right.reward - left.reward ||
+      right.hours - left.hours ||
+      left.workstation.localeCompare(right.workstation) ||
+      (left.sourceLabel ?? "").localeCompare(right.sourceLabel ?? "") ||
+      left.robotId.localeCompare(right.robotId),
+  );
+}
+
+export function getWorkbenchDisplayDailyTargetHours(
+  dailyTargetHours: number,
+  workstationCount: number,
+): number {
+  const count = Math.max(0, Math.trunc(finiteOrZero(workstationCount)));
+  return finiteOrZero(dailyTargetHours) * count;
+}
+
 export type WorkbenchDisplayHeatmapRow = Readonly<{
   robotId: string;
+  sourceLabel?: string;
   workstation: string;
   totalHours: number;
   hoursByDay: Readonly<Record<string, number>>;
@@ -485,7 +514,12 @@ export function createWorkbenchDisplaySnapshot(
     (input.personnelRows ?? []).map((row) => Object.freeze({ ...row })),
   );
   const workstations = freezeArray(
-    input.workstations.map((row) => Object.freeze({ ...row })),
+    sortWorkbenchDisplayWorkstations(input.workstations).map((row) =>
+      Object.freeze({
+        ...row,
+        sourceRepoIds: Object.freeze([...row.sourceRepoIds]),
+      }),
+    ),
   );
   const heatmapDays = freezeArray([...input.heatmapDays].sort());
   const heatmapRows = freezeArray(
@@ -499,7 +533,7 @@ export function createWorkbenchDisplaySnapshot(
       .sort(
         (left, right) =>
           right.totalHours - left.totalHours ||
-          left.robotId.localeCompare(right.robotId),
+          left.workstation.localeCompare(right.workstation),
       )
       .slice(0, WORKBENCH_DISPLAY_HEATMAP_ROW_LIMIT),
   );

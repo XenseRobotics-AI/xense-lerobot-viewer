@@ -18,6 +18,8 @@ import {
   isTacCapWorkbenchReplaySource,
   pauseWorkbenchDisplayClock,
   resumeWorkbenchDisplayClock,
+  sortWorkbenchDisplayWorkstations,
+  getWorkbenchDisplayDailyTargetHours,
   type WorkbenchDisplaySnapshotInput,
 } from "@/components/workbench-display-utils";
 
@@ -158,6 +160,42 @@ describe("Workbench display pagination", () => {
 });
 
 describe("Workbench display snapshot", () => {
+  test("orders workstation detail rows by bonus before paging", () => {
+    const rows = [
+      {
+        robotId: "robot-a",
+        workstation: "Station A",
+        personnel: "Alice",
+        sourceRepoIds: [],
+        datasets: 1,
+        hours: 12,
+        targetHours: 6,
+        ratePercent: 200,
+        reward: 20,
+      },
+      {
+        robotId: "robot-b",
+        workstation: "Station B",
+        personnel: "Bob",
+        sourceRepoIds: [],
+        datasets: 1,
+        hours: 24,
+        targetHours: 6,
+        ratePercent: 400,
+        reward: 5,
+      },
+    ];
+
+    expect(
+      sortWorkbenchDisplayWorkstations(rows).map((row) => row.reward),
+    ).toEqual([20, 5]);
+  });
+
+  test("calculates the aggregate daily target from group count", () => {
+    expect(getWorkbenchDisplayDailyTargetHours(5, 9)).toBe(45);
+    expect(getWorkbenchDisplayDailyTargetHours(5, 0)).toBe(0);
+  });
+
   test("keeps only the top eight groups sorted by hours", () => {
     const groups = Array.from({ length: 12 }, (_, index) => ({
       group: "group-" + index,
@@ -172,7 +210,21 @@ describe("Workbench display snapshot", () => {
 
   test("clones, freezes, sorts and limits mutable source data", () => {
     const sourceHours = { "2026-09-01": 8 };
+    const sourceRepoIds = ["Factory/robot-a"];
     const input = snapshotInput({
+      workstations: [
+        {
+          robotId: "robot-a",
+          workstation: "Station A",
+          personnel: "Alice",
+          sourceRepoIds,
+          datasets: 1,
+          hours: 8,
+          targetHours: 6,
+          ratePercent: 133.3,
+          reward: 20,
+        },
+      ],
       heatmapDays: ["2026-09-02", "2026-09-01"],
       heatmapRows: Array.from({ length: 12 }, (_, index) => ({
         robotId: "robot-" + index,
@@ -189,7 +241,14 @@ describe("Workbench display snapshot", () => {
 
     const snapshot = createWorkbenchDisplaySnapshot(input);
     sourceHours["2026-09-01"] = 99;
+    sourceRepoIds.push("Factory/robot-a-2");
 
+    expect(snapshot.workstations[0]).toMatchObject({
+      workstation: "Station A",
+      personnel: "Alice",
+      sourceRepoIds: ["Factory/robot-a"],
+    });
+    expect(Object.isFrozen(snapshot.workstations[0].sourceRepoIds)).toBe(true);
     expect(snapshot.heatmapDays).toEqual(["2026-09-01", "2026-09-02"]);
     expect(snapshot.heatmapRows).toHaveLength(10);
     expect(snapshot.heatmapRows[0].robotId).toBe("robot-11");

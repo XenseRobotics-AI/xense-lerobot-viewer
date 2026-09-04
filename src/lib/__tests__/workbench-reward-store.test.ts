@@ -38,6 +38,7 @@ describe("workbench reward rules store", () => {
     expect(config.enabled).toBe(true);
     expect(config.dailyTargetHours).toBe(6);
     expect(config.levels.at(-1)?.maxPercent).toBeNull();
+    expect(config.qualityBonusByGrade).toEqual({ A: 20, B: 10, C: 0, D: -10 });
   });
 
   test("writes sanitized rules below the dataset root", async () => {
@@ -47,6 +48,7 @@ describe("workbench reward rules store", () => {
       {
         enabled: true,
         dailyTargetHours: 7,
+        qualityBonusByGrade: { A: 25.5, B: 11, C: 0, D: -7.25 },
         levels: [
           { id: "a", label: "A", minPercent: 0, maxPercent: 100, amount: 0 },
           {
@@ -63,9 +65,15 @@ describe("workbench reward rules store", () => {
 
     expect(config.source).toBe("stored");
     expect(config.dailyTargetHours).toBe(7);
+    expect(config.qualityBonusByGrade).toEqual({
+      A: 25.5,
+      B: 11,
+      C: 0,
+      D: -7.25,
+    });
     await expect(
       fs.readFile(workbenchRewardRulesPath("TacVerse", root), "utf8"),
-    ).resolves.toContain('"dailyTargetHours": 7');
+    ).resolves.toContain('"qualityBonusByGrade"');
   });
 
   test("evaluates reward levels by completion percentage", () => {

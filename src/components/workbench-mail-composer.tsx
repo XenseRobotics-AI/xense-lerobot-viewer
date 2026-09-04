@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createDefaultWorkbenchMailDraft,
   createWorkbenchDashboardMail,
   formatWorkbenchMailSubject,
+  isWorkbenchMailSubjectAutomaticallyGenerated,
   parseWorkbenchMailRecipients,
   readWorkbenchMailDraft,
   saveWorkbenchMailDraft,
@@ -48,8 +49,12 @@ export default function WorkbenchMailComposer({
   recipientGroups = [],
 }: WorkbenchMailComposerProps) {
   const [draft, setDraft] = useState<WorkbenchMailDraft>(() =>
-    createDefaultWorkbenchMailDraft(),
+    createDefaultWorkbenchMailDraft({
+      organization,
+      dateRange: dashboardInput?.dateRange,
+    }),
   );
+  const subjectCustomizedRef = useRef(false);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
   const [selectedRecipientGroup, setSelectedRecipientGroup] = useState("");
   const recipientOptions = useMemo(() => {
@@ -84,9 +89,21 @@ export default function WorkbenchMailComposer({
 
   useEffect(() => {
     try {
-      setDraft(readWorkbenchMailDraft(organization, window.localStorage));
+      const restoredDraft = readWorkbenchMailDraft(
+        organization,
+        window.localStorage,
+        { dateRange: dashboardInput?.dateRange },
+      );
+      subjectCustomizedRef.current =
+        !isWorkbenchMailSubjectAutomaticallyGenerated(restoredDraft.subject);
+      setDraft(restoredDraft);
     } catch {
-      setDraft(createDefaultWorkbenchMailDraft());
+      const defaultDraft = createDefaultWorkbenchMailDraft({
+        organization,
+        dateRange: dashboardInput?.dateRange,
+      });
+      subjectCustomizedRef.current = false;
+      setDraft(defaultDraft);
     }
     setGeneratedAt(null);
     setSelectedRecipientGroup("");
@@ -175,13 +192,18 @@ export default function WorkbenchMailComposer({
 
   const handleGenerateDraft = useCallback(() => {
     if (!dashboardInput) return;
-    setDraft((current) => ({
-      ...current,
-      subject: formatWorkbenchMailSubject(dashboardInput),
-    }));
+    if (!subjectCustomizedRef.current) {
+      setDraft((current) => ({
+        ...current,
+        subject: formatWorkbenchMailSubject({
+          ...dashboardInput,
+          organization,
+        }),
+      }));
+    }
     setGeneratedAt(new Date().toISOString());
     setStatus(null);
-  }, [dashboardInput]);
+  }, [dashboardInput, organization]);
 
   const handleSaveSmtpPassword = useCallback(async () => {
     const password = smtpPassword.trim();
@@ -369,7 +391,10 @@ export default function WorkbenchMailComposer({
           <input
             type="text"
             value={draft.subject}
-            onChange={(event) => updateDraft({ subject: event.target.value })}
+            onChange={(event) => {
+              subjectCustomizedRef.current = true;
+              updateDraft({ subject: event.target.value });
+            }}
             className="w-full rounded-md border border-white/10 bg-[var(--surface-0)] px-3 py-2 text-slate-100 focus:border-cyan-400 focus:outline-none"
           />
         </label>

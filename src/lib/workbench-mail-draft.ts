@@ -2,9 +2,12 @@ import { formatBytes } from "@/utils/byteSize";
 
 export const WORKBENCH_MAIL_SENDER = "1796262052@qq.com";
 const WORKBENCH_MAIL_RECIPIENT = "frank@xenserobotics.com";
-const WORKBENCH_MAIL_SUBJECT = "SMTP smoketest";
 const STORAGE_PREFIX = "xense-workbench-mail-draft";
 const MAIL_ADDRESS_PATTERN = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/u;
+const WORKBENCH_MAIL_AUTO_SUBJECT_PATTERN =
+  /^XenseRobotics · .+ Data Collection Team Daily Report(?: · \d{4}-\d{2}-\d{2}(?: to \d{4}-\d{2}-\d{2})?)?$/u;
+const WORKBENCH_MAIL_LEGACY_SUBJECT_PATTERN =
+  /^(?:SMTP smoketest|Workbench dashboard(?: \d{8}(?:-\d{8})?)?)$/u;
 
 export type WorkbenchMailDraft = {
   sender: string;
@@ -34,12 +37,13 @@ export type WorkbenchDashboardMailSummary = {
   storageBytes: number;
   dailyTargetHours: number;
   totalBonus: number;
-  robotIds: number;
+  sources: number;
   daysInRange: number | null;
 };
 
 export type WorkbenchDashboardMailRow = {
-  robotId: string | null;
+  sourceLabel: string;
+  personnel: string;
   sourceRepoIds: readonly string[];
   workstation: string;
   datasets: number;
@@ -61,12 +65,6 @@ export type WorkbenchDashboardPersonnelMailRow = {
   email: string;
 };
 
-export type WorkbenchDashboardMailAlert = {
-  kind: "warn" | "info" | "error";
-  title: string;
-  detail: string;
-};
-
 export type WorkbenchDashboardMailInput = {
   organization: string;
   dateRange: WorkbenchDashboardMailDateRange;
@@ -75,7 +73,6 @@ export type WorkbenchDashboardMailInput = {
   rows: readonly WorkbenchDashboardMailRow[];
   personnelRows: readonly WorkbenchDashboardPersonnelMailRow[];
   personnelBonusTotal: number;
-  alerts: readonly WorkbenchDashboardMailAlert[];
 };
 
 type WorkbenchMailDraftRecord = {
@@ -166,10 +163,6 @@ function normalizedMailDateRange(
   };
 }
 
-function compactDayKey(value: string): string {
-  return value.replace(/-/gu, "");
-}
-
 function cleanInlineText(value: unknown): string {
   return String(value ?? "")
     .replace(/\s+/gu, " ")
@@ -230,19 +223,16 @@ function formatDateRangeLabel(range: WorkbenchDashboardMailDateRange): string {
 }
 
 function normalizedSourceRepos(repoIds: readonly string[]): string[] {
-  return repoIds.map(cleanInlineText).filter(Boolean);
+  const unique = new Set<string>();
+  for (const repoId of repoIds) {
+    const repo = cleanInlineText(repoId);
+    if (repo && repo !== "TacVerse/待确认") unique.add(repo);
+  }
+  return Array.from(unique).slice(0, 2);
 }
 
-function formatAlertLabel(kind: WorkbenchDashboardMailAlert["kind"]): string {
-  if (kind === "error") return "Error";
-  if (kind === "warn") return "Warning";
-  return "Info";
-}
-
-function alertColor(kind: WorkbenchDashboardMailAlert["kind"]): string {
-  if (kind === "error") return "#dc2626";
-  if (kind === "warn") return "#d97706";
-  return "#0284c7";
+function isClassifiedMailRow(row: WorkbenchDashboardMailRow): boolean {
+  return cleanInlineText(row.sourceLabel) !== "TacVerse/待确认";
 }
 
 function htmlMetricRow(label: string, value: string): string {
@@ -267,22 +257,23 @@ function htmlMobileDetailRow(
   row: WorkbenchDashboardMailRow,
   index: number,
 ): string {
-  const robotId = cleanInlineText(row.robotId) || "-";
+  const source = cleanInlineText(row.sourceLabel) || "-";
   const workstation = cleanInlineText(row.workstation) || "-";
+  const personnel = cleanInlineText(row.personnel) || "-";
   return `<div style="margin:0 0 12px;border:1px solid #cbd5e1;border-radius:8px;background:#ffffff;overflow:hidden;">
     <div style="padding:12px;background:#f1f5f9;border-bottom:1px solid #cbd5e1;">
       <div style="margin:0 0 3px;color:#64748b;font-size:11px;line-height:15px;text-transform:uppercase;letter-spacing:.06em;">Workstation ${index + 1}</div>
-      <div class="breakable" style="color:#0f172a;font-size:16px;font-weight:700;line-height:22px;word-break:break-all;overflow-wrap:anywhere;">${escapeHtml(robotId)}</div>
-      <div class="breakable" style="margin-top:3px;color:#334155;font-size:13px;line-height:19px;word-break:break-all;overflow-wrap:anywhere;">${escapeHtml(workstation)}</div>
-    </div>
-    <div style="padding:10px 10px 4px;">
-      <div style="margin-bottom:4px;color:#64748b;font-size:11px;line-height:15px;text-transform:uppercase;letter-spacing:.06em;">Source repositories</div>
-      <div style="color:#334155;font-size:12px;line-height:18px;">${htmlSourceRepos(row.sourceRepoIds)}</div>
     </div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;table-layout:fixed;">
+      ${htmlMetricRow("Source", source)}
+      ${htmlMetricRow("Workstation", workstation)}
+      ${htmlMetricRow("Personnel", personnel)}
+      ${htmlMetricRow("Source repos (first 2)", normalizedSourceRepos(row.sourceRepoIds).join(" / ") || "None")}
       ${htmlMetricRow("Datasets", formatInteger(row.datasets))}
-      ${htmlMetricRow("Hours / Range target", `${formatDecimal(row.hours)} / ${formatDecimal(row.targetHours)}`)}
-      ${htmlMetricRow("Rate / Rule", `${formatPercent(row.ratePercent)} / ${cleanInlineText(row.rule) || "-"}`)}
+      ${htmlMetricRow("WS hours", formatDecimal(row.hours))}
+      ${htmlMetricRow("Avg target", formatDecimal(row.targetHours))}
+      ${htmlMetricRow("Rate", formatPercent(row.ratePercent))}
+      ${htmlMetricRow("Rule", cleanInlineText(row.rule) || "-")}
       ${htmlMetricRow("Reward", formatSignedNumber(row.reward))}
     </table>
   </div>`;
@@ -298,9 +289,10 @@ function htmlDesktopSourceCell(repoIds: readonly string[]): string {
 
 function htmlDesktopDetailRow(row: WorkbenchDashboardMailRow): string {
   return `<tr>
-    ${htmlDesktopCell(cleanInlineText(row.robotId) || "-")}
-    ${htmlDesktopSourceCell(row.sourceRepoIds)}
+    ${htmlDesktopCell(cleanInlineText(row.sourceLabel) || "-")}
     ${htmlDesktopCell(cleanInlineText(row.workstation) || "-")}
+    ${htmlDesktopCell(cleanInlineText(row.personnel) || "-")}
+    ${htmlDesktopSourceCell(row.sourceRepoIds)}
     ${htmlDesktopCell(formatInteger(row.datasets), "right")}
     ${htmlDesktopCell(formatDecimal(row.hours), "right")}
     ${htmlDesktopCell(formatDecimal(row.targetHours), "right")}
@@ -324,8 +316,8 @@ function htmlMobilePersonnelRow(
       <div style="margin-top:3px;color:#334155;font-size:13px;line-height:19px;">${escapeHtml(workstation)}</div>
     </div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;table-layout:fixed;">
-      ${htmlMetricRow("Hours", formatDecimal(row.hours))}
-      ${htmlMetricRow("Range target", formatDecimal(row.targetHours))}
+      ${htmlMetricRow("Avg hours", formatDecimal(row.hours))}
+      ${htmlMetricRow("Avg target", formatDecimal(row.targetHours))}
       ${htmlMetricRow("Rate", formatPercent(row.ratePercent))}
       ${htmlMetricRow("Rule", cleanInlineText(row.rule) || "-")}
       ${htmlMetricRow("Reward", formatSignedNumber(row.reward))}
@@ -353,24 +345,6 @@ function htmlHeaderCell(label: string, align: "left" | "right" = "left") {
   return `<th scope="col" style="padding:9px 7px;background:#e2e8f0;color:#334155;font-size:10px;font-weight:700;line-height:14px;text-align:${align};vertical-align:bottom;">${escapeHtml(label)}</th>`;
 }
 
-function htmlAlerts(alerts: readonly WorkbenchDashboardMailAlert[]): string {
-  if (alerts.length === 0) {
-    return `<div style="padding:11px 12px;border-left:4px solid #16a34a;background:#f0fdf4;color:#166534;font-size:13px;line-height:19px;">No blockers detected in the current range.</div>`;
-  }
-  return alerts
-    .map((alert) => {
-      const label = formatAlertLabel(alert.kind);
-      const title = cleanInlineText(alert.title) || "Alert";
-      const detail = cleanInlineText(alert.detail);
-      const color = alertColor(alert.kind);
-      return `<div style="margin:0 0 8px;padding:11px 12px;border-left:4px solid ${color};background:#f8fafc;color:#334155;font-size:13px;line-height:19px;">
-        <div style="font-weight:700;color:${color};">${escapeHtml(label)} · ${escapeHtml(title)}</div>
-        ${detail ? `<div style="margin-top:2px;">${escapeHtml(detail)}</div>` : ""}
-      </div>`;
-    })
-    .join("");
-}
-
 function htmlNote(note: string): string {
   return escapeHtml(note.trim()).replace(/\r?\n/gu, "<br>");
 }
@@ -379,6 +353,7 @@ function createWorkbenchDashboardText(
   input: WorkbenchDashboardMailInput,
   note: string,
 ): string {
+  const rows = input.rows.filter(isClassifiedMailRow);
   const lines = [
     "WORKBENCH DASHBOARD",
     `Organization: ${cleanInlineText(input.organization) || "default"}`,
@@ -393,30 +368,33 @@ function createWorkbenchDashboardText(
     `Storage: ${formatBytes(input.summary.storageBytes)}`,
     `Daily target hours: ${formatDecimal(input.summary.dailyTargetHours)} h/day`,
     `Total bonus: ${formatSignedNumber(input.summary.totalBonus)}`,
-    `Robot IDs: ${formatInteger(input.summary.robotIds)}`,
+    `Sources: ${formatInteger(input.summary.sources)}`,
     `Days in range: ${formatInteger(input.summary.daysInRange)}`,
     "",
     "WORKSTATION DETAIL",
   ];
 
-  if (input.rows.length === 0) {
+  if (rows.length === 0) {
     lines.push("No workstation detail rows in the current range.");
   } else {
-    input.rows.forEach((row, index) => {
+    rows.forEach((row, index) => {
       const repos = normalizedSourceRepos(row.sourceRepoIds);
       if (index > 0) lines.push("");
       lines.push(
         `Workstation ${index + 1}`,
-        `Robot ID: ${cleanInlineText(row.robotId) || "-"}`,
+        `Source: ${cleanInlineText(row.sourceLabel) || "-"}`,
         `Workstation: ${cleanInlineText(row.workstation) || "-"}`,
-        `Source repositories (${repos.length}):`,
+        `Personnel: ${cleanInlineText(row.personnel) || "-"}`,
+        "Source repos (first 2):",
       );
       if (repos.length === 0) lines.push("  None");
       else repos.forEach((repo) => lines.push(`  ${repo}`));
       lines.push(
         `Datasets: ${formatInteger(row.datasets)}`,
-        `Hours / Range target: ${formatDecimal(row.hours)} / ${formatDecimal(row.targetHours)}`,
-        `Rate / Rule: ${formatPercent(row.ratePercent)} / ${cleanInlineText(row.rule) || "-"}`,
+        `WS hours: ${formatDecimal(row.hours)}`,
+        `Avg target: ${formatDecimal(row.targetHours)}`,
+        `Rate: ${formatPercent(row.ratePercent)}`,
+        `Rule: ${cleanInlineText(row.rule) || "-"}`,
         `Reward: ${formatSignedNumber(row.reward)}`,
       );
     });
@@ -432,8 +410,8 @@ function createWorkbenchDashboardText(
         "Personnel " + (index + 1),
         "Personnel: " + (cleanInlineText(row.personnel) || "-"),
         "Workstation: " + (cleanInlineText(row.workstation) || "-"),
-        "Hours: " + formatDecimal(row.hours),
-        "Range target: " + formatDecimal(row.targetHours),
+        "Avg hours: " + formatDecimal(row.hours),
+        "Avg target: " + formatDecimal(row.targetHours),
         "Rate: " + formatPercent(row.ratePercent),
         "Rule: " + (cleanInlineText(row.rule) || "-"),
         "Reward: " + formatSignedNumber(row.reward),
@@ -444,22 +422,7 @@ function createWorkbenchDashboardText(
   lines.push(
     "",
     "Personnel bonus total: " + formatSignedNumber(input.personnelBonusTotal),
-    "",
-    "ALERTS",
   );
-  if (input.alerts.length === 0) {
-    lines.push("No blockers detected in the current range.");
-  } else {
-    input.alerts.forEach((alert, index) => {
-      if (index > 0) lines.push("");
-      lines.push(
-        `${formatAlertLabel(alert.kind)} — ${cleanInlineText(alert.title) || "Alert"}`,
-      );
-      const detail = cleanInlineText(alert.detail);
-      if (detail) lines.push(detail);
-    });
-  }
-
   if (note.trim()) lines.push("", "NOTE", note.trim());
   return lines.join("\n");
 }
@@ -470,6 +433,7 @@ function createWorkbenchDashboardHtml(
 ): string {
   const organization = cleanInlineText(input.organization) || "default";
   const dateRange = formatDateRangeLabel(input.dateRange);
+  const rows = input.rows.filter(isClassifiedMailRow);
   const generatedAt = formatGeneratedAt(input.generatedAt);
   const summaryRows = [
     [
@@ -485,16 +449,16 @@ function createWorkbenchDashboardHtml(
       `${formatDecimal(input.summary.dailyTargetHours)} h/day`,
     ],
     ["Total bonus", formatSignedNumber(input.summary.totalBonus)],
-    ["Robot IDs", formatInteger(input.summary.robotIds)],
+    ["Sources", formatInteger(input.summary.sources)],
     ["Days in range", formatInteger(input.summary.daysInRange)],
   ].map(([label, value]) => htmlMetricRow(label, value));
   const emptyDetail = `<div style="padding:12px;border:1px solid #cbd5e1;border-radius:8px;background:#ffffff;color:#475569;font-size:13px;line-height:19px;">No workstation detail rows in the current range.</div>`;
-  const mobileRows = input.rows.length
-    ? input.rows.map(htmlMobileDetailRow).join("")
+  const mobileRows = rows.length
+    ? rows.map(htmlMobileDetailRow).join("")
     : emptyDetail;
-  const desktopRows = input.rows.length
-    ? input.rows.map(htmlDesktopDetailRow).join("")
-    : `<tr><td colspan="9" style="padding:12px;color:#475569;font-size:12px;line-height:18px;">No workstation detail rows in the current range.</td></tr>`;
+  const desktopRows = rows.length
+    ? rows.map(htmlDesktopDetailRow).join("")
+    : `<tr><td colspan="10" style="padding:12px;color:#475569;font-size:12px;line-height:18px;">No workstation detail rows in the current range.</td></tr>`;
   const emptyPersonnel = `<div style="padding:12px;border:1px solid #cbd5e1;border-radius:8px;background:#ffffff;color:#475569;font-size:13px;line-height:19px;">No personnel workload rows in the current range.</div>`;
   const mobilePersonnelRows = input.personnelRows.length
     ? input.personnelRows.map(htmlMobilePersonnelRow).join("")
@@ -556,12 +520,13 @@ function createWorkbenchDashboardHtml(
                 <table class="desktop-detail" aria-label="Workstation detail" width="100%" cellpadding="0" cellspacing="0" style="display:none;width:100%;border:1px solid #cbd5e1;background:#ffffff;table-layout:fixed;">
                   <thead>
                     <tr>
-                      ${htmlHeaderCell("Robot ID")}
-                      ${htmlHeaderCell("Source repos")}
+                      ${htmlHeaderCell("Source")}
                       ${htmlHeaderCell("Workstation")}
+                      ${htmlHeaderCell("Personnel")}
+                      ${htmlHeaderCell("Source repos (first 2)")}
                       ${htmlHeaderCell("Datasets", "right")}
-                      ${htmlHeaderCell("Hours", "right")}
-                      ${htmlHeaderCell("Range target", "right")}
+                      ${htmlHeaderCell("WS hours", "right")}
+                      ${htmlHeaderCell("Avg target", "right")}
                       ${htmlHeaderCell("Rate", "right")}
                       ${htmlHeaderCell("Rule")}
                       ${htmlHeaderCell("Reward", "right")}
@@ -582,8 +547,8 @@ function createWorkbenchDashboardHtml(
                     <tr>
                       ${htmlHeaderCell("Personnel")}
                       ${htmlHeaderCell("Workstation")}
-                      ${htmlHeaderCell("Hours", "right")}
-                      ${htmlHeaderCell("Range target", "right")}
+                      ${htmlHeaderCell("Avg hours", "right")}
+                      ${htmlHeaderCell("Avg target", "right")}
                       ${htmlHeaderCell("Rate", "right")}
                       ${htmlHeaderCell("Rule")}
                       ${htmlHeaderCell("Reward", "right")}
@@ -599,11 +564,6 @@ function createWorkbenchDashboardHtml(
                     </tr>
                   </tfoot>
                 </table>
-              </div>
-
-              <div style="padding-top:22px;">
-                <h2 style="margin:0 0 10px;color:#0f172a;font-size:17px;line-height:22px;">Alerts</h2>
-                ${htmlAlerts(input.alerts)}
               </div>
 
               ${noteSection}
@@ -647,28 +607,41 @@ function normalizeStoredRecord(
   return normalizeDraft(raw.draft);
 }
 
-export function createDefaultWorkbenchMailDraft(): WorkbenchMailDraft {
+export function createDefaultWorkbenchMailDraft(
+  input: {
+    organization?: string;
+    dateRange?: WorkbenchDashboardMailDateRange | null;
+  } = {},
+): WorkbenchMailDraft {
   return {
     sender: WORKBENCH_MAIL_SENDER,
     recipient: WORKBENCH_MAIL_RECIPIENT,
-    subject: WORKBENCH_MAIL_SUBJECT,
+    subject: formatWorkbenchMailSubject(input),
     note: "",
   };
 }
-
 export function formatWorkbenchMailSubject(input: {
+  organization?: string | null;
   dateRange?: WorkbenchDashboardMailDateRange | null;
 }): string {
+  const organization = cleanInlineText(input.organization);
+  const prefix = organization
+    ? `XenseRobotics · ${organization} Data Collection Team Daily Report`
+    : "XenseRobotics · Data Collection Team Daily Report";
   const range = normalizedMailDateRange(input.dateRange);
-  if (!range) return "Workbench dashboard";
-  if (range.days === 1) {
-    return `Workbench dashboard ${compactDayKey(range.startDate)}`;
-  }
-  return `Workbench dashboard ${compactDayKey(
-    range.startDate,
-  )}-${compactDayKey(range.inclusiveEndDate)}`;
+  if (!range) return prefix;
+  if (range.days === 1) return `${prefix} · ${range.startDate}`;
+  return `${prefix} · ${range.startDate} to ${range.inclusiveEndDate}`;
 }
-
+export function isWorkbenchMailSubjectAutomaticallyGenerated(
+  subject: string,
+): boolean {
+  const normalized = subject.trim();
+  return (
+    WORKBENCH_MAIL_AUTO_SUBJECT_PATTERN.test(normalized) ||
+    WORKBENCH_MAIL_LEGACY_SUBJECT_PATTERN.test(normalized)
+  );
+}
 export function createWorkbenchDashboardMail(
   input: WorkbenchDashboardMailInput,
   note = "",
@@ -706,16 +679,20 @@ export function workbenchMailDraftStorageKey(org: string): string {
 export function readWorkbenchMailDraft(
   org: string,
   storage: WorkbenchMailDraftStorage,
+  input: { dateRange?: WorkbenchDashboardMailDateRange | null } = {},
 ): WorkbenchMailDraft {
+  const defaultDraft = createDefaultWorkbenchMailDraft({
+    organization: org,
+    dateRange: input.dateRange,
+  });
   const raw = storage.getItem(workbenchMailDraftStorageKey(org));
-  if (!raw) return createDefaultWorkbenchMailDraft();
+  if (!raw) return defaultDraft;
   try {
     return (
-      normalizeStoredRecord(JSON.parse(raw) as unknown, org) ??
-      createDefaultWorkbenchMailDraft()
+      normalizeStoredRecord(JSON.parse(raw) as unknown, org) ?? defaultDraft
     );
   } catch {
-    return createDefaultWorkbenchMailDraft();
+    return defaultDraft;
   }
 }
 

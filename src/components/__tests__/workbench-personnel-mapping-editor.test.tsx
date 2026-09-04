@@ -20,6 +20,7 @@ function config(): WorkbenchPersonnelConfig {
       "2026-09-03": [
         {
           workstation: "A2",
+          collectorCount: 2,
           members: [
             { personId: "zhang", creditFactor: 1 },
             { personId: "li", creditFactor: 1 },
@@ -48,7 +49,10 @@ describe("WorkbenchPersonnelMappingEditor", () => {
     expect(html).toContain("Inherited from 2026-09-03");
     expect(html).toContain(">Personnel</th>");
     expect(html).toContain(">Email</th>");
+    expect(html).toContain(">Original collectors</th>");
     expect(html).toContain(">Action</th>");
+    expect(html).toContain('aria-label="Mapping 1 collector count"');
+    expect(html).toContain('value="2"');
     expect(html).toContain('value="张三"');
     expect(html).toContain('value="李四"');
     expect(html).toContain('value="匿名"');
@@ -70,36 +74,99 @@ describe("WorkbenchPersonnelMappingEditor", () => {
         workstation: "A2",
         personnel: "张三",
         email: "zhang@example.com",
+        collectorCount: 2,
       },
       {
         workstation: "A2",
         personnel: "李四",
         email: DEFAULT_WORKBENCH_PERSONNEL_EMAIL,
+        collectorCount: 2,
       },
       {
         workstation: "A5",
         personnel: "匿名",
         email: DEFAULT_WORKBENCH_PERSONNEL_EMAIL,
+        collectorCount: 1,
       },
       {
         workstation: "B2",
         personnel: "匿名",
         email: DEFAULT_WORKBENCH_PERSONNEL_EMAIL,
+        collectorCount: 1,
       },
     ]);
+  });
+
+  test("omits invalid ERROR and N0 workstations from rows and suggestions", () => {
+    const base = config();
+    const configWithInvalidWorkstations: WorkbenchPersonnelConfig = {
+      ...base,
+      schedules: {
+        ...base.schedules,
+        "2026-09-03": [
+          ...base.schedules["2026-09-03"],
+          {
+            workstation: "ERROR",
+            collectorCount: 1,
+            members: [{ personId: "zhang", creditFactor: 1 }],
+          },
+          {
+            workstation: "N0",
+            collectorCount: 1,
+            members: [{ personId: "li", creditFactor: 1 }],
+          },
+        ],
+      },
+    };
+
+    const rows = buildWorkbenchPersonnelMappingRows(
+      configWithInvalidWorkstations,
+      ["A2", "ERROR", "N0", "NO", "A5"],
+      "2026-09-04",
+    );
+
+    expect(rows.map((row) => row.workstation)).toEqual(["A2", "A2", "A5"]);
+
+    const saved = buildWorkbenchPersonnelConfigFromMapping(
+      configWithInvalidWorkstations,
+      rows,
+      ["A2", "ERROR", "N0", "NO", "A5"],
+      "2026-09-04",
+    );
+    expect(
+      Object.values(saved.schedules)
+        .flat()
+        .map((assignment) => assignment.workstation),
+    ).not.toContain("ERROR");
+    expect(
+      Object.values(saved.schedules)
+        .flat()
+        .map((assignment) => assignment.workstation),
+    ).not.toContain("N0");
   });
 
   test("groups repeated workstations while preserving people IDs and emails", () => {
     const result = buildWorkbenchPersonnelConfigFromMapping(
       config(),
       [
-        { workstation: "A2", personnel: "张三", email: "zhang@example.com" },
+        {
+          workstation: "A2",
+          personnel: "张三",
+          email: "zhang@example.com",
+          collectorCount: 2,
+        },
         {
           workstation: "A2",
           personnel: "匿名",
           email: DEFAULT_WORKBENCH_PERSONNEL_EMAIL,
+          collectorCount: 2,
         },
-        { workstation: "A5", personnel: "王五", email: "wang@example.com" },
+        {
+          workstation: "A5",
+          personnel: "王五",
+          email: "wang@example.com",
+          collectorCount: 1,
+        },
       ],
       ["A2", "A5", "B2"],
       "2026-09-04",
@@ -119,12 +186,13 @@ describe("WorkbenchPersonnelMappingEditor", () => {
     expect(
       result.schedules["2026-09-04"].map((assignment) => [
         assignment.workstation,
+        assignment.collectorCount,
         assignment.members.length,
       ]),
     ).toEqual([
-      ["A2", 2],
-      ["A5", 1],
-      ["B2", 1],
+      ["A2", 2, 2],
+      ["A5", 1, 1],
+      ["B2", 1, 1],
     ]);
     expect(result.schedules["2026-09-04"][2].members[0].personId).toBe(
       "anonymous",
@@ -137,11 +205,40 @@ describe("WorkbenchPersonnelMappingEditor", () => {
     });
   });
 
+  test("requires one consistent original collector count for a workstation", () => {
+    expect(() =>
+      buildWorkbenchPersonnelConfigFromMapping(config(), [
+        {
+          workstation: "A2",
+          personnel: "张三",
+          email: "zhang@example.com",
+          collectorCount: 2,
+        },
+        {
+          workstation: "A2",
+          personnel: "李四",
+          email: DEFAULT_WORKBENCH_PERSONNEL_EMAIL,
+          collectorCount: 3,
+        },
+      ]),
+    ).toThrow("must be consistent across personnel mappings");
+  });
+
   test("requires one consistent email for the same person", () => {
     expect(() =>
       buildWorkbenchPersonnelConfigFromMapping(config(), [
-        { workstation: "A2", personnel: "张三", email: "one@example.com" },
-        { workstation: "A5", personnel: "张三", email: "two@example.com" },
+        {
+          workstation: "A2",
+          personnel: "张三",
+          email: "one@example.com",
+          collectorCount: 2,
+        },
+        {
+          workstation: "A5",
+          personnel: "张三",
+          email: "two@example.com",
+          collectorCount: 1,
+        },
       ]),
     ).toThrow("Email for 张三 must be consistent across mappings.");
   });

@@ -33,7 +33,7 @@ from sync_hf_dataset import (
     list_org_repos,
     missing_dependency,
     progress,
-    repo_target,
+    stats_repo_target,
 )
 
 STATS_MARKER = os.path.join(".cache", "huggingface", "viewer_stats.json")
@@ -230,7 +230,7 @@ def main() -> int:
     pending = [
         repo_id
         for repo_id, sha in repos
-        if args.force or not stats_is_current(repo_target(args.root, args.org, repo_id), sha)
+        if args.force or not stats_is_current(stats_repo_target(args.root, args.org, repo_id), sha)
     ]
 
     def emit_result(downloaded: int, failed: list[dict[str, str]], work: list[str]) -> int:
@@ -272,7 +272,7 @@ def main() -> int:
     total = len(work)
 
     for index, repo_id in enumerate(work, start=1):
-        target = repo_target(args.root, args.org, repo_id)
+        target = stats_repo_target(args.root, args.org, repo_id)
         progress(
             phase="downloading",
             repo=repo_id,

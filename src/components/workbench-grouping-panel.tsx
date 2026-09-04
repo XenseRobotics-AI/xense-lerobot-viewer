@@ -43,6 +43,8 @@ import { formatBytes } from "@/utils/byteSize";
 import {
   computeWorkbenchAdditionTimeline,
   computeWorkbenchAdditionRollup,
+  WORKBENCH_DATASET_SOURCE_KEYS,
+  WORKBENCH_DATASET_SOURCE_LABELS,
   countHalfOpenDays,
   getWorkbenchDefaultDateTimeRange,
   getWorkbenchDateTimeRangeShortcut,
@@ -52,11 +54,14 @@ import {
   normalizeWorkbenchDateRange,
   workbenchAdditionAvailableDays,
   workbenchAdditionDatasetPaths,
-  workbenchGroupAdditionDatasetNames,
+  workbenchDatasetRangeContributions,
+  workbenchDatasetSourceKey,
+  workbenchDatasetSourceLabel,
+  workbenchSourceRepoId,
   workbenchGroupSourceRepoIds,
   type WorkbenchDailyAddition,
+  type WorkbenchDatasetSourceKey,
   type WorkbenchRollupDataset,
-  type WorkbenchRollupDimension,
   type WorkbenchRollupRow,
 } from "@/utils/workbenchRollup";
 import {
@@ -78,6 +83,7 @@ import WorkbenchPersonnelWorkload from "@/components/workbench-personnel-workloa
 import type { WorkbenchDashboardMailInput } from "@/lib/workbench-mail-draft";
 import type { WorkbenchPersonnelConfig } from "@/types/workbench-personnel.types";
 import { computeWorkbenchPersonnelRollup } from "@/utils/workbenchPersonnel";
+import type { WorkbenchDatasetScore } from "@/types/workbench-score.types";
 import {
   createWorkbenchStatisticsFilterSummary,
   type WorkbenchStatisticsFilterSummary,
@@ -95,10 +101,27 @@ import {
   type WorkbenchDisplaySnapshot,
 } from "@/components/workbench-display-utils";
 
-const DIMENSIONS: Array<{
-  value: WorkbenchRollupDimension;
-  label: string;
-}> = [{ value: "robot_id", label: "Robot ID" }];
+const SOURCE_OPTIONS = WORKBENCH_DATASET_SOURCE_KEYS.map((value) => ({
+  value,
+  label: WORKBENCH_DATASET_SOURCE_LABELS[value],
+}));
+const ALL_WORKBENCH_SOURCES = [...WORKBENCH_DATASET_SOURCE_KEYS];
+
+function parseWorkbenchSources(
+  value: string | null,
+): WorkbenchDatasetSourceKey[] {
+  const requested = new Set(
+    (value ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item): item is WorkbenchDatasetSourceKey =>
+        (WORKBENCH_DATASET_SOURCE_KEYS as readonly string[]).includes(item),
+      ),
+  );
+  return requested.size > 0
+    ? ALL_WORKBENCH_SOURCES.filter((source) => requested.has(source))
+    : [...ALL_WORKBENCH_SOURCES];
+}
 
 const WORKBENCH_TEAM_MANAGER_NAMES = new Set(["dylan", "frank", "jay"]);
 
@@ -110,7 +133,18 @@ const DATE_SHORTCUTS = [
   { value: "lastWeek", label: "Last week" },
 ] as const;
 
+const WORKBENCH_WORKSTATION_CONCEPT_START_DATE = "2026-08-22";
+const WORKBENCH_DAILY_TREND_START_DATE = "2026-07-01";
+const WORKBENCH_HEATMAP_DAY_LIMIT = 10;
+
 type WorkbenchDataset = LocalDatasetSummary & {
+  source?: WorkbenchDatasetSourceKey;
+  sourceLabel?: string;
+  captureSpan?: { from: string; to: string } | null;
+  tacflowScore?: WorkbenchDatasetScore;
+  dateEvidence?: "manifest" | "sessions" | "name" | "none";
+  capturedFrom?: string | null;
+  capturedTo?: string | null;
   hf?: {
     lastModified?: string | null;
     uploader?: string | null;
@@ -175,6 +209,8 @@ type WorkbenchStatisticsPayload = {
 type WorkbenchDashboardRow = WorkbenchRollupRow & {
   robotId: string | null;
   leftGripperSn: string | null;
+  sourceKey: WorkbenchDatasetSourceKey;
+  sourceLabel: string;
   workstation: string;
   reward: ReturnType<typeof evaluateWorkbenchRewardRules>;
   sourceRepoIds: string[];
@@ -184,17 +220,9 @@ type WorkbenchDashboardRow = WorkbenchRollupRow & {
 type RewardRulesDraft = WorkbenchRewardRulesConfig & { org: string };
 
 type HeatmapRow = {
-  robotId: string;
-  leftGripperSn: string | null;
   workstation: string;
   hoursByDay: Record<string, number>;
   totalHours: number;
-};
-
-type AlertItem = {
-  kind: "warn" | "info" | "error";
-  title: string;
-  detail: string;
 };
 
 type WorkbenchDrilldown = {
@@ -553,12 +581,14 @@ export default function WorkbenchGroupingPanel({
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const [dimension, setDimension] = useState<WorkbenchRollupDimension>(() => {
-    const requested = searchParams.get("workbenchDimension");
-    return DIMENSIONS.some((item) => item.value === requested)
-      ? (requested as WorkbenchRollupDimension)
-      : "robot_id";
-  });
+  const [selectedSources, setSelectedSources] = useState<
+    WorkbenchDatasetSourceKey[]
+  >(() =>
+    parseWorkbenchSources(
+      searchParams.get("workbenchSources") ??
+        searchParams.get("workbenchSource"),
+    ),
+  );
   const [datasets, setDatasets] = useState<WorkbenchDataset[]>([]);
   const [displayReplayDataset, setDisplayReplayDataset] =
     useState<WorkbenchDataset | null>(null);
@@ -582,6 +612,28 @@ export default function WorkbenchGroupingPanel({
   );
   const [endDateTime, setEndDateTime] = useState(
     searchParams.get("workbenchEnd") ?? defaultDateTimeRange.endDateTime,
+  );
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("workbenchSources", selectedSources.join(","));
+    url.searchParams.delete("workbenchSource");
+    url.searchParams.delete("workbenchDimension");
+    window.history.replaceState(window.history.state, "", url);
+  }, [selectedSources]);
+  const toggleWorkbenchSource = useCallback(
+    (source: WorkbenchDatasetSourceKey) => {
+      setSelectedSources((current) => {
+        if (current.includes(source)) {
+          return current.length === 1
+            ? current
+            : current.filter((value) => value !== source);
+        }
+        return ALL_WORKBENCH_SOURCES.filter(
+          (value) => value === source || current.includes(value),
+        );
+      });
+    },
+    [],
   );
   const [workstationMappings, setWorkstationMappings] = useState<
     Record<string, string>
@@ -622,8 +674,8 @@ export default function WorkbenchGroupingPanel({
   const [rewardMessage, setRewardMessage] = useState<string | null>(null);
   const [workstationQuery, setWorkstationQuery] = useState("");
   const [workstationSort, setWorkstationSort] = useState<
-    "hours" | "robot" | "datasets"
-  >("hours");
+    "reward" | "hours" | "robot" | "datasets"
+  >("reward");
   const [drilldown, setDrilldown] = useState<WorkbenchDrilldown | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [replayEnabled, setReplayEnabled] = useState(true);
@@ -750,13 +802,35 @@ export default function WorkbenchGroupingPanel({
       })),
     [datasets],
   );
+  const selectedSourceSet = useMemo(
+    () => new Set<WorkbenchDatasetSourceKey>(selectedSources),
+    [selectedSources],
+  );
+  const sourceFilteredDatasets = useMemo(
+    () =>
+      rollupDatasets.filter((dataset) =>
+        selectedSourceSet.has(
+          dataset.source ?? workbenchDatasetSourceKey(dataset.relativePath),
+        ),
+      ),
+    [rollupDatasets, selectedSourceSet],
+  );
+  const sourceFilteredLocalDatasets = useMemo(
+    () =>
+      datasets.filter((dataset) =>
+        selectedSourceSet.has(
+          dataset.source ?? workbenchDatasetSourceKey(dataset.relativePath),
+        ),
+      ),
+    [datasets, selectedSourceSet],
+  );
 
   const workstationRollupDatasets = useMemo<WorkbenchRollupDataset[]>(
     () =>
-      rollupDatasets.filter(
+      sourceFilteredDatasets.filter(
         (dataset) => !isWorkbenchIgnoredRobotId(dataset.robotId),
       ),
-    [rollupDatasets],
+    [sourceFilteredDatasets],
   );
   const availableDays = useMemo(
     () =>
@@ -795,9 +869,21 @@ export default function WorkbenchGroupingPanel({
       }),
     [range.endDate, range.startDate, workstationRollupDatasets],
   );
-  const organizationTotalHours = buildHomepageDatasetStatistics(datasets, {
-    preserveOrder: true,
-  }).hours;
+  const undatedDatasetPaths = sourceFilteredDatasets
+    .filter(
+      (dataset) =>
+        (dataset.dateEvidence ?? dataset.facets?.dateEvidence ?? "none") ===
+        "none",
+    )
+    .map((dataset) => dataset.relativePath)
+    .sort((left, right) => left.localeCompare(right));
+  const undatedDatasetCount = undatedDatasetPaths.length;
+  const organizationTotalHours = buildHomepageDatasetStatistics(
+    sourceFilteredLocalDatasets,
+    {
+      preserveOrder: true,
+    },
+  ).hours;
   const selectedDatasetPaths = useMemo(
     () =>
       workbenchAdditionDatasetPaths(workstationRollupDatasets, {
@@ -829,22 +915,6 @@ export default function WorkbenchGroupingPanel({
       }),
     [range.endDate, range.startDate, workstationRollupDatasets],
   );
-  const selectedRows = useMemo(
-    () =>
-      computeWorkbenchAdditionRollup(workstationRollupDatasets, dimension, {
-        startDate: range.startDate,
-        endDate: range.endDate,
-      }),
-    [dimension, range.endDate, range.startDate, workstationRollupDatasets],
-  );
-  const rowNames = useMemo(
-    () =>
-      workbenchGroupAdditionDatasetNames(workstationRollupDatasets, dimension, {
-        startDate: range.startDate,
-        endDate: range.endDate,
-      }),
-    [dimension, range.endDate, range.startDate, workstationRollupDatasets],
-  );
   const robotSourceRepoMap = useMemo(
     () =>
       workbenchGroupSourceRepoIds(workstationRollupDatasets, "robot_id", {
@@ -853,76 +923,88 @@ export default function WorkbenchGroupingPanel({
       }),
     [range.endDate, range.startDate, workstationRollupDatasets],
   );
-  const visibleDays = useMemo(
-    () =>
-      availableDays.filter((day) =>
-        dateInRange(day, range.startDate, range.endDate),
-      ),
-    [availableDays, range.endDate, range.startDate],
+  const workstationHeatmapRange = useMemo(
+    () => ({
+      startDate: WORKBENCH_WORKSTATION_CONCEPT_START_DATE,
+      endDate: range.endDate,
+    }),
+    [range.endDate],
   );
+  const heatmapDays = useMemo(() => {
+    const days = new Set<string>();
+    for (const dataset of workstationRollupDatasets) {
+      for (const addition of workbenchDatasetRangeContributions(
+        dataset,
+        workstationHeatmapRange,
+      )) {
+        const hours = Number(addition.hours);
+        if (Number.isFinite(hours) && hours > 0) days.add(addition.day);
+      }
+    }
+    return [...days].sort().slice(-WORKBENCH_HEATMAP_DAY_LIMIT);
+  }, [workstationHeatmapRange, workstationRollupDatasets]);
   const heatmapRows = useMemo<HeatmapRow[]>(() => {
     const rows = new Map<string, HeatmapRow>();
+    const visibleDaySet = new Set(heatmapDays);
     for (const dataset of workstationRollupDatasets) {
-      const robotId = dataset.robotId?.trim() || "—";
-      if (robotId === "—") continue;
-      const row = rows.get(robotId) ?? {
-        robotId,
-        leftGripperSn: dataset.leftGripperSn ?? null,
-        workstation:
-          robotId === "—"
-            ? "—"
-            : (workstationDraft[robotId] ??
-              workstationMappings[robotId] ??
-              workstationDefaults[robotId] ??
-              "—"),
+      const mappingKey =
+        dataset.robotId?.trim() || dataset.leftGripperSn?.trim() || "";
+      const workstation = mappingKey
+        ? workstationDraft[mappingKey]?.trim() ||
+          workstationMappings[mappingKey]?.trim() ||
+          workstationDefaults[mappingKey]?.trim() ||
+          "未分配"
+        : "未分配";
+      const row: HeatmapRow = rows.get(workstation) ?? {
+        workstation,
         hoursByDay: {},
         totalHours: 0,
       };
-      if (!row.leftGripperSn && dataset.leftGripperSn) {
-        row.leftGripperSn = dataset.leftGripperSn;
-      }
-      for (const addition of dataset.dailyAdditions ?? []) {
-        if (!dateInRange(addition.day, range.startDate, range.endDate))
-          continue;
+      for (const addition of workbenchDatasetRangeContributions(
+        dataset,
+        workstationHeatmapRange,
+      )) {
+        if (!visibleDaySet.has(addition.day)) continue;
         const hours = Number(addition.hours);
         if (!Number.isFinite(hours) || hours <= 0) continue;
         row.hoursByDay[addition.day] =
           (row.hoursByDay[addition.day] ?? 0) + hours;
         row.totalHours += hours;
       }
-      row.workstation =
-        robotId === "—"
-          ? "—"
-          : (workstationDraft[robotId] ??
-            workstationMappings[robotId] ??
-            workstationDefaults[robotId] ??
-            "—");
-      rows.set(robotId, row);
+      rows.set(workstation, row);
     }
-    return Array.from(rows.values()).sort(
-      (left, right) =>
-        right.totalHours - left.totalHours ||
-        left.robotId.localeCompare(right.robotId),
-    );
+    return Array.from(rows.values())
+      .filter((row) => row.totalHours > 0)
+      .sort(
+        (left, right) =>
+          right.totalHours - left.totalHours ||
+          left.workstation.localeCompare(right.workstation),
+      );
   }, [
-    range.endDate,
-    range.startDate,
+    heatmapDays,
+    workstationHeatmapRange,
     workstationRollupDatasets,
     workstationDefaults,
     workstationDraft,
     workstationMappings,
   ]);
-  const lineChartRows = totalTimeline.rows.map((row) => ({
+  const dailyTrendTimeline = useMemo(
+    () =>
+      computeWorkbenchAdditionTimeline(workstationRollupDatasets, {
+        startDate:
+          range.endDate && range.endDate <= WORKBENCH_DAILY_TREND_START_DATE
+            ? range.startDate
+            : WORKBENCH_DAILY_TREND_START_DATE,
+        endDate: range.endDate,
+      }),
+    [range.endDate, range.startDate, workstationRollupDatasets],
+  );
+  const lineChartRows = dailyTrendTimeline.rows.map((row) => ({
     day: row.day.slice(5),
     date: row.day,
     hours: row.hours,
     cumulativeHours: row.cumulativeHours,
     datasets: row.datasets,
-  }));
-  const selectedChartRows = selectedRows.slice(0, 12).map((row) => ({
-    group: row.group,
-    hours: row.hours,
-    count: row.count,
   }));
 
   const robotDashboardRows = useMemo<WorkbenchDashboardRow[]>(() => {
@@ -966,6 +1048,19 @@ export default function WorkbenchGroupingPanel({
         ...row,
         robotId: row.group === "—" ? null : row.group,
         leftGripperSn: sourceDataset?.leftGripperSn ?? null,
+        sourceKey:
+          sourceDataset?.source ??
+          (sourceDataset
+            ? workbenchDatasetSourceKey(sourceDataset.relativePath)
+            : "unclassified"),
+        sourceLabel:
+          sourceDataset?.sourceLabel ??
+          (sourceDataset
+            ? workbenchDatasetSourceLabel(
+                sourceDataset.source ??
+                  workbenchDatasetSourceKey(sourceDataset.relativePath),
+              )
+            : "TacVerse/待确认"),
         workstation,
         reward,
         sourceRepoIds: repos,
@@ -988,6 +1083,117 @@ export default function WorkbenchGroupingPanel({
     workstationLegacyMappings,
     workstationMappings,
   ]);
+  const sourceWorkstationDashboardRows = useMemo<
+    WorkbenchDashboardRow[]
+  >(() => {
+    type GroupedRow = WorkbenchDashboardRow & { datasetPaths: Set<string> };
+    const grouped = new Map<string, GroupedRow>();
+    for (const dataset of workstationRollupDatasets) {
+      const additions = workbenchDatasetRangeContributions(dataset, range);
+      if (additions.length === 0) continue;
+      const sourceKey =
+        dataset.source ?? workbenchDatasetSourceKey(dataset.relativePath);
+      const sourceLabel =
+        dataset.sourceLabel ?? workbenchDatasetSourceLabel(sourceKey);
+      const mappingKey =
+        dataset.robotId?.trim() || dataset.leftGripperSn?.trim() || "";
+      const workstation = mappingKey
+        ? workstationDraft[mappingKey]?.trim() ||
+          workstationMappings[mappingKey]?.trim() ||
+          workstationDefaults[mappingKey]?.trim() ||
+          "未分配"
+        : "未分配";
+      const key = [sourceKey, workstation].join("\u0000");
+      const current = grouped.get(key) ?? {
+        group: `${sourceLabel} · ${workstation}`,
+        count: 0,
+        episodes: 0,
+        frames: 0,
+        hours: 0,
+        pctHours: 0,
+        robotId: null,
+        leftGripperSn: null,
+        sourceKey,
+        sourceLabel,
+        workstation,
+        reward: evaluateWorkbenchRewardRules(0, targetHours ?? 0, rewardDraft),
+        sourceRepoIds: [],
+        dailyHours: {},
+        datasetPaths: new Set<string>(),
+      };
+      if (!current.datasetPaths.has(dataset.relativePath)) {
+        current.datasetPaths.add(dataset.relativePath);
+        current.count += 1;
+        current.episodes +=
+          Number.isFinite(Number(dataset.total_episodes)) &&
+          Number(dataset.total_episodes) > 0
+            ? Math.trunc(Number(dataset.total_episodes))
+            : 0;
+        current.frames +=
+          Number.isFinite(Number(dataset.total_frames)) &&
+          Number(dataset.total_frames) > 0
+            ? Math.trunc(Number(dataset.total_frames))
+            : 0;
+        const repoId = workbenchSourceRepoId(dataset.relativePath);
+        if (!current.sourceRepoIds.includes(repoId)) {
+          current.sourceRepoIds.push(repoId);
+        }
+      }
+      for (const addition of additions) {
+        const hours = Number(addition.hours);
+        if (!Number.isFinite(hours) || hours <= 0) continue;
+        current.hours += hours;
+        current.dailyHours[addition.day] =
+          (current.dailyHours[addition.day] ?? 0) + hours;
+      }
+      grouped.set(key, current);
+    }
+    return Array.from(grouped.values()).map(({ datasetPaths, ...row }) => {
+      void datasetPaths;
+      return {
+        ...row,
+        hours: Math.round(row.hours * 1000) / 1000,
+        sourceRepoIds: [...row.sourceRepoIds].sort((left, right) =>
+          left.localeCompare(right),
+        ),
+        reward: evaluateWorkbenchRewardRules(
+          row.hours,
+          targetHours ?? 0,
+          rewardDraft,
+        ),
+      };
+    });
+  }, [
+    range,
+    rewardDraft,
+    targetHours,
+    workstationDefaults,
+    workstationDraft,
+    workstationMappings,
+    workstationRollupDatasets,
+  ]);
+
+  const topWorkstationRows = useMemo(() => {
+    const groups = new Map<
+      string,
+      { group: string; hours: number; count: number }
+    >();
+    for (const row of sourceWorkstationDashboardRows) {
+      const current = groups.get(row.workstation) ?? {
+        group: row.workstation,
+        hours: 0,
+        count: 0,
+      };
+      current.hours += row.hours;
+      current.count += row.count;
+      groups.set(row.workstation, current);
+    }
+    return [...groups.values()].sort(
+      (left, right) =>
+        right.hours - left.hours || left.group.localeCompare(right.group),
+    );
+  }, [sourceWorkstationDashboardRows]);
+  const selectedChartRows = topWorkstationRows.slice(0, 12);
 
   const selectedWorkbenchDatasets = useMemo(
     () =>
@@ -996,21 +1202,39 @@ export default function WorkbenchGroupingPanel({
       ),
     [datasets, selectedDatasetPaths],
   );
-  const datasetsForRobot = useCallback(
-    (robotId: string | null) =>
-      selectedWorkbenchDatasets.filter(
-        (dataset) => (dataset.robotId?.trim() || "—") === (robotId || "—"),
-      ),
-    [selectedWorkbenchDatasets],
+  const datasetsForSourceWorkstation = useCallback(
+    (sourceKey: WorkbenchDatasetSourceKey, workstation: string) =>
+      selectedWorkbenchDatasets.filter((dataset) => {
+        const datasetSource =
+          dataset.source ?? workbenchDatasetSourceKey(dataset.relativePath);
+        if (datasetSource !== sourceKey) return false;
+        const mappingKey =
+          dataset.robotId?.trim() || dataset.leftGripperSn?.trim() || "";
+        const mappedWorkstation = mappingKey
+          ? workstationDraft[mappingKey]?.trim() ||
+            workstationMappings[mappingKey]?.trim() ||
+            workstationDefaults[mappingKey]?.trim() ||
+            "未分配"
+          : "未分配";
+        return mappedWorkstation === workstation;
+      }),
+    [
+      selectedWorkbenchDatasets,
+      workstationDefaults,
+      workstationDraft,
+      workstationMappings,
+    ],
   );
+
   const visibleRobotDashboardRows = useMemo(() => {
     const query = workstationQuery.trim().toLocaleLowerCase();
-    const rows = robotDashboardRows.filter((row) => {
+    const rows = sourceWorkstationDashboardRows.filter((row) => {
       if (!query) return true;
       return [
         row.robotId,
         row.leftGripperSn,
         row.workstation,
+        row.sourceLabel,
         ...row.sourceRepoIds,
       ]
         .filter(Boolean)
@@ -1018,12 +1242,20 @@ export default function WorkbenchGroupingPanel({
     });
     return [...rows].sort((left, right) => {
       if (workstationSort === "robot") {
-        return (left.robotId ?? "—").localeCompare(right.robotId ?? "—");
+        return left.sourceLabel.localeCompare(right.sourceLabel);
       }
       if (workstationSort === "datasets") return right.count - left.count;
+      if (workstationSort === "reward") {
+        return (
+          right.reward.amount - left.reward.amount ||
+          right.hours - left.hours ||
+          left.workstation.localeCompare(right.workstation) ||
+          left.sourceLabel.localeCompare(right.sourceLabel)
+        );
+      }
       return right.hours - left.hours;
     });
-  }, [robotDashboardRows, workstationQuery, workstationSort]);
+  }, [sourceWorkstationDashboardRows, workstationQuery, workstationSort]);
 
   const openWorkbenchDrilldown = useCallback(
     (selection: Omit<WorkbenchDrilldown, "source">) => {
@@ -1054,12 +1286,14 @@ export default function WorkbenchGroupingPanel({
     const url = new URL(window.location.href);
     url.searchParams.set("workbenchStart", startDateTime);
     url.searchParams.set("workbenchEnd", endDateTime);
-    url.searchParams.set("workbenchDimension", dimension);
+    url.searchParams.set("workbenchSources", selectedSources.join(","));
+    url.searchParams.delete("workbenchSource");
+    url.searchParams.delete("workbenchDimension");
     const copied = await copyTextToClipboard(url.toString());
     setActionMessage(
       copied ? "Share link copied." : "Unable to copy share link.",
     );
-  }, [dimension, endDateTime, startDateTime]);
+  }, [endDateTime, selectedSources, startDateTime]);
   const personnelWorkstationMappings = useMemo(() => {
     const mappings: Record<string, string> = {};
     for (const dataset of workstationRollupDatasets) {
@@ -1086,6 +1320,15 @@ export default function WorkbenchGroupingPanel({
     workstationMappings,
     workstationRollupDatasets,
   ]);
+  const datasetScores = useMemo(() => {
+    const scores = new Map<string, WorkbenchDatasetScore>();
+    for (const dataset of workstationRollupDatasets) {
+      if (dataset.tacflowScore) {
+        scores.set(dataset.relativePath, dataset.tacflowScore);
+      }
+    }
+    return scores;
+  }, [workstationRollupDatasets]);
   const personnelRollup = useMemo(
     () =>
       computeWorkbenchPersonnelRollup(
@@ -1094,6 +1337,7 @@ export default function WorkbenchGroupingPanel({
         personnelConfig,
         range,
         rewardDraft,
+        datasetScores,
       ),
     [
       personnelConfig,
@@ -1101,14 +1345,37 @@ export default function WorkbenchGroupingPanel({
       range,
       rewardDraft,
       workstationRollupDatasets,
+      datasetScores,
     ],
   );
+  const personnelByWorkstation = useMemo(() => {
+    const names = new Map<string, Set<string>>();
+    for (const row of personnelRollup.rows) {
+      const personnel = row.personnel.trim();
+      if (!personnel) continue;
+      for (const workstation of row.workstations) {
+        const key = workstation.trim();
+        if (!key) continue;
+        const people = names.get(key) ?? new Set<string>();
+        people.add(personnel);
+        names.set(key, people);
+      }
+    }
+    return new Map(
+      Array.from(names.entries()).map(([workstation, people]) => [
+        workstation,
+        Array.from(people).sort((left, right) =>
+          left.localeCompare(right, "zh-CN"),
+        ),
+      ]),
+    );
+  }, [personnelRollup.rows]);
   const exportWorkbenchCsv = useCallback(() => {
     const rows: unknown[][] = [];
     for (const row of visibleRobotDashboardRows) {
       rows.push([
         "workstation",
-        row.robotId ?? "—",
+        row.sourceLabel,
         row.workstation,
         row.hours,
         row.count,
@@ -1127,7 +1394,7 @@ export default function WorkbenchGroupingPanel({
         row.email,
       ]);
     }
-    for (const row of totalTimeline.rows) {
+    for (const row of dailyTrendTimeline.rows) {
       rows.push(["daily-trend", row.day, "", row.hours, row.datasets, "", ""]);
     }
     const csv = workbenchCsv(
@@ -1155,16 +1422,14 @@ export default function WorkbenchGroupingPanel({
     organization,
     personnelRollup.rows,
     range.startDate,
-    totalTimeline.rows,
+    dailyTrendTimeline,
     visibleRobotDashboardRows,
   ]);
 
   const totalHours = totalTimeline.total.hours;
-  const robotIds = robotDashboardRows.filter((row) =>
-    Boolean(row.robotId),
-  ).length;
+  const robotIds = selectedSources.length;
   const totalEpisodes = totalTimeline.total.episodes;
-  const projectedRewardAmount = robotDashboardRows.reduce(
+  const projectedRewardAmount = sourceWorkstationDashboardRows.reduce(
     (sum, row) => sum + row.reward.amount,
     0,
   );
@@ -1179,56 +1444,128 @@ export default function WorkbenchGroupingPanel({
     JSON.stringify(rewardDraft.levels) !==
       JSON.stringify(rewardDefaults.levels);
 
-  const alerts = useMemo<AlertItem[]>(() => {
-    const items: AlertItem[] = [];
-    if (
-      (workstationLegacyMappings &&
-        Object.keys(workstationLegacyMappings).length > 0) ||
-      (workstationLegacyDefaults &&
-        Object.keys(workstationLegacyDefaults).length > 0)
-    ) {
-      items.push({
-        kind: "info",
-        title: "Legacy workstation config",
-        detail:
-          "Old left SN mappings were detected. They still display, but robot_id is now the primary key.",
-      });
+  const mailRollupDatasets = useMemo<WorkbenchRollupDataset[]>(
+    () =>
+      workstationRollupDatasets.filter(
+        (dataset) =>
+          (dataset.source ??
+            workbenchDatasetSourceKey(dataset.relativePath)) !== "unclassified",
+      ),
+    [workstationRollupDatasets],
+  );
+  const mailLocalDatasets = useMemo(
+    () =>
+      sourceFilteredLocalDatasets.filter(
+        (dataset) =>
+          (dataset.source ??
+            workbenchDatasetSourceKey(dataset.relativePath)) !== "unclassified",
+      ),
+    [sourceFilteredLocalDatasets],
+  );
+  const mailTotalTimeline = useMemo(
+    () =>
+      computeWorkbenchAdditionTimeline(mailRollupDatasets, {
+        startDate: range.startDate,
+        endDate: range.endDate,
+      }),
+    [mailRollupDatasets, range.endDate, range.startDate],
+  );
+  const mailSelectedDatasetPaths = useMemo(
+    () =>
+      workbenchAdditionDatasetPaths(mailRollupDatasets, {
+        startDate: range.startDate,
+        endDate: range.endDate,
+      }),
+    [mailRollupDatasets, range.endDate, range.startDate],
+  );
+  const mailSelectedStorageBytes = useMemo(
+    () =>
+      mailSelectedDatasetPaths.reduce((sum, datasetPath) => {
+        const dataset = mailRollupDatasets.find(
+          (item) => item.relativePath === datasetPath,
+        );
+        const bytes = dataset?.sizeBytes;
+        return (
+          sum +
+          (typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0
+            ? bytes
+            : 0)
+        );
+      }, 0),
+    [mailRollupDatasets, mailSelectedDatasetPaths],
+  );
+  const mailOrganizationTotalHours = useMemo(
+    () =>
+      buildHomepageDatasetStatistics(mailLocalDatasets, {
+        preserveOrder: true,
+      }).hours,
+    [mailLocalDatasets],
+  );
+  const mailSourceCount = useMemo(
+    () =>
+      new Set(
+        mailLocalDatasets.map(
+          (dataset) =>
+            dataset.source ?? workbenchDatasetSourceKey(dataset.relativePath),
+        ),
+      ).size,
+    [mailLocalDatasets],
+  );
+  const mailWorkstationRows = useMemo(
+    () =>
+      visibleRobotDashboardRows.filter(
+        (row) => row.sourceKey !== "unclassified",
+      ),
+    [visibleRobotDashboardRows],
+  );
+  const mailProjectedRewardAmount = useMemo(
+    () =>
+      sourceWorkstationDashboardRows
+        .filter((row) => row.sourceKey !== "unclassified")
+        .reduce((sum, row) => sum + row.reward.amount, 0),
+    [sourceWorkstationDashboardRows],
+  );
+  const mailPersonnelRollup = useMemo(
+    () =>
+      computeWorkbenchPersonnelRollup(
+        mailRollupDatasets,
+        personnelWorkstationMappings,
+        personnelConfig,
+        range,
+        rewardDraft,
+        datasetScores,
+      ),
+    [
+      datasetScores,
+      mailRollupDatasets,
+      personnelConfig,
+      personnelWorkstationMappings,
+      range,
+      rewardDraft,
+    ],
+  );
+  const mailPersonnelByWorkstation = useMemo(() => {
+    const names = new Map<string, Set<string>>();
+    for (const row of mailPersonnelRollup.rows) {
+      const personnel = row.personnel.trim();
+      if (!personnel) continue;
+      for (const workstation of row.workstations) {
+        const key = workstation.trim();
+        if (!key) continue;
+        const people = names.get(key) ?? new Set<string>();
+        people.add(personnel);
+        names.set(key, people);
+      }
     }
-    if (rewardValidationError) {
-      items.push({
-        kind: "error",
-        title: "Reward rules need attention",
-        detail: rewardValidationError,
-      });
-    }
-    if (
-      (totalTimeline.rows.length ?? 0) === 0 &&
-      workstationRollupDatasets.length > 0
-    ) {
-      items.push({
-        kind: "info",
-        title: "No daily additions in range",
-        detail: "The selected window has no strict addition rows yet.",
-      });
-    }
-    if (personnelRollup.unattributedHours > 0) {
-      items.push({
-        kind: "warn",
-        title: "Personnel attribution incomplete",
-        detail:
-          formatHours(personnelRollup.unattributedHours) +
-          " hour(s) belong to workstations without personnel assignments in this range.",
-      });
-    }
-    return items.slice(0, 5);
-  }, [
-    personnelRollup.unattributedHours,
-    rewardValidationError,
-    workstationRollupDatasets.length,
-    totalTimeline.rows.length,
-    workstationLegacyDefaults,
-    workstationLegacyMappings,
-  ]);
+    return new Map(
+      Array.from(names.entries()).map(([workstation, people]) => [
+        workstation,
+        Array.from(people).sort((left, right) =>
+          left.localeCompare(right, "zh-CN"),
+        ),
+      ]),
+    );
+  }, [mailPersonnelRollup.rows]);
 
   const recipientSuggestions = useMemo(
     () =>
@@ -1298,18 +1635,20 @@ export default function WorkbenchGroupingPanel({
       organization,
       dateRange: range,
       summary: {
-        organizationTotalHours,
-        rangeHours: totalHours,
-        episodes: totalEpisodes,
-        tasks: selectedDatasetPaths.length,
-        storageBytes: selectedStorageBytes,
+        organizationTotalHours: mailOrganizationTotalHours,
+        rangeHours: mailTotalTimeline.total.hours,
+        episodes: mailTotalTimeline.total.episodes,
+        tasks: mailSelectedDatasetPaths.length,
+        storageBytes: mailSelectedStorageBytes,
         dailyTargetHours: rewardDraft.dailyTargetHours,
-        totalBonus: projectedRewardAmount,
-        robotIds,
+        totalBonus: mailProjectedRewardAmount,
+        sources: mailSourceCount,
         daysInRange: rangeDays,
       },
-      rows: robotDashboardRows.map((row) => ({
-        robotId: row.robotId,
+      rows: mailWorkstationRows.map((row) => ({
+        sourceLabel: row.sourceLabel,
+        personnel:
+          mailPersonnelByWorkstation.get(row.workstation)?.join(", ") || "—",
         sourceRepoIds: row.sourceRepoIds,
         workstation: row.workstation,
         datasets: row.count,
@@ -1322,7 +1661,7 @@ export default function WorkbenchGroupingPanel({
         rule: row.reward.level?.label ?? row.reward.symbol,
         reward: row.reward.amount,
       })),
-      personnelRows: personnelRollup.rows.map((row) => ({
+      personnelRows: mailPersonnelRollup.rows.map((row) => ({
         personnel: row.personnel,
         workstation: row.workstations.join(", ") || "—",
         hours: row.hours,
@@ -1332,28 +1671,25 @@ export default function WorkbenchGroupingPanel({
         reward: row.reward.amount,
         email: row.email,
       })),
-      personnelBonusTotal: personnelRollup.totalBonus,
-      alerts,
+      personnelBonusTotal: mailPersonnelRollup.totalBonus,
     }),
     [
-      alerts,
+      mailOrganizationTotalHours,
+      mailPersonnelByWorkstation,
+      mailPersonnelRollup,
+      mailProjectedRewardAmount,
+      mailSelectedDatasetPaths,
+      mailSelectedStorageBytes,
+      mailSourceCount,
+      mailTotalTimeline,
+      mailWorkstationRows,
       organization,
-      personnelRollup,
-      projectedRewardAmount,
       range,
       rangeDays,
-      robotDashboardRows,
-      targetHours,
-      totalEpisodes,
-      totalHours,
-      organizationTotalHours,
-      selectedDatasetPaths,
-      selectedStorageBytes,
-      robotIds,
       rewardDraft.dailyTargetHours,
+      targetHours,
     ],
   );
-
   const saveWorkstationMappings = useCallback(async () => {
     setMappingsSaving(true);
     setMappingsError(null);
@@ -1530,13 +1866,13 @@ export default function WorkbenchGroupingPanel({
   const heatmapMaxHours = Math.max(
     1,
     ...heatmapRows.flatMap((row) =>
-      visibleDays.map((day) => row.hoursByDay[day] ?? 0),
+      heatmapDays.map((day) => row.hoursByDay[day] ?? 0),
     ),
   );
 
   const replayDataset = useMemo(
     () =>
-      replayEnabled
+      replayEnabled && selectedSourceSet.has("taccap-g1")
         ? (datasets.find(
             (dataset) =>
               dataset.relativePath.trim() === TACCAP_WORKBENCH_REPLAY_DATASET,
@@ -1544,10 +1880,11 @@ export default function WorkbenchGroupingPanel({
           datasets.find(isTacCapReplayDataset) ??
           displayReplayDataset)
         : undefined,
-    [datasets, displayReplayDataset, replayEnabled],
+    [datasets, displayReplayDataset, replayEnabled, selectedSourceSet],
   );
   const currentEpisodeIsReplaySource = Boolean(
     replayEnabled &&
+    selectedSourceSet.has("taccap-g1") &&
     episodeData &&
     isTacCapWorkbenchReplaySource(
       episodeData.datasetInfo.repoId,
@@ -1621,9 +1958,13 @@ export default function WorkbenchGroupingPanel({
             robotIds,
             daysInRange: rangeDays,
           },
-          workstations: robotDashboardRows.map((row) => ({
-            robotId: row.robotId ?? row.leftGripperSn ?? "—",
+          workstations: sourceWorkstationDashboardRows.map((row) => ({
+            sourceLabel: row.sourceLabel,
+            robotId: row.workstation,
             workstation: row.workstation,
+            personnel:
+              personnelByWorkstation.get(row.workstation)?.join(", ") || "—",
+            sourceRepoIds: row.sourceRepoIds,
             datasets: row.count,
             hours: row.hours,
             targetHours,
@@ -1648,19 +1989,19 @@ export default function WorkbenchGroupingPanel({
           })),
           personnelBonusTotal: personnelRollup.totalBonus,
           unattributedHours: personnelRollup.unattributedHours,
-          heatmapDays: visibleDays,
+          heatmapDays,
           heatmapRows: heatmapRows.map((row) => ({
-            robotId: row.robotId,
+            robotId: row.workstation,
             workstation: row.workstation,
             totalHours: row.totalHours,
             hoursByDay: row.hoursByDay,
           })),
-          trend: totalTimeline.rows.map((row) => ({
+          trend: dailyTrendTimeline.rows.map((row) => ({
             day: row.day,
             hours: row.hours,
             datasets: row.datasets,
           })),
-          topGroups: selectedRows.map((row) => ({
+          topGroups: topWorkstationRows.map((row) => ({
             group: row.group,
             hours: row.hours,
             datasets: row.count,
@@ -1690,22 +2031,23 @@ export default function WorkbenchGroupingPanel({
     heatmapRows,
     organization,
     organizationTotalHours,
+    personnelByWorkstation,
     personnelRollup,
     projectedRewardAmount,
     range,
     rewardDraft.dailyTargetHours,
     replayDataset,
-    robotDashboardRows,
+    sourceWorkstationDashboardRows,
     selectedDatasetPaths.length,
-    selectedRows,
+    topWorkstationRows,
+    dailyTrendTimeline,
     selectedStorageBytes,
     targetHours,
-    totalTimeline.rows,
     totalTimeline.total.episodes,
     totalTimeline.total.hours,
     robotIds,
     rangeDays,
-    visibleDays,
+    heatmapDays,
     episodeData,
   ]);
 
@@ -1791,22 +2133,29 @@ export default function WorkbenchGroupingPanel({
           </div>
 
           <div className="grid gap-3 lg:grid-cols-[0.8fr_1.25fr_1.25fr]">
-            <label className="flex min-w-0 flex-col gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-slate-500">
-              <span>Group by</span>
-              <select
-                value={dimension}
-                onChange={(event) =>
-                  setDimension(event.target.value as WorkbenchRollupDimension)
-                }
-                className="h-10 rounded-lg border border-white/10 bg-[var(--surface-0)]/70 px-3 text-xs font-normal normal-case tracking-normal text-slate-200 transition-colors focus:border-cyan-400/70 focus:outline-none"
+            <div className="flex min-w-0 flex-col gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-slate-500">
+              <span>Sources</span>
+              <div
+                className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-white/10 bg-[var(--surface-0)]/70 px-3 py-2 normal-case tracking-normal"
+                role="group"
+                aria-label="Workbench data sources"
               >
-                {DIMENSIONS.map((item) => (
-                  <option key={item.value} value={item.value}>
-                    {item.label}
-                  </option>
+                {SOURCE_OPTIONS.map((item) => (
+                  <label
+                    key={item.value}
+                    className="flex items-center gap-1.5 text-xs font-normal text-slate-200"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedSources.includes(item.value)}
+                      onChange={() => toggleWorkbenchSource(item.value)}
+                      className="accent-cyan-400"
+                    />
+                    <span>{item.label}</span>
+                  </label>
                 ))}
-              </select>
-            </label>
+              </div>
+            </div>
             <label className="flex min-w-0 flex-col gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-slate-500">
               <span>Start date</span>
               <input
@@ -1918,6 +2267,28 @@ export default function WorkbenchGroupingPanel({
         </section>
       </header>
 
+      {undatedDatasetCount > 0 && (
+        <section
+          aria-label="Workbench datasets awaiting date confirmation"
+          className="rounded-md border border-sky-400/20 bg-sky-400/[0.05] px-3 py-2.5 text-xs text-sky-100"
+        >
+          <span className="font-medium text-sky-200">日期待确认</span>
+          <span className="ml-2 text-sky-100/75">
+            {undatedDatasetCount.toLocaleString()}{" "}
+            个数据集没有采集日期证据，仍计入来源总量，但不计入具体日期范围。
+          </span>
+          <details className="mt-2">
+            <summary className="cursor-pointer text-[11px] text-sky-200/90">
+              查看待确认数据集路径
+            </summary>
+            <ul className="mt-2 max-h-40 space-y-1 overflow-auto rounded border border-sky-300/10 bg-black/10 p-2 font-mono text-[11px] text-sky-100/75">
+              {undatedDatasetPaths.map((datasetPath) => (
+                <li key={datasetPath}>{datasetPath}</li>
+              ))}
+            </ul>
+          </details>
+        </section>
+      )}
       <WorkbenchStatisticsFilterNotice filter={statisticsFilter} />
 
       {error && (
@@ -1979,7 +2350,7 @@ export default function WorkbenchGroupingPanel({
                   "Total bonus",
                   formatWorkbenchRewardAmount(projectedRewardAmount),
                 ],
-                ["Robot IDs", formatCount(robotIds)],
+                ["Sources", formatCount(robotIds)],
                 [
                   "Days in range",
                   rangeDays === null ? "—" : formatCount(rangeDays),
@@ -2017,15 +2388,14 @@ export default function WorkbenchGroupingPanel({
                   Workstation detail
                 </h4>
                 <p className="mt-1 text-[11px] text-slate-500">
-                  Robot ID is the primary key; source repos stay collapsed for
-                  compact scanning. Row totals and Source repos follow the
-                  statistics scope shown above.
+                  Rows follow the selected statistics scope and workstation
+                  mappings.
                 </p>
               </div>
               <span className="text-[10px] text-slate-500">
-                {rowNames.size === 0
+                {sourceWorkstationDashboardRows.length === 0
                   ? "No grouped rows"
-                  : `${rowNames.size} group(s)`}
+                  : `${sourceWorkstationDashboardRows.length} group(s)`}
               </span>
             </div>
             <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -2045,15 +2415,20 @@ export default function WorkbenchGroupingPanel({
                   value={workstationSort}
                   onChange={(event) =>
                     setWorkstationSort(
-                      event.target.value as "hours" | "robot" | "datasets",
+                      event.target.value as
+                        | "reward"
+                        | "hours"
+                        | "robot"
+                        | "datasets",
                     )
                   }
                   className="rounded-md border border-white/10 bg-[var(--surface-0)] px-2 py-1.5 text-slate-200 outline-none"
                   aria-label="Sort workstation rows"
                 >
+                  <option value="reward">Reward</option>
                   <option value="hours">Hours</option>
                   <option value="datasets">Datasets</option>
-                  <option value="robot">Robot ID</option>
+                  <option value="robot">Workstation</option>
                 </select>
               </label>
               <button
@@ -2075,12 +2450,22 @@ export default function WorkbenchGroupingPanel({
               <table className="w-full min-w-[980px] border-collapse text-left text-xs">
                 <thead className="bg-[var(--surface-2)] text-slate-400">
                   <tr>
-                    <th className="px-3 py-2.5 font-medium">Robot ID</th>
-                    <th className="px-3 py-2.5 font-medium">Source repos</th>
                     <th className="px-3 py-2.5 font-medium">Workstation</th>
+                    <th className="px-3 py-2.5 font-medium">Personnel</th>
+                    <th className="px-3 py-2.5 font-medium">Source repos</th>
                     <th className="px-3 py-2.5 font-medium">Datasets</th>
-                    <th className="px-3 py-2.5 font-medium">Hours</th>
-                    <th className="px-3 py-2.5 font-medium">Range target</th>
+                    <th
+                      className="px-3 py-2.5 font-medium"
+                      title="Workstation Hours"
+                    >
+                      WS hours
+                    </th>
+                    <th
+                      className="px-3 py-2.5 font-medium"
+                      title="Per-person target hours"
+                    >
+                      Avg target
+                    </th>
                     <th className="px-3 py-2.5 font-medium">Rate</th>
                     <th className="px-3 py-2.5 font-medium">Rule</th>
                     <th className="px-3 py-2.5 font-medium">Reward</th>
@@ -2089,7 +2474,7 @@ export default function WorkbenchGroupingPanel({
                 <tbody>
                   {visibleRobotDashboardRows.map((row) => (
                     <tr
-                      key={row.robotId ?? row.leftGripperSn ?? row.group}
+                      key={`${row.sourceKey}-${row.workstation}-${row.group}`}
                       className="cursor-pointer border-t border-white/5 transition-colors hover:bg-cyan-400/[0.04] focus:bg-cyan-400/[0.06] focus:outline-none"
                       tabIndex={0}
                       role="button"
@@ -2101,9 +2486,12 @@ export default function WorkbenchGroupingPanel({
                           return;
                         }
                         openWorkbenchDrilldown({
-                          title: `${row.robotId ?? "Unassigned"} workstation detail`,
+                          title: `${row.workstation} detail`,
                           detail: `${row.workstation} · ${formatHours(row.hours)} hours · ${formatCount(row.count)} datasets`,
-                          datasets: datasetsForRobot(row.robotId),
+                          datasets: datasetsForSourceWorkstation(
+                            row.sourceKey,
+                            row.workstation,
+                          ),
                           episodeId: 0,
                         });
                       }}
@@ -2111,22 +2499,37 @@ export default function WorkbenchGroupingPanel({
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
                           openWorkbenchDrilldown({
-                            title: `${row.robotId ?? "Unassigned"} workstation detail`,
+                            title: `${row.workstation} detail`,
                             detail: `${row.workstation} · ${formatHours(row.hours)} hours · ${formatCount(row.count)} datasets`,
-                            datasets: datasetsForRobot(row.robotId),
+                            datasets: datasetsForSourceWorkstation(
+                              row.sourceKey,
+                              row.workstation,
+                            ),
                             episodeId: 0,
                           });
                         }
                       }}
                     >
-                      <td className="px-3 py-2.5 text-slate-100 tabular-nums">
-                        {row.robotId ?? "—"}
+                      <td
+                        className="cursor-help px-3 py-2.5 text-slate-100"
+                        title={`Workstation: ${row.workstation}`}
+                      >
+                        {row.workstation}
+                      </td>
+                      <td
+                        className="px-3 py-2.5 text-slate-300"
+                        title={
+                          personnelByWorkstation
+                            .get(row.workstation)
+                            ?.join(", ") || "No personnel mapping"
+                        }
+                      >
+                        {personnelByWorkstation
+                          .get(row.workstation)
+                          ?.join(", ") || "—"}
                       </td>
                       <td className="px-3 py-2.5 text-slate-300">
                         <SourceReposCell repoIds={row.sourceRepoIds} />
-                      </td>
-                      <td className="px-3 py-2.5 text-slate-100">
-                        {row.workstation}
                       </td>
                       <td className="px-3 py-2.5 text-slate-300 tabular-nums">
                         {formatCount(row.count)}
@@ -2174,14 +2577,19 @@ export default function WorkbenchGroupingPanel({
                 Workstation day heatmap
               </h4>
               <span className="text-[10px] text-slate-500">
-                {visibleDays.length === 0
-                  ? "No days in range"
-                  : visibleDays.length + " days"}
+                {heatmapDays.length === 0
+                  ? "No data days since 2026-08-22"
+                  : "2026-08-22 → " +
+                    (workstationHeatmapRange.endDate ?? "Latest") +
+                    " · " +
+                    heatmapDays.length +
+                    " latest data days"}
               </span>
             </div>
-            {visibleDays.length === 0 ? (
+            {heatmapDays.length === 0 ? (
               <div className="rounded-md border border-white/10 bg-white/[0.02] p-4 text-xs text-slate-500">
-                No strict addition days are available for this range.
+                No workstation day data is available from 2026-08-22 through the
+                selected end date.
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -2191,14 +2599,14 @@ export default function WorkbenchGroupingPanel({
                     display: "grid",
                     gridTemplateColumns:
                       "minmax(13rem, 1.4fr) repeat(" +
-                      visibleDays.length +
+                      heatmapDays.length +
                       ", minmax(3.5rem, 1fr))",
                   }}
                 >
                   <div className="border-b border-white/10 px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                    Robot / workstation
+                    Workstation
                   </div>
-                  {visibleDays.map((day) => (
+                  {heatmapDays.map((day) => (
                     <div
                       key={day}
                       className="border-b border-white/10 px-2 py-2 text-center text-[10px] uppercase tracking-[0.12em] text-slate-500 tabular-nums"
@@ -2206,18 +2614,14 @@ export default function WorkbenchGroupingPanel({
                       {day.slice(5)}
                     </div>
                   ))}
-                  {heatmapRows.slice(0, 10).map((row, rowIndex) => (
-                    <Fragment key={row.robotId + "-" + rowIndex}>
+                  {heatmapRows.map((row) => (
+                    <Fragment key={row.workstation}>
                       <div className="border-b border-white/5 px-3 py-2 text-xs text-slate-200">
                         <div className="truncate font-medium">
-                          {row.robotId}
-                        </div>
-                        <div className="truncate text-[10px] text-slate-500">
                           {row.workstation}
-                          {row.leftGripperSn ? " · " + row.leftGripperSn : ""}
                         </div>
                       </div>
-                      {visibleDays.map((day) => {
+                      {heatmapDays.map((day) => {
                         const hours = row.hoursByDay[day] ?? 0;
                         const alpha =
                           hours <= 0
@@ -2229,7 +2633,7 @@ export default function WorkbenchGroupingPanel({
                         return (
                           <button
                             type="button"
-                            key={row.robotId + "-" + day}
+                            key={row.workstation + "-" + day}
                             className="border-b border-white/5 px-2 py-2 text-center text-xs tabular-nums text-slate-100 transition-colors hover:bg-cyan-200/20 focus:bg-cyan-200/25 focus:outline-none"
                             style={{
                               backgroundColor:
@@ -2237,22 +2641,43 @@ export default function WorkbenchGroupingPanel({
                             }}
                             onClick={() =>
                               openWorkbenchDrilldown({
-                                title: `${row.robotId} · ${day}`,
-                                detail: `${row.workstation} · ${formatHours(hours)} hours`,
+                                title: row.workstation + " · " + day,
+                                detail:
+                                  row.workstation +
+                                  " · " +
+                                  formatHours(hours) +
+                                  " hours",
                                 day,
-                                datasets: selectedWorkbenchDatasets.filter(
-                                  (dataset) =>
-                                    (dataset.robotId?.trim() || "—") ===
-                                      row.robotId &&
-                                    (dataset.dailyAdditions ?? []).some(
-                                      (addition) => addition.day === day,
-                                    ),
+                                datasets: sourceFilteredLocalDatasets.filter(
+                                  (dataset) => {
+                                    const mappingKey =
+                                      dataset.robotId?.trim() ||
+                                      dataset.leftGripperSn?.trim() ||
+                                      "";
+                                    const mappedWorkstation = mappingKey
+                                      ? workstationDraft[mappingKey]?.trim() ||
+                                        workstationMappings[
+                                          mappingKey
+                                        ]?.trim() ||
+                                        workstationDefaults[
+                                          mappingKey
+                                        ]?.trim() ||
+                                        "未分配"
+                                      : "未分配";
+                                    return (
+                                      mappedWorkstation === row.workstation &&
+                                      workbenchDatasetRangeContributions(
+                                        dataset,
+                                        workstationHeatmapRange,
+                                      ).some((addition) => addition.day === day)
+                                    );
+                                  },
                                 ),
                                 episodeId: 0,
                               })
                             }
                             title={
-                              row.robotId +
+                              row.workstation +
                               " " +
                               day +
                               ": " +
@@ -2277,7 +2702,8 @@ export default function WorkbenchGroupingPanel({
                 Daily trend
               </h4>
               <span className="text-[10px] text-slate-500">
-                Selected range hours
+                {dailyTrendTimeline.range.startDate ?? "Beginning"} →{" "}
+                {dailyTrendTimeline.range.endDate ?? "Latest"}
               </span>
             </div>
             <div className="h-64 w-full">
@@ -2335,11 +2761,12 @@ export default function WorkbenchGroupingPanel({
                               title: `Daily trend · ${day}`,
                               detail: `${formatHours(props.payload?.hours ?? 0)} hours`,
                               day,
-                              datasets: selectedWorkbenchDatasets.filter(
+                              datasets: sourceFilteredLocalDatasets.filter(
                                 (dataset) =>
-                                  (dataset.dailyAdditions ?? []).some(
-                                    (addition) => addition.day === day,
-                                  ),
+                                  workbenchDatasetRangeContributions(
+                                    dataset,
+                                    dailyTrendTimeline.range,
+                                  ).some((addition) => addition.day === day),
                               ),
                               episodeId: 0,
                             });
@@ -2374,6 +2801,10 @@ export default function WorkbenchGroupingPanel({
                 <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
                   Top groups
                 </h4>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Workstation · {range.startDate ?? "Beginning"} →{" "}
+                  {range.endDate ?? "Latest"}
+                </p>
               </div>
             </div>
             <div className="h-64 w-full">
@@ -2542,7 +2973,7 @@ export default function WorkbenchGroupingPanel({
                   <tbody>
                     {robotDashboardRows.map((row) => (
                       <tr
-                        key={row.robotId ?? row.leftGripperSn ?? row.group}
+                        key={`${row.sourceKey}-${row.workstation}-${row.group}`}
                         className="border-t border-white/5"
                       >
                         <td className="px-3 py-2.5 text-slate-100">

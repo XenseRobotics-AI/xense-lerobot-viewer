@@ -152,15 +152,35 @@ function normalizeAssignment(
         `Schedule ${day} workstation ${workstation} contains duplicate personnel ID: ${personId}.`,
       );
     }
-    if (member.creditFactor !== 1) {
+    if (
+      typeof member.creditFactor !== "number" ||
+      !Number.isFinite(member.creditFactor) ||
+      member.creditFactor <= 0
+    ) {
       throw new Error(
-        `Schedule ${day} workstation ${workstation} creditFactor must be 1.`,
+        `Schedule ${day} workstation ${workstation} creditFactor must be a positive number.`,
       );
     }
     memberIds.add(personId);
-    return { personId, creditFactor: 1 as const };
+    return { personId, creditFactor: member.creditFactor };
   });
-  return { workstation, members };
+  const collectorCount =
+    value.collectorCount === undefined ? members.length : value.collectorCount;
+  if (
+    typeof collectorCount !== "number" ||
+    !Number.isInteger(collectorCount) ||
+    collectorCount <= 0
+  ) {
+    throw new Error(
+      `Schedule ${day} workstation ${workstation} collectorCount must be a positive integer.`,
+    );
+  }
+  if (collectorCount < members.length) {
+    throw new Error(
+      `Schedule ${day} workstation ${workstation} collectorCount cannot be less than the mapped personnel count.`,
+    );
+  }
+  return { workstation, collectorCount, members };
 }
 
 function normalizeSchedules(

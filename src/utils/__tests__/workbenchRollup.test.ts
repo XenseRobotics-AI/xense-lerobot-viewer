@@ -26,6 +26,8 @@ import {
   workbenchAdditionAvailableDays,
   workbenchAdditionDatasetPaths,
   workbenchDatasetSuffixDay,
+  workbenchDatasetRangeContributions,
+  workbenchDatasetSourceKey,
   workbenchDayKey,
   workbenchGroupAdditionDatasetNames,
   workbenchRollupLabel,
@@ -118,7 +120,7 @@ describe("workbenchRollupLabel", () => {
   });
 
   test("supports source, task and robot type", () => {
-    expect(workbenchRollupLabel(row, "source")).toBe("TacVerse");
+    expect(workbenchRollupLabel(row, "source")).toBe("TacVerse/待确认");
     expect(workbenchRollupLabel(row, "task")).toBe("task");
     expect(workbenchRollupLabel(row, "robot_type")).toBe("g1");
     expect(
@@ -659,5 +661,80 @@ describe("strict workbench addition rollups", () => {
       episodes: 19,
       hours: 1.9,
     });
+  });
+});
+
+describe("workbench source classification", () => {
+  test("distinguishes dated sources, exact TacFlow datasets, and pending paths", () => {
+    expect(workbenchDatasetSourceKey("TacVerse/taccap-g1-place-cup-0826")).toBe(
+      "taccap-g1",
+    );
+    expect(workbenchDatasetSourceKey("TacVerse/xtac-umi-g1-open-0826")).toBe(
+      "xtac-umi-g1",
+    );
+    expect(
+      workbenchDatasetSourceKey("TacVerse/taccap-g1-insert-hook-assembly"),
+    ).toBe("tacflow");
+    expect(
+      workbenchDatasetSourceKey("TacVerse/taccap-g1-press-remote-buttons"),
+    ).toBe("tacflow");
+    expect(workbenchDatasetSourceKey("TacVerse/taccap-g1-test")).toBe(
+      "unclassified",
+    );
+    expect(
+      workbenchDatasetSourceKey("TacVerse/taccap-g1-insert-hook-assembly-0826"),
+    ).toBe("taccap-g1");
+    expect(
+      workbenchDatasetSourceKey(
+        "TacVerse/nested/taccap-g1-insert-hook-assembly",
+      ),
+    ).toBe("unclassified");
+  });
+});
+
+describe("workbench capture span contributions", () => {
+  test("counts an undated TacFlow dataset once when its span overlaps", () => {
+    const item = dataset("TacVerse/taccap-g1-insert-hook-assembly", {
+      source: "tacflow",
+      captureSpan: { from: "2026-08-20", to: "2026-08-22" },
+      dateEvidence: "sessions",
+      durationHours: 0.125,
+    });
+
+    expect(
+      workbenchDatasetRangeContributions(item, {
+        startDate: "2026-08-21",
+        endDate: "2026-08-22",
+      }),
+    ).toEqual([expect.objectContaining({ day: "2026-08-21", hours: 0.125 })]);
+    expect(
+      workbenchDatasetRangeContributions(item, {
+        startDate: "2026-08-23",
+        endDate: "2026-08-24",
+      }),
+    ).toEqual([]);
+    expect(
+      workbenchDatasetRangeContributions(item, {
+        startDate: "2026-08-20",
+        endDate: "2026-08-23",
+      }),
+    ).toHaveLength(1);
+  });
+
+  test("keeps datasets without date evidence out of range additions", () => {
+    const item = dataset("TacVerse/taccap-g1-test", {
+      durationHours: 0.5,
+      dateEvidence: "none",
+      captureSpan: null,
+    });
+    expect(computeWorkbenchRollup([item], "source")).toEqual([
+      expect.objectContaining({ hours: 0.5, count: 1 }),
+    ]);
+    expect(
+      workbenchDatasetRangeContributions(item, {
+        startDate: "2026-08-20",
+        endDate: "2026-08-21",
+      }),
+    ).toEqual([]);
   });
 });

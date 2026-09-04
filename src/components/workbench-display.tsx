@@ -45,6 +45,7 @@ import {
   getWorkbenchDisplayClockRemaining,
   getWorkbenchDisplaySlideIndex,
   getWorkbenchHeatmapWindow,
+  getWorkbenchDisplayDailyTargetHours,
   pauseWorkbenchDisplayClock,
   resumeWorkbenchDisplayClock,
   type WorkbenchDisplayClock,
@@ -65,6 +66,7 @@ type WorkbenchDisplayProps = {
 };
 
 type DelayStyle = CSSProperties & { "--display-delay": string };
+type OverviewCardStyle = CSSProperties & { "--overview-delay": string };
 type BarStyle = CSSProperties & {
   "--display-delay": string;
   "--display-bar-width": string;
@@ -224,7 +226,7 @@ function OverviewSlide({
       `${formatHours(snapshot.summary.dailyTargetHours)} / day`,
     ],
     ["Total bonus", formatReward(snapshot.summary.totalBonus)],
-    ["Robot IDs", formatCount(snapshot.summary.robotIds)],
+    ["Sources", formatCount(snapshot.summary.robotIds)],
     [
       "Days in range",
       snapshot.summary.daysInRange === null
@@ -247,6 +249,11 @@ function OverviewSlide({
             <div
               className={`${styles.overviewCard} ${index < 2 ? styles.overviewCardFeatured : ""}`}
               key={label}
+              style={
+                {
+                  "--overview-delay": `${index * 180}ms`,
+                } as OverviewCardStyle
+              }
             >
               <span>{label}</span>
               <strong>{value}</strong>
@@ -304,10 +311,11 @@ function WorkstationDetailSlide({
           <table className={styles.detailTable}>
             <thead>
               <tr>
-                <th>Robot ID</th>
                 <th>Workstation</th>
+                <th>Personnel</th>
+                <th>Source repos</th>
                 <th>Datasets</th>
-                <th>Hours</th>
+                <th title="Workstation Hours">WS hours</th>
                 <th>Target</th>
                 <th>Rate</th>
                 <th>Rule</th>
@@ -324,7 +332,7 @@ function WorkstationDetailSlide({
                       : styles.toneAttention;
                 return (
                   <tr
-                    key={`${page.pageIndex}-${row.robotId}`}
+                    key={`${page.pageIndex}-${row.sourceLabel ?? row.robotId}-${row.workstation}`}
                     className={styles.revealRow}
                     style={
                       {
@@ -332,8 +340,21 @@ function WorkstationDetailSlide({
                       } as DelayStyle
                     }
                   >
-                    <td className={styles.primaryCell}>{row.robotId}</td>
-                    <td>{row.workstation}</td>
+                    <td
+                      className={`${styles.primaryCell} ${styles.workstationCell}`}
+                      title={`Robot ID: ${row.robotId}`}
+                    >
+                      {row.workstation}
+                    </td>
+                    <td title={row.personnel}>{row.personnel}</td>
+                    <td
+                      className={styles.sourceRepoCell}
+                      title={row.sourceRepoIds.join(", ")}
+                    >
+                      {row.sourceRepoIds.length > 0
+                        ? row.sourceRepoIds.join(", ")
+                        : "—"}
+                    </td>
                     <td>{formatCount(row.datasets)}</td>
                     <td className={styles.hoursCell}>
                       {formatHours(row.hours)}
@@ -414,8 +435,8 @@ function PersonnelWorkloadSlide({
               <tr>
                 <th>Personnel</th>
                 <th>Workstation</th>
-                <th>Hours</th>
-                <th>Range target</th>
+                <th title="Per-person hours">Avg hours</th>
+                <th title="Per-person target hours">Avg target</th>
                 <th>Rate</th>
                 <th>Rule</th>
                 <th>Reward</th>
@@ -515,8 +536,8 @@ function WorkstationHeatmapSlide({
         title="Workstation day heatmap"
         meta={
           snapshot.heatmapDays.length === 0
-            ? "No daily additions"
-            : `Window ${windowPage.pageIndex + 1} / ${windowPage.pageCount} · Top ${snapshot.heatmapRows.length}`
+            ? "No daily additions since 2026-08-22"
+            : `2026-08-22 → ${snapshot.dateRange.endDate ?? "Latest"} · Window ${windowPage.pageIndex + 1} / ${windowPage.pageCount} · Top ${snapshot.heatmapRows.length}`
         }
       />
       {windowPage.items.length === 0 || snapshot.heatmapRows.length === 0 ? (
@@ -530,7 +551,7 @@ function WorkstationHeatmapSlide({
             gridTemplateColumns: `minmax(11rem, 1.6fr) repeat(${windowPage.items.length}, minmax(0, 1fr))`,
           }}
         >
-          <div className={styles.heatmapCorner}>Robot / workstation</div>
+          <div className={styles.heatmapCorner}>Workstation</div>
           {windowPage.items.map((day, dayIndex) => (
             <div
               key={day}
@@ -547,10 +568,9 @@ function WorkstationHeatmapSlide({
             </div>
           ))}
           {snapshot.heatmapRows.map((row) => (
-            <div className={styles.heatmapContents} key={row.robotId}>
+            <div className={styles.heatmapContents} key={row.workstation}>
               <div className={styles.heatmapLabel}>
-                <strong title={row.robotId}>{row.robotId}</strong>
-                <span title={row.workstation}>{row.workstation}</span>
+                <strong title={row.workstation}>{row.workstation}</strong>
               </div>
               {windowPage.items.map((day, dayIndex) => {
                 const hours = row.hoursByDay[day] ?? 0;
@@ -563,7 +583,7 @@ function WorkstationHeatmapSlide({
                     : Math.min(0.84, 0.2 + (hours / maxHours) * 0.64);
                 return (
                   <div
-                    key={`${row.robotId}-${day}`}
+                    key={`${row.workstation}-${day}`}
                     className={`${styles.heatmapCell} ${styles.revealColumn} ${
                       achieved ? styles.heatmapSuccess : ""
                     }`}
@@ -577,7 +597,7 @@ function WorkstationHeatmapSlide({
                             : undefined,
                       } as DelayStyle
                     }
-                    title={`${row.robotId} · ${day} · ${formatHours(hours)}`}
+                    title={`${row.workstation} · ${day} · ${formatHours(hours)}`}
                   >
                     {hours > 0 ? hours.toFixed(1) : "—"}
                   </div>
@@ -605,6 +625,10 @@ const DailyTrendSlide = memo(function DailyTrendSlide({
     label: row.day.slice(5),
   }));
   const peakHours = Math.max(0, ...snapshot.trend.map((row) => row.hours));
+  const dailyTargetHours = getWorkbenchDisplayDailyTargetHours(
+    snapshot.dailyTargetHours,
+    snapshot.workstations.length,
+  );
 
   return (
     <section className={styles.slideSection}>
@@ -612,7 +636,7 @@ const DailyTrendSlide = memo(function DailyTrendSlide({
         index={4}
         total={total}
         title="Daily trend"
-        meta={`${snapshot.trend.length} reporting day${snapshot.trend.length === 1 ? "" : "s"}`}
+        meta={`2026-07-01 → ${snapshot.dateRange.endDate ?? "Latest"} · ${snapshot.trend.length} reporting day${snapshot.trend.length === 1 ? "" : "s"}`}
       />
       {chartRows.length === 0 ? (
         <EmptySlide range={formatRange(snapshot)}>
@@ -662,14 +686,14 @@ const DailyTrendSlide = memo(function DailyTrendSlide({
                     String(payload[0]?.payload?.day ?? "")
                   }
                 />
-                {snapshot.dailyTargetHours > 0 && (
+                {dailyTargetHours > 0 && (
                   <ReferenceLine
-                    y={snapshot.dailyTargetHours}
+                    y={dailyTargetHours}
                     stroke="#fbbf24"
                     strokeDasharray="8 7"
                     strokeWidth={1.5}
                     label={{
-                      value: `Daily target ${snapshot.dailyTargetHours.toFixed(1)}h`,
+                      value: "Daily target " + formatHours(dailyTargetHours),
                       fill: "#fbbf24",
                       fontSize: 13,
                       position: "insideTopRight",
@@ -700,8 +724,11 @@ const DailyTrendSlide = memo(function DailyTrendSlide({
             </div>
             <div className={styles.smallMetrics}>
               <div>
-                <span>Daily target</span>
-                <strong>{formatHours(snapshot.dailyTargetHours)}</strong>
+                <span>
+                  Daily target · {formatCount(snapshot.workstations.length)}{" "}
+                  groups
+                </span>
+                <strong>{formatHours(dailyTargetHours)}</strong>
               </div>
               <div>
                 <span>Peak day</span>
@@ -862,7 +889,7 @@ const TopGroupsSlide = memo(function TopGroupsSlide({
         index={5}
         total={total}
         title="Top groups"
-        meta={`Ranked by hours · Top ${snapshot.topGroups.length}`}
+        meta={`Workstation · ${formatRange(snapshot)} · Top ${snapshot.topGroups.length}`}
       />
       {snapshot.topGroups.length === 0 ? (
         <EmptySlide range={formatRange(snapshot)}>

@@ -76,8 +76,8 @@ const LIST_TIMEOUT_MS = 120_000;
  * `TacVerse/merged/<name>` and re-fetch roughly 500 GB — silently, as a
  * duplication rather than an error.
  *
- * `repo_target()` now understands the bucketed layout, which makes the
- * Workbench-only metadata refresh safe. Full downloads remain disabled until
+ * `stats_repo_target()` keeps Workbench metadata in the direct TacVerse layout;
+ * the bucket-aware resolver remains reserved for full-dataset sync. Full downloads remain disabled until
  * `sync_fast.py` in the engine's work tree adopts the same contract.
  */
 // Annotated `boolean` rather than inferred: a literal `true` narrows the type
@@ -392,8 +392,8 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   // Workbench's metadata-only path transfers just info/hardware JSON and uses
-  // the bucket-aware target resolver. Keep every full-dataset entry point
-  // closed until the engine-side downloader shares that layout contract.
+  // the direct TacVerse target resolver. Keep every full-dataset entry point
+  // closed until the engine-side downloader shares the bucket layout contract.
   if (FULL_SYNC_DISABLED && body.metadataOnly !== true) {
     return Response.json({ error: SYNC_DISABLED_REASON }, { status: 503 });
   }

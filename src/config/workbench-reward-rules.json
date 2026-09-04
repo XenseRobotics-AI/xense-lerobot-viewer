@@ -31,6 +31,12 @@
         "maxPercent": null,
         "amount": 200
       }
-    ]
+    ],
+    "qualityBonusByGrade": {
+      "A": 20,
+      "B": 10,
+      "C": 0,
+      "D": -10
+    }
   }
 }

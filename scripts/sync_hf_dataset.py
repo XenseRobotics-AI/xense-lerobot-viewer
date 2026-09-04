@@ -216,6 +216,21 @@ def repo_target(root: str, org: str, repo_id: str) -> str:
     return default_target
 
 
+def stats_repo_target(root: str, org: str, repo_id: str) -> str:
+    """Return the metadata-only target for a Hub dataset.
+
+    Workbench statistics for the HF ``TacVerse`` organization are kept in the
+    direct historical layout ``<root>/TacVerse/<name>``. They must not inherit
+    the bucket default used by full-corpus synchronization, because the
+    Workbench scanner deliberately excludes ``TacVerse/merged`` outputs.
+    Other organizations continue to use the normal sync target resolver.
+    """
+    if org == MOVED_CORPUS_CONTAINER:
+        name = repo_id.rsplit("/", 1)[-1]
+        return os.path.join(root, MOVED_CORPUS_CONTAINER, name)
+    return repo_target(root, org, repo_id)
+
+
 def local_snapshot_shas(target: str) -> set[str]:
     """Commits `snapshot_download` has already materialised in this directory.
 

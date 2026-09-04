@@ -26,8 +26,8 @@ const SYNC_URL = "/api/local-datasets/sync";
  * The corpus moved to `TacVerse/{merged,raw,failed,released,in-processing}/…`,
  * while `scripts/sync_hf_dataset.py:repo_target()` writes to
  * `<root>/<org>/<name>` — and `TacVerse` is *also* the Hugging Face org slug.
- * `repo_target()` now protects the metadata-only path, but the engine-side
- * downloader must adopt the same layout before full sync is re-enabled.
+ * `stats_repo_target()` protects the metadata-only path, while the engine-side
+ * downloader keeps its bucket-aware target before full sync is re-enabled.
  */
 export const SYNC_DISABLED = true;
 export const SYNC_DISABLED_REASON =
@@ -141,8 +141,13 @@ export async function runSync(
     token?: string;
   } = {},
 ): Promise<SyncResult> {
-  const { signal, force = false, metadataOnly = false, endpoint, token } =
-    options;
+  const {
+    signal,
+    force = false,
+    metadataOnly = false,
+    endpoint,
+    token,
+  } = options;
   const response = await fetch(SYNC_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

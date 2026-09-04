@@ -1,4 +1,5 @@
 import type { WorkbenchRewardPreview } from "@/utils/workbenchRewards";
+import type { WorkbenchQualitySettlement } from "@/types/workbench-score.types";
 
 export type WorkbenchPerson = {
   id: string;
@@ -8,11 +9,14 @@ export type WorkbenchPerson = {
 
 export type WorkbenchPersonnelScheduleMember = {
   personId: string;
-  creditFactor: 1;
+  /** Positive relative contribution weight within this workstation/day. */
+  creditFactor: number;
 };
 
 export type WorkbenchPersonnelScheduleAssignment = {
   workstation: string;
+  /** Original number of collectors for this workstation/day. */
+  collectorCount?: number;
   members: WorkbenchPersonnelScheduleMember[];
 };
 
@@ -48,6 +52,12 @@ export type WorkbenchPersonnelRollupRow = {
   ratePercent: number | null;
   rule: string;
   reward: WorkbenchRewardPreview;
+  /** Existing duration/OKR bonus. */
+  durationBonus: number;
+  /** Per-dataset quality bonuses allocated by contribution factor. */
+  qualityBonus: number;
+  /** Duration plus quality bonus. */
+  totalBonus: number;
   email: string;
 };
 
@@ -59,7 +69,11 @@ export type WorkbenchPersonnelUnattributedWorkstation = {
 
 export type WorkbenchPersonnelRollup = {
   rows: WorkbenchPersonnelRollupRow[];
+  /** Total duration plus quality bonus. */
   totalBonus: number;
+  durationBonusTotal: number;
+  qualityBonusTotal: number;
+  qualitySettlements: readonly WorkbenchQualitySettlement[];
   unattributedHours: number;
   unattributedWorkstations: WorkbenchPersonnelUnattributedWorkstation[];
 };

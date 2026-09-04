@@ -5,12 +5,11 @@ import { formatWorkbenchRewardAmount } from "@/utils/workbenchRewards";
 export const WORKBENCH_PERSONNEL_WORKLOAD_COLUMNS = [
   "Personnel",
   "Workstation",
-  "Hours",
-  "Range target",
+  "Avg hours",
+  "Avg target",
   "Rate",
   "Rule",
   "Reward",
-  "Email",
 ] as const;
 
 function formatHours(value: number): string {
@@ -38,8 +37,8 @@ export default function WorkbenchPersonnelWorkload({
             Personnel workload
           </h4>
           <p className="mt-1 text-[11px] text-slate-500">
-            Daily workstation hours are attributed to every mapped data
-            collector in full.
+            Average personnel hours equal Workstation hours divided by Original
+            collectors. Contribution weights are used only for quality bonuses.
           </p>
         </div>
         <span className="text-[10px] text-slate-500">
@@ -60,7 +59,17 @@ export default function WorkbenchPersonnelWorkload({
           <thead className="bg-[var(--surface-2)] text-slate-400">
             <tr>
               {WORKBENCH_PERSONNEL_WORKLOAD_COLUMNS.map((column) => (
-                <th key={column} className="px-3 py-2.5 font-medium">
+                <th
+                  key={column}
+                  className="px-3 py-2.5 font-medium"
+                  title={
+                    column === "Avg hours"
+                      ? "Per-person hours"
+                      : column === "Avg target"
+                        ? "Per-person target hours"
+                        : undefined
+                  }
+                >
                   {column}
                 </th>
               ))}
@@ -103,9 +112,6 @@ export default function WorkbenchPersonnelWorkload({
                   <td className="px-3 py-2.5 text-slate-300 tabular-nums">
                     {formatWorkbenchRewardAmount(row.reward.amount)}
                   </td>
-                  <td className="px-3 py-2.5 text-slate-400">
-                    {row.email || "—"}
-                  </td>
                 </tr>
               ))
             )}
@@ -113,7 +119,7 @@ export default function WorkbenchPersonnelWorkload({
           <tfoot>
             <tr className="border-t border-white/10 bg-white/[0.02]">
               <td
-                colSpan={7}
+                colSpan={6}
                 className="px-3 py-2.5 text-right font-medium text-slate-300"
               >
                 Personnel bonus total

@@ -43,12 +43,13 @@ function createDashboardMailInput(
       storageBytes: 1536,
       dailyTargetHours: 6,
       totalBonus: 200,
-      robotIds: 1,
+      sources: 1,
       daysInRange: 2,
     },
     rows: [
       {
-        robotId: "robot_01",
+        sourceLabel: "TacVerse/taccap-g1",
+        personnel: "张三",
         sourceRepoIds: ["TacVerse/repo-a", "TacVerse/repo-b"],
         workstation: "Workstation A",
         datasets: 2,
@@ -72,13 +73,6 @@ function createDashboardMailInput(
       },
     ],
     personnelBonusTotal: -160,
-    alerts: [
-      {
-        kind: "warn",
-        title: "Reward rules need attention",
-        detail: "Review the configured reward levels.",
-      },
-    ],
     ...overrides,
   };
 }
@@ -88,7 +82,7 @@ describe("workbench mail draft", () => {
     expect(createDefaultWorkbenchMailDraft()).toEqual({
       sender: "1796262052@qq.com",
       recipient: "frank@xenserobotics.com",
-      subject: "SMTP smoketest",
+      subject: "XenseRobotics · Data Collection Team Daily Report",
       note: "",
     });
   });
@@ -113,7 +107,7 @@ describe("workbench mail draft", () => {
     });
     expect(readWorkbenchMailDraft("TacVerse", storage)).toEqual(saved);
     expect(readWorkbenchMailDraft("OtherOrg", storage)).toEqual(
-      createDefaultWorkbenchMailDraft(),
+      createDefaultWorkbenchMailDraft({ organization: "OtherOrg" }),
     );
     expect(storage.getItem(workbenchMailDraftStorageKey("TacVerse"))).toContain(
       '"org":"TacVerse"',
@@ -189,19 +183,26 @@ describe("workbench mail draft", () => {
   test("formats dashboard subjects from the exclusive date range", () => {
     expect(
       formatWorkbenchMailSubject({
+        organization: "TacVerse",
         dateRange: { startDate: "2026-09-02", endDate: "2026-09-03" },
       }),
-    ).toBe("Workbench dashboard 20260902");
+    ).toBe(
+      "XenseRobotics · TacVerse Data Collection Team Daily Report · 2026-09-02",
+    );
     expect(
       formatWorkbenchMailSubject({
+        organization: "TacVerse",
         dateRange: { startDate: "2026-09-01", endDate: "2026-09-03" },
       }),
-    ).toBe("Workbench dashboard 20260901-20260902");
+    ).toBe(
+      "XenseRobotics · TacVerse Data Collection Team Daily Report · 2026-09-01 to 2026-09-02",
+    );
     expect(
       formatWorkbenchMailSubject({
+        organization: "OtherOrg",
         dateRange: { startDate: null, endDate: null },
       }),
-    ).toBe("Workbench dashboard");
+    ).toBe("XenseRobotics · OtherOrg Data Collection Team Daily Report");
   });
 
   test("creates structured text and responsive HTML bodies", () => {
@@ -219,17 +220,20 @@ describe("workbench mail draft", () => {
     expect(textBody).toContain("Storage: 1.5 KB");
     expect(textBody).toContain("Daily target hours: 6.00 h/day");
     expect(textBody).toContain("Total bonus: +200");
-    expect(textBody).toContain("Robot IDs: 1");
+    expect(textBody).toContain("Sources: 1");
     expect(textBody.indexOf("TacVerse total hours")).toBeLessThan(
       textBody.indexOf("Selected range hours"),
     );
-    expect(textBody).toContain("Robot ID: robot_01");
-    expect(textBody).toContain("Hours / Range target: 7.50 / 6.00");
+    expect(textBody).not.toContain("Robot ID");
+    expect(textBody).toContain("Source: TacVerse/taccap-g1");
+    expect(textBody).toContain("Personnel: 张三");
+    expect(textBody).toContain("WS hours: 7.50");
+    expect(textBody).toContain("Avg target: 6.00");
     expect(textBody).toContain("PERSONNEL WORKLOAD");
     expect(textBody).toContain("Personnel: 张三");
     expect(textBody).toContain("Workstation: A1, B2");
-    expect(textBody).toContain("Hours: 9.50");
-    expect(textBody).toContain("Range target: 12.00");
+    expect(textBody).toContain("Avg hours: 9.50");
+    expect(textBody).toContain("Avg target: 12.00");
     expect(textBody).toContain("Rate: 79.2%");
     expect(textBody).toContain("Rule: 不达标");
     expect(textBody).toContain("Reward: -160");
@@ -241,8 +245,8 @@ describe("workbench mail draft", () => {
     const personnelTextPositions = [
       "Personnel:",
       "Workstation:",
-      "Hours:",
-      "Range target:",
+      "Avg hours:",
+      "Avg target:",
       "Rate:",
       "Rule:",
       "Reward:",
@@ -254,7 +258,8 @@ describe("workbench mail draft", () => {
     expect(personnelTextPositions).toEqual(
       [...personnelTextPositions].sort((left, right) => left - right),
     );
-    expect(textBody).toContain("Warning — Reward rules need attention");
+    expect(textBody).not.toContain("Alerts");
+    expect(textBody).not.toContain("ALERTS");
     expect(textBody).toContain("NOTE\nCheck the totals before approval.");
     expect(textBody).not.toContain("| Robot ID |");
 
@@ -273,8 +278,8 @@ describe("workbench mail draft", () => {
     const personnelHeaderPositions = [
       "Personnel",
       "Workstation",
-      "Hours",
-      "Range target",
+      "Avg hours",
+      "Avg target",
       "Rate",
       "Rule",
       "Reward",
@@ -289,7 +294,8 @@ describe("workbench mail draft", () => {
     expect(htmlBody).toContain("@media only screen and (min-width: 720px)");
     expect(htmlBody).toContain("max-width:760px");
     expect(htmlBody).toContain("padding:12px");
-    expect(htmlBody).toContain("Hours / Range target");
+    expect(htmlBody).toContain("WS hours");
+    expect(htmlBody).toContain("Avg target");
     expect(htmlBody).toContain("TacVerse total hours");
     expect(htmlBody).toContain("Selected range hours");
     expect(htmlBody).toContain("Storage");
@@ -298,10 +304,58 @@ describe("workbench mail draft", () => {
     expect(htmlBody).not.toContain("Unmapped robot IDs");
     expect(htmlBody).not.toContain("Legacy rows");
     expect(htmlBody).toContain("Source repos");
-    expect(htmlBody).toContain("Warning · Reward rules need attention");
+    expect(htmlBody).not.toContain("Alerts");
+    expect(htmlBody).not.toContain("ALERTS");
+    expect(htmlBody).not.toContain("Robot ID");
     expect(htmlBody).toContain("Check the totals before approval.");
   });
 
+  test("limits every rendered source repo list to the first two unique repos", () => {
+    const { textBody, htmlBody } = createWorkbenchDashboardMail(
+      createDashboardMailInput({
+        rows: [
+          {
+            ...createDashboardMailInput().rows[0],
+            sourceRepoIds: [
+              "TacVerse/repo-a",
+              "TacVerse/repo-a",
+              "TacVerse/repo-b",
+              "TacVerse/repo-c",
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(textBody).toContain("TacVerse/repo-a");
+    expect(textBody).toContain("TacVerse/repo-b");
+    expect(textBody).not.toContain("TacVerse/repo-c");
+    expect(htmlBody).toContain("TacVerse/repo-a");
+    expect(htmlBody).toContain("TacVerse/repo-b");
+    expect(htmlBody).not.toContain("TacVerse/repo-c");
+  });
+
+  test("excludes the unclassified source from every rendered row", () => {
+    const { textBody, htmlBody } = createWorkbenchDashboardMail(
+      createDashboardMailInput({
+        rows: [
+          {
+            ...createDashboardMailInput().rows[0],
+            sourceLabel: "TacVerse/待确认",
+            sourceRepoIds: ["TacVerse/待确认", "TacVerse/unknown-repo"],
+          },
+        ],
+      }),
+    );
+
+    expect(textBody).not.toContain("TacVerse/待确认");
+    expect(textBody).not.toContain("TacVerse/unknown-repo");
+    expect(textBody).toContain(
+      "No workstation detail rows in the current range.",
+    );
+    expect(htmlBody).not.toContain("TacVerse/待确认");
+    expect(htmlBody).not.toContain("TacVerse/unknown-repo");
+  });
   test("escapes every user-controlled HTML field", () => {
     const dangerous = '<img src=x onerror="alert(1)"> & value';
     const { htmlBody } = createWorkbenchDashboardMail(
@@ -310,7 +364,6 @@ describe("workbench mail draft", () => {
         rows: [
           {
             ...createDashboardMailInput().rows[0],
-            robotId: dangerous,
             sourceRepoIds: [dangerous],
             workstation: dangerous,
             rule: dangerous,
@@ -325,7 +378,6 @@ describe("workbench mail draft", () => {
             email: dangerous,
           },
         ],
-        alerts: [{ kind: "error", title: dangerous, detail: dangerous }],
       }),
       `${dangerous}\n<script>alert(2)</script>`,
     );
@@ -338,7 +390,7 @@ describe("workbench mail draft", () => {
     expect(htmlBody).toContain("&lt;script&gt;alert(2)&lt;/script&gt;");
   });
 
-  test("keeps long robot and repository names breakable on narrow screens", () => {
+  test("keeps long workstation and repository names breakable on narrow screens", () => {
     const longValue =
       "warehouse-with-an-extremely-long-name-without-a-natural-column-break-abcdefghijklmnopqrstuvwxyz";
     const { htmlBody } = createWorkbenchDashboardMail(
@@ -346,7 +398,6 @@ describe("workbench mail draft", () => {
         rows: [
           {
             ...createDashboardMailInput().rows[0],
-            robotId: longValue,
             sourceRepoIds: [longValue],
             workstation: longValue,
           },
@@ -360,9 +411,9 @@ describe("workbench mail draft", () => {
     expect(htmlBody).toContain("table-layout:fixed");
   });
 
-  test("creates readable placeholders for empty rows and alerts", () => {
+  test("creates readable placeholders for empty rows", () => {
     const { textBody, htmlBody } = createWorkbenchDashboardMail(
-      createDashboardMailInput({ rows: [], personnelRows: [], alerts: [] }),
+      createDashboardMailInput({ rows: [], personnelRows: [] }),
     );
 
     expect(textBody).toContain(
@@ -371,13 +422,11 @@ describe("workbench mail draft", () => {
     expect(textBody).toContain(
       "No personnel workload rows in the current range.",
     );
-    expect(textBody).toContain("No blockers detected in the current range.");
     expect(htmlBody).toContain(
       "No workstation detail rows in the current range.",
     );
     expect(htmlBody).toContain(
       "No personnel workload rows in the current range.",
     );
-    expect(htmlBody).toContain("No blockers detected in the current range.");
   });
 });

@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.sync_hf_dataset import repo_target
+from scripts.sync_hf_dataset import repo_target, stats_repo_target
 
 
 class RepoTargetTest(unittest.TestCase):
@@ -26,6 +26,21 @@ class RepoTargetTest(unittest.TestCase):
                 ),
                 Path(root, "TacVerse", "failed", "example"),
             )
+
+    def test_stats_target_keeps_tacverse_repos_out_of_buckets(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            target = Path(
+                stats_repo_target(
+                    root,
+                    "TacVerse",
+                    "TacVerse/taccap-g1-remove-o-ring-0904",
+                )
+            )
+            self.assertEqual(
+                target,
+                Path(root, "TacVerse", "taccap-g1-remove-o-ring-0904"),
+            )
+            self.assertNotIn("merged", target.parts)
 
     def test_keeps_an_existing_dataset_in_its_current_bucket(self) -> None:
         with tempfile.TemporaryDirectory() as root:

@@ -3,6 +3,11 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import defaultWorkbenchRewardRulesByOrg from "@/config/workbench-reward-rules.json";
 import { resolveLocalDatasetRoot } from "@/lib/local-datasets-discovery";
+import {
+  DEFAULT_WORKBENCH_QUALITY_BONUS_BY_GRADE,
+  normalizeWorkbenchQualityBonusByGrade,
+  type WorkbenchQualityBonusByGrade,
+} from "@/utils/workbenchRewards";
 
 const STORE_DIR = ".xense-viewer";
 const WORKBENCH_DIR = "workbench";
@@ -26,6 +31,7 @@ export type WorkbenchRewardRules = {
   enabled: boolean;
   dailyTargetHours: number;
   levels: WorkbenchRewardRuleLevel[];
+  qualityBonusByGrade: WorkbenchQualityBonusByGrade;
   source: WorkbenchRewardRulesSource;
   updatedAt: string | null;
 };
@@ -35,6 +41,9 @@ type WorkbenchRewardRulesFile = {
   enabled?: unknown;
   dailyTargetHours?: unknown;
   levels?: unknown;
+  qualityBonusByGrade?: unknown;
+  qualityBonus?: unknown;
+  qualityBonuses?: unknown;
   updatedAt?: unknown;
 };
 
@@ -108,6 +117,7 @@ function defaultRewardRulesForOrg(
       enabled: parsed.enabled,
       dailyTargetHours: parsed.dailyTargetHours,
       levels: parsed.levels,
+      qualityBonusByGrade: parsed.qualityBonusByGrade,
     };
   }
   return {
@@ -115,6 +125,7 @@ function defaultRewardRulesForOrg(
     enabled: true,
     dailyTargetHours: 6,
     levels: cloneLevels(DEFAULT_LEVELS),
+    qualityBonusByGrade: { ...DEFAULT_WORKBENCH_QUALITY_BONUS_BY_GRADE },
   };
 }
 
@@ -175,6 +186,9 @@ export function normalizeWorkbenchRewardRulesInput(
   if (levels[0].minPercent !== 0) {
     throw new Error("The first reward level must start at 0%.");
   }
+  const qualityBonusByGrade = normalizeWorkbenchQualityBonusByGrade(
+    raw.qualityBonusByGrade ?? raw.qualityBonus ?? raw.qualityBonuses,
+  );
   for (let index = 1; index < levels.length; index += 1) {
     const previous = levels[index - 1];
     const current = levels[index];
@@ -190,6 +204,7 @@ export function normalizeWorkbenchRewardRulesInput(
     enabled,
     dailyTargetHours,
     levels,
+    qualityBonusByGrade,
   };
 }
 
@@ -285,6 +300,7 @@ export async function writeWorkbenchRewardRules(
       enabled: normalized.enabled,
       dailyTargetHours: normalized.dailyTargetHours,
       levels: normalized.levels,
+      qualityBonusByGrade: normalized.qualityBonusByGrade,
       updatedAt,
     },
     null,

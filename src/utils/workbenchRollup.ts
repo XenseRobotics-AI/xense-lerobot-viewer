@@ -1,4 +1,5 @@
 import type { LocalDatasetSummary } from "@/lib/local-datasets-discovery";
+import type { DateEvidence, DatasetFacets } from "@/lib/dataset-facets";
 import { getDatasetPrefix } from "@/utils/datasetGrouping";
 import { WORKBENCH_UPLOADER_NAMES } from "@/utils/workbenchUploaderNames";
 import { isWorkbenchStatisticsExcludedDataset } from "@/utils/workbenchStatisticsFilter";
@@ -11,6 +12,78 @@ export type WorkbenchRollupDimension =
   | "left_gripper_sn"
   | "source";
 
+export type WorkbenchDatasetSourceKey =
+  | "taccap-g1"
+  | "xtac-umi-g1"
+  | "tacflow"
+  | "unclassified";
+
+export const WORKBENCH_DATASET_SOURCE_KEYS: readonly WorkbenchDatasetSourceKey[] =
+  Object.freeze(["taccap-g1", "xtac-umi-g1", "tacflow", "unclassified"]);
+
+export const WORKBENCH_DATASET_SOURCE_LABELS: Readonly<
+  Record<WorkbenchDatasetSourceKey, string>
+> = Object.freeze({
+  "taccap-g1": "TacVerse/taccap-g1",
+  "xtac-umi-g1": "TacVerse/xtac-umi-g1",
+  tacflow: "TacVerse/tacflow",
+  unclassified: "TacVerse/待确认",
+});
+
+const WORKBENCH_TACFLOW_DATASET_LEAVES = new Set([
+  "taccap-g1-insert-hook-assembly",
+  "taccap-g1-press-remote-buttons",
+]);
+
+export type WorkbenchCaptureSpan = Readonly<{
+  from: string;
+  to: string;
+}>;
+
+function normalizedPathSegments(relativePath: string): string[] {
+  return relativePath.split(/[\\/]+/u).filter(Boolean);
+}
+
+function hasValidMonthDaySuffix(relativePath: string): boolean {
+  const leaf = workbenchDatasetName(relativePath);
+  const match = /-(\d{2})(\d{2})$/u.exec(leaf);
+  if (!match) return false;
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  const candidate = new Date(Date.UTC(2026, month - 1, day));
+  return (
+    candidate.getUTCFullYear() === 2026 &&
+    candidate.getUTCMonth() === month - 1 &&
+    candidate.getUTCDate() === day
+  );
+}
+
+/** Classify a Workbench dataset from its canonical TacVerse path. */
+export function workbenchDatasetSourceKey(
+  relativePath: string,
+): WorkbenchDatasetSourceKey {
+  const segments = normalizedPathSegments(relativePath);
+  const owner = segments[0];
+  if (owner !== "TacVerse") return "unclassified";
+  const leaf = segments.at(-1) ?? "";
+  if (segments.length === 2 && WORKBENCH_TACFLOW_DATASET_LEAVES.has(leaf)) {
+    return "tacflow";
+  }
+  if (leaf.startsWith("taccap-g1-") && hasValidMonthDaySuffix(relativePath)) {
+    return "taccap-g1";
+  }
+  if (leaf.startsWith("xtac-umi-g1-") && hasValidMonthDaySuffix(relativePath)) {
+    return "xtac-umi-g1";
+  }
+  return "unclassified";
+}
+
+export function workbenchDatasetSourceLabel(
+  source: WorkbenchDatasetSourceKey,
+): string {
+  return WORKBENCH_DATASET_SOURCE_LABELS[source];
+}
+
 export type WorkbenchRollupDataset = Pick<
   LocalDatasetSummary,
   | "relativePath"
@@ -20,6 +93,14 @@ export type WorkbenchRollupDataset = Pick<
   | "robot_type"
   | "sizeBytes"
 > & {
+  /** Explicit API value; omitted legacy callers are classified from the path. */
+  source?: WorkbenchDatasetSourceKey | null;
+  sourceLabel?: string | null;
+  captureSpan?: WorkbenchCaptureSpan | null;
+  dateEvidence?: DateEvidence;
+  capturedFrom?: string | null;
+  capturedTo?: string | null;
+  facets?: Pick<DatasetFacets, "capturedFrom" | "capturedTo" | "dateEvidence">;
   robotId?: string | null;
   leftGripperSn?: string | null;
   uploader?: string | null;
@@ -28,6 +109,7 @@ export type WorkbenchRollupDataset = Pick<
   lastModified?: string | null;
   durationHours?: number | null;
   dailyAdditions?: WorkbenchDailyAddition[];
+  tacflowScore?: import("@/types/workbench-score.types").WorkbenchDatasetScore;
 };
 
 export type WorkbenchRollupRow = {
@@ -222,7 +304,7 @@ function roundHours(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-function datasetHours(dataset: WorkbenchRollupDataset): number {
+export function datasetHours(dataset: WorkbenchRollupDataset): number {
   const override = dataset.durationHours;
   if (
     typeof override === "number" &&
@@ -273,7 +355,7 @@ export function workbenchTaskPrefix(relativePath: string): string {
 }
 
 export function workbenchDatasetName(relativePath: string): string {
-  return relativePath.split("/").filter(Boolean).at(-1) ?? relativePath;
+  return normalizedPathSegments(relativePath).at(-1) ?? relativePath;
 }
 
 export function isWorkbenchIgnoredRobotId(
@@ -314,7 +396,34 @@ export function hasWorkbenchDatasetDateSuffix(
 function padWorkbenchDateTime(value: number): string {
   return value.toString().padStart(2, "0");
 }
+function validDateKey(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) {
+    return false;
+  }
+  const parsed = parseDayKey(value);
+  return parsed !== null && dayKeyFromUtc(parsed) === value;
+}
+export function workbenchDatasetCaptureSpan(
+  dataset: WorkbenchRollupDataset,
+): WorkbenchCaptureSpan | null {
+  const direct = dataset.captureSpan;
+  const from =
+    direct?.from ?? dataset.capturedFrom ?? dataset.facets?.capturedFrom;
+  const to = direct?.to ?? dataset.capturedTo ?? dataset.facets?.capturedTo;
+  if (!validDateKey(from) || !validDateKey(to)) return null;
+  return from <= to ? { from, to } : { from: to, to: from };
+}
 
+export function workbenchDatasetDateEvidence(
+  dataset: WorkbenchRollupDataset,
+): DateEvidence {
+  return dataset.dateEvidence ?? dataset.facets?.dateEvidence ?? "none";
+}
+function sourceKeyForDataset(
+  dataset: WorkbenchRollupDataset,
+): WorkbenchDatasetSourceKey {
+  return dataset.source ?? workbenchDatasetSourceKey(dataset.relativePath);
+}
 function formatWorkbenchDateTimeLocal(value: Date): string {
   return (
     [
@@ -416,7 +525,20 @@ export function workbenchRollupLabel(
   if (dimension === "robot_type") return dataset.robot_type || "—";
   if (dimension === "robot_id") return dataset.robotId || "—";
   if (dimension === "left_gripper_sn") return dataset.leftGripperSn || "—";
+  if (dimension === "source") {
+    return (
+      dataset.sourceLabel ||
+      workbenchDatasetSourceLabel(sourceKeyForDataset(dataset))
+    );
+  }
   return getDatasetPrefix(dataset.relativePath);
+}
+
+function workbenchDatasetAvailableDateBoundaries(
+  dataset: WorkbenchRollupDataset,
+): string[] {
+  const span = workbenchDatasetDateSpan(dataset);
+  return span ? [span.from, span.to] : [];
 }
 
 export function workbenchGroupDatasetNames(
@@ -431,8 +553,7 @@ export function workbenchGroupDatasetNames(
     .filter(
       (dataset) => !isWorkbenchStatisticsExcludedDataset(dataset.relativePath),
     )
-    .map((dataset) => workbenchDayKey(dataset.lastModified))
-    .filter((value): value is string => Boolean(value));
+    .flatMap((dataset) => workbenchDatasetAvailableDateBoundaries(dataset));
   const range = normalizeWorkbenchDateRange(
     options.startDate,
     options.endDate,
@@ -456,7 +577,7 @@ export function workbenchGroupDatasetNames(
 }
 
 /** Convert a local bucketed path to its canonical organization/name repo id. */
-function workbenchSourceRepoId(relativePath: string): string {
+export function workbenchSourceRepoId(relativePath: string): string {
   const segments = relativePath.split(/[\\/]+/u).filter(Boolean);
   if (segments.length < 2) return relativePath;
   return `${segments[0]}/${segments[segments.length - 1]}`;
@@ -482,6 +603,7 @@ export function workbenchGroupSourceRepoIds(
     if (isWorkbenchStatisticsExcludedDataset(dataset.relativePath)) continue;
     if (additionsInRange(dataset, range).length === 0) continue;
     if (
+      !hasExplicitWorkbenchCaptureMetadata(dataset) &&
       !hasWorkbenchDatasetDateSuffix(dataset.relativePath, dataset.lastModified)
     ) {
       continue;
@@ -518,6 +640,22 @@ function datasetAdditionHours(addition: WorkbenchDailyAddition): number {
   return Number.isFinite(hours) && hours > 0 ? hours : 0;
 }
 
+function workbenchDatasetAvailableDays(
+  dataset: WorkbenchRollupDataset,
+): string[] {
+  const days = new Set(additionDays(dataset).map((addition) => addition.day));
+  if (!hasExplicitWorkbenchCaptureMetadata(dataset)) return Array.from(days);
+  if (workbenchDatasetDateEvidence(dataset) === "none") return Array.from(days);
+  const span = workbenchDatasetCaptureSpan(dataset);
+  if (!span) return Array.from(days);
+  const start = parseDayKey(span.from);
+  const end = parseDayKey(span.to);
+  if (start === null || end === null) return Array.from(days);
+  for (let value = start; value <= end; value += 86_400_000) {
+    days.add(dayKeyFromUtc(value));
+  }
+  return Array.from(days);
+}
 export function workbenchAdditionAvailableDays(
   datasets: readonly WorkbenchRollupDataset[],
 ): string[] {
@@ -525,7 +663,7 @@ export function workbenchAdditionAvailableDays(
     .filter(
       (dataset) => !isWorkbenchStatisticsExcludedDataset(dataset.relativePath),
     )
-    .flatMap((dataset) => additionDays(dataset).map((addition) => addition.day))
+    .flatMap((dataset) => workbenchDatasetAvailableDays(dataset))
     .sort();
 }
 
@@ -533,11 +671,7 @@ function additionsInRange(
   dataset: WorkbenchRollupDataset,
   range: WorkbenchRollupDateRange,
 ): WorkbenchDailyAddition[] {
-  return additionDays(dataset).filter((addition) => {
-    if (range.startDate && addition.day < range.startDate) return false;
-    if (range.endDate && addition.day >= range.endDate) return false;
-    return true;
-  });
+  return workbenchDatasetRangeContributions(dataset, range);
 }
 
 /** Unique dataset directories with strict additions in a half-open range. */
@@ -614,6 +748,25 @@ export function normalizeWorkbenchDateRange(
   return { startDate: start, endDate: end };
 }
 
+function workbenchDatasetDateSpan(
+  dataset: WorkbenchRollupDataset,
+): WorkbenchCaptureSpan | null {
+  const hasExplicitMetadata = hasExplicitWorkbenchCaptureMetadata(dataset);
+  if (hasExplicitMetadata && workbenchDatasetDateEvidence(dataset) === "none") {
+    return null;
+  }
+  const captureSpan = workbenchDatasetCaptureSpan(dataset);
+  if (captureSpan) return captureSpan;
+  const suffixDay = workbenchDatasetSuffixDay(
+    dataset.relativePath,
+    dataset.lastModified,
+  );
+  if (suffixDay) return { from: suffixDay, to: suffixDay };
+  if (hasExplicitMetadata) return null;
+  const day = workbenchDayKey(dataset.lastModified);
+  return day ? { from: day, to: day } : null;
+}
+
 export function filterWorkbenchDatasetsByDate(
   datasets: readonly WorkbenchRollupDataset[],
   range: WorkbenchRollupDateRange,
@@ -621,17 +774,13 @@ export function filterWorkbenchDatasetsByDate(
   const included = datasets.filter(
     (dataset) => !isWorkbenchStatisticsExcludedDataset(dataset.relativePath),
   );
-  const hasKnownDay = included.some((dataset) =>
-    workbenchDayKey(dataset.lastModified),
-  );
   if (!range.startDate && !range.endDate) return included;
-  if (!hasKnownDay) return included;
   return included.filter((dataset) => {
-    const day = workbenchDayKey(dataset.lastModified);
-    if (!day) return false;
-    if (range.startDate && day < range.startDate) return false;
-    if (range.endDate && day >= range.endDate) return false;
-    return true;
+    const span = workbenchDatasetDateSpan(dataset);
+    if (!span) return false;
+    const start = range.startDate ?? span.from;
+    const end = range.endDate ?? nextDayKey(span.to);
+    return span.to >= start && span.from < end;
   });
 }
 
@@ -652,8 +801,7 @@ export function computeWorkbenchRollup(
     .filter(
       (dataset) => !isWorkbenchStatisticsExcludedDataset(dataset.relativePath),
     )
-    .map((dataset) => workbenchDayKey(dataset.lastModified))
-    .filter((value): value is string => Boolean(value));
+    .flatMap((dataset) => workbenchDatasetAvailableDateBoundaries(dataset));
   const range = normalizeWorkbenchDateRange(
     options.startDate,
     options.endDate,
@@ -766,8 +914,7 @@ export function computeWorkbenchTimeline(
     .filter(
       (dataset) => !isWorkbenchStatisticsExcludedDataset(dataset.relativePath),
     )
-    .map((dataset) => workbenchDayKey(dataset.lastModified))
-    .filter((value): value is string => Boolean(value));
+    .flatMap((dataset) => workbenchDatasetAvailableDateBoundaries(dataset));
   const range = normalizeWorkbenchDateRange(
     options.startDate,
     options.endDate,
@@ -785,7 +932,7 @@ export function computeWorkbenchTimeline(
   >();
 
   for (const dataset of filtered) {
-    const day = workbenchDayKey(dataset.lastModified);
+    const day = workbenchDatasetDateSpan(dataset)?.from ?? null;
     if (!day) continue;
     const current = byDay.get(day) ?? {
       datasets: 0,
@@ -924,4 +1071,72 @@ export function computeWorkbenchAdditionTimeline(
       hours: roundHours(rows.reduce((sum, row) => sum + row.hours, 0)),
     },
   };
+}
+
+function hasExplicitWorkbenchCaptureMetadata(
+  dataset: WorkbenchRollupDataset,
+): boolean {
+  return (
+    dataset.captureSpan !== undefined ||
+    dataset.dateEvidence !== undefined ||
+    dataset.capturedFrom !== undefined ||
+    dataset.capturedTo !== undefined ||
+    dataset.facets !== undefined
+  );
+}
+function captureSpanOverlapsRange(
+  span: WorkbenchCaptureSpan,
+  range: WorkbenchRollupDateRange,
+): boolean {
+  const start = range.startDate ?? span.from;
+  const end = range.endDate ?? nextDayKey(span.to);
+  return span.to >= start && span.from < end;
+}
+function synthesizedDatasetContribution(
+  dataset: WorkbenchRollupDataset,
+  day: string,
+): WorkbenchDailyAddition {
+  return {
+    day,
+    episodes: nonNegativeCount(Number(dataset.total_episodes)),
+    frames: nonNegativeCount(Number(dataset.total_frames)),
+    hours: roundHours(datasetHours(dataset)),
+  };
+}
+export function workbenchDatasetRangeContributions(
+  dataset: WorkbenchRollupDataset,
+  range: WorkbenchRollupDateRange,
+): WorkbenchDailyAddition[] {
+  if (
+    hasExplicitWorkbenchCaptureMetadata(dataset) &&
+    workbenchDatasetDateEvidence(dataset) === "none"
+  ) {
+    return [];
+  }
+  const additions = additionDays(dataset);
+  if (additions.length > 0) {
+    return additions.filter((addition) => {
+      if (range.startDate && addition.day < range.startDate) return false;
+      if (range.endDate && addition.day >= range.endDate) return false;
+      return true;
+    });
+  }
+  if (!hasExplicitWorkbenchCaptureMetadata(dataset)) return [];
+  if (workbenchDatasetDateEvidence(dataset) === "none") return [];
+  const span = workbenchDatasetCaptureSpan(dataset);
+  if (!span || !captureSpanOverlapsRange(span, range)) return [];
+  const suffixDay = workbenchDatasetSuffixDay(
+    dataset.relativePath,
+    dataset.lastModified,
+  );
+  if (suffixDay) {
+    if (range.startDate && suffixDay < range.startDate) return [];
+    if (range.endDate && suffixDay >= range.endDate) return [];
+    return [synthesizedDatasetContribution(dataset, suffixDay)];
+  }
+  const day =
+    range.startDate && span.from < range.startDate
+      ? range.startDate
+      : span.from;
+  return [synthesizedDatasetContribution(dataset, day)];
 }

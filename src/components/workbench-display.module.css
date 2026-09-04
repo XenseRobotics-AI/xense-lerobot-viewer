@@ -169,6 +169,9 @@
 }
 
 .overviewCard {
+  animation: overviewCardFloat 5.8s ease-in-out infinite;
+  animation-delay: var(--overview-delay, 0ms);
+  will-change: transform;
   min-width: 0;
   padding: clamp(1rem, 1.7vw, 1.75rem);
   border: 1px solid var(--display-border);
@@ -300,17 +303,38 @@
   text-transform: uppercase;
 }
 
-.detailTable th:nth-child(n + 3),
-.detailTable td:nth-child(n + 3) {
+.detailTable th:nth-child(n + 4),
+.detailTable td:nth-child(n + 4) {
   text-align: right;
 }
 
 .detailTable th:nth-child(1) {
-  width: 22%;
+  width: 17%;
 }
 
 .detailTable th:nth-child(2) {
-  width: 18%;
+  width: 15%;
+}
+
+.detailTable th:nth-child(3) {
+  width: 24%;
+}
+
+.detailTable th:nth-child(3),
+.detailTable td:nth-child(3) {
+  text-align: left;
+}
+
+.sourceRepoCell {
+  color: var(--display-cyan) !important;
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: clamp(0.68rem, 0.72vw, 0.82rem) !important;
+}
+
+.workstationCell {
+  cursor: help;
 }
 
 .detailTable td {
@@ -904,6 +928,16 @@
   }
 }
 
+@keyframes overviewCardFloat {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
 @media (max-width: 1500px), (max-height: 840px) {
   .header {
     grid-template-columns: minmax(17rem, 0.9fr) minmax(38rem, 2fr);
@@ -1018,7 +1052,8 @@
   .slideTransition,
   .revealRow,
   .revealColumn,
-  .barFill {
+  .barFill,
+  .overviewCard {
     animation: none;
   }
 

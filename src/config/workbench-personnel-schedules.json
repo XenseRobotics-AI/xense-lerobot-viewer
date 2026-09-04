@@ -4,23 +4,83 @@
     "TacVerse": {
       "people": [
         {
-          "id": "zhang-san",
-          "displayName": "张三",
+          "id": "person-2",
+          "displayName": "陆萍-A5",
           "email": "jay@xenserobotics.com"
         },
         {
-          "id": "li-si",
-          "displayName": "李四",
+          "id": "person-3",
+          "displayName": "陆萍-B2",
           "email": "jay@xenserobotics.com"
         },
         {
-          "id": "wang-wu",
-          "displayName": "王五",
+          "id": "person-4",
+          "displayName": "carry",
           "email": "jay@xenserobotics.com"
         },
         {
-          "id": "zhao-liu",
-          "displayName": "赵六",
+          "id": "person-5",
+          "displayName": "洪锐-D1",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-6",
+          "displayName": "Sunmengqi",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-7",
+          "displayName": "weiruijie",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-8",
+          "displayName": "陆萍-E1",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-9",
+          "displayName": "陆萍-E4",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-10",
+          "displayName": "洪锐-E1",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-11",
+          "displayName": "洪锐-E4",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-12",
+          "displayName": "陆萍-A2",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-13",
+          "displayName": "Kaycee",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-14",
+          "displayName": "Molly",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-15",
+          "displayName": "陆萍-D1",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-16",
+          "displayName": "Sariel",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-17",
+          "displayName": "Haoyan",
           "email": "jay@xenserobotics.com"
         },
         {
@@ -29,259 +89,148 @@
           "email": "jay@xenserobotics.com"
         },
         {
-          "id": "person-9",
-          "displayName": "Dylan",
-          "email": "dylan@xenserobotics.com"
+          "id": "person-18",
+          "displayName": "yanair-A2",
+          "email": "jay@xenserobotics.com"
         },
         {
-          "id": "person-10",
-          "displayName": "frank",
-          "email": "frank@xenserobotics.com"
-        },
-        {
-          "id": "person-11",
-          "displayName": "jay",
+          "id": "person-19",
+          "displayName": "yanair-B2",
           "email": "jay@xenserobotics.com"
         }
       ],
       "schedules": {
-        "1970-01-01": [
+        "1970-01-01": [],
+        "2026-09-02": [
           {
             "workstation": "A2",
             "members": [
               {
-                "personId": "zhang-san",
+                "personId": "person-18",
                 "creditFactor": 1
               },
               {
-                "personId": "li-si",
+                "personId": "person-12",
                 "creditFactor": 1
               }
-            ]
+            ],
+            "collectorCount": 2
           },
           {
             "workstation": "A5",
             "members": [
               {
-                "personId": "wang-wu",
+                "personId": "person-2",
                 "creditFactor": 1
               },
               {
-                "personId": "zhao-liu",
+                "personId": "person-13",
                 "creditFactor": 1
               }
-            ]
+            ],
+            "collectorCount": 2
           },
           {
             "workstation": "B2",
             "members": [
               {
-                "personId": "anonymous",
+                "personId": "person-3",
+                "creditFactor": 1
+              },
+              {
+                "personId": "person-19",
                 "creditFactor": 1
               }
-            ]
+            ],
+            "collectorCount": 2
           },
           {
             "workstation": "B5",
             "members": [
               {
-                "personId": "anonymous",
+                "personId": "person-4",
+                "creditFactor": 1
+              },
+              {
+                "personId": "person-14",
                 "creditFactor": 1
               }
-            ]
+            ],
+            "collectorCount": 2
           },
           {
             "workstation": "D1",
             "members": [
               {
-                "personId": "anonymous",
+                "personId": "person-5",
+                "creditFactor": 1
+              },
+              {
+                "personId": "person-15",
                 "creditFactor": 1
               }
-            ]
+            ],
+            "collectorCount": 2
           },
           {
             "workstation": "D4",
             "members": [
               {
-                "personId": "anonymous",
+                "personId": "person-6",
+                "creditFactor": 1
+              },
+              {
+                "personId": "person-16",
                 "creditFactor": 1
               }
-            ]
+            ],
+            "collectorCount": 2
           },
           {
             "workstation": "D5",
             "members": [
               {
-                "personId": "anonymous",
+                "personId": "person-7",
+                "creditFactor": 1
+              },
+              {
+                "personId": "person-17",
                 "creditFactor": 1
               }
-            ]
+            ],
+            "collectorCount": 2
           },
           {
             "workstation": "E1",
             "members": [
               {
-                "personId": "anonymous",
+                "personId": "person-8",
+                "creditFactor": 1
+              },
+              {
+                "personId": "person-10",
                 "creditFactor": 1
               }
-            ]
+            ],
+            "collectorCount": 2
           },
           {
             "workstation": "E4",
-            "members": [
-              {
-                "personId": "anonymous",
-                "creditFactor": 1
-              }
-            ]
-          },
-          {
-            "workstation": "ERROR",
-            "members": [
-              {
-                "personId": "anonymous",
-                "creditFactor": 1
-              }
-            ]
-          },
-          {
-            "workstation": "N0",
-            "members": [
-              {
-                "personId": "anonymous",
-                "creditFactor": 1
-              }
-            ]
-          }
-        ],
-        "2026-09-04": [
-          {
-            "workstation": "A2",
-            "members": [
-              {
-                "personId": "zhang-san",
-                "creditFactor": 1
-              },
-              {
-                "personId": "li-si",
-                "creditFactor": 1
-              }
-            ]
-          },
-          {
-            "workstation": "A5",
-            "members": [
-              {
-                "personId": "wang-wu",
-                "creditFactor": 1
-              },
-              {
-                "personId": "zhao-liu",
-                "creditFactor": 1
-              }
-            ]
-          },
-          {
-            "workstation": "XR",
             "members": [
               {
                 "personId": "person-9",
                 "creditFactor": 1
               },
               {
-                "personId": "person-10",
-                "creditFactor": 1
-              },
-              {
                 "personId": "person-11",
                 "creditFactor": 1
               }
-            ]
-          },
-          {
-            "workstation": "B2",
-            "members": [
-              {
-                "personId": "anonymous",
-                "creditFactor": 1
-              }
-            ]
-          },
-          {
-            "workstation": "B5",
-            "members": [
-              {
-                "personId": "anonymous",
-                "creditFactor": 1
-              }
-            ]
-          },
-          {
-            "workstation": "D1",
-            "members": [
-              {
-                "personId": "anonymous",
-                "creditFactor": 1
-              }
-            ]
-          },
-          {
-            "workstation": "D4",
-            "members": [
-              {
-                "personId": "anonymous",
-                "creditFactor": 1
-              }
-            ]
-          },
-          {
-            "workstation": "D5",
-            "members": [
-              {
-                "personId": "anonymous",
-                "creditFactor": 1
-              }
-            ]
-          },
-          {
-            "workstation": "E1",
-            "members": [
-              {
-                "personId": "anonymous",
-                "creditFactor": 1
-              }
-            ]
-          },
-          {
-            "workstation": "E4",
-            "members": [
-              {
-                "personId": "anonymous",
-                "creditFactor": 1
-              }
-            ]
-          },
-          {
-            "workstation": "ERROR",
-            "members": [
-              {
-                "personId": "anonymous",
-                "creditFactor": 1
-              }
-            ]
-          },
-          {
-            "workstation": "N0",
-            "members": [
-              {
-                "personId": "anonymous",
-                "creditFactor": 1
-              }
-            ]
+            ],
+            "collectorCount": 2
           }
         ]
       },
-      "updatedAt": "2026-09-03T18:23:25.114Z"
+      "updatedAt": "2026-09-04T04:50:25.288Z"
     }
   }
 }
