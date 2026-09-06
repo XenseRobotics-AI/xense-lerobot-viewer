@@ -82,6 +82,8 @@ export type SyncProgress = {
   filesDone?: number;
   filesTotal?: number;
   bytes?: number;
+  /** Estimated transfer rate in bytes per second for the current repository. */
+  bytesPerSecond?: number;
   endpoint?: string;
   org?: string;
 };
@@ -96,6 +98,15 @@ export type SyncResult = {
   skipped: number;
   failed: { repo: string; error: string }[];
   listOnly: boolean;
+  archivedRepos?: number;
+  archivedMetaSnapshots?: number;
+  archivedFiles?: number;
+  archiveFailures?: Array<{
+    scope: string;
+    repo?: string;
+    path?: string;
+    error: string;
+  }>;
   details?: SyncRepoDetail[];
 };
 

@@ -1,74 +1,142 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import HomepageDatasetStatistics from "@/components/homepage-dataset-statistics";
-import type { EpisodeData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
-import type { LocalDatasetSummary } from "@/lib/local-datasets-discovery";
-import type { DailyDelta } from "@/utils/corpusHistory";
-import WorkbenchStatisticsFilterNotice from "@/components/workbench-statistics-filter-notice";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import { formatCompact, formatEpisodeLength } from "@/utils/corpusStats";
+import type { TacverseHubCategoryFilter } from "@/utils/workbenchHubCategory";
 import {
-  createWorkbenchStatisticsFilterSummary,
-  type WorkbenchStatisticsFilterSummary,
-} from "@/utils/workbenchStatisticsFilter";
+  filterTacverseDatasetStatistics,
+  formatRelativeUpdatedAt,
+  fullTimestamp,
+  sortTacverseDatasetStatistics,
+  summarizeTacverseDatasetStatistics,
+  type TacverseDatasetSort,
+  type TacverseDatasetStatisticsResponse,
+  type TacverseDatasetStatisticsRow,
+  type TacverseLocalStatus,
+} from "@/utils/tacverseDatasetStatistics";
 
-type WorkbenchStatisticsResponse = {
-  datasets?: LocalDatasetSummary[];
-  errors?: Array<{ path: string; message: string }>;
-  delta?: DailyDelta;
-  statisticsFilter?: WorkbenchStatisticsFilterSummary;
-  error?: string;
+type Tone = "neutral" | "accent" | "ok" | "warn";
+
+const TONE_CLASSES: Record<Tone, string> = {
+  neutral: "border-white/10 bg-[var(--surface-1)]/65",
+  accent: "border-cyan-400/25 bg-cyan-500/[0.06]",
+  ok: "border-emerald-400/25 bg-emerald-500/[0.06]",
+  warn: "border-amber-400/25 bg-amber-500/[0.06]",
 };
 
+function KpiCard({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string;
+  tone?: Tone;
+}) {
+  return (
+    <div className={`rounded-md border p-3 ${TONE_CLASSES[tone]}`}>
+      <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-slate-500">
+        {label}
+      </div>
+      <div className="mt-2 text-2xl font-semibold tabular-nums text-slate-100">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function formatNullableCount(value: number | null): string {
+  return value === null ? "—" : value.toLocaleString();
+}
+
+function formatNullableHours(value: number | null): string {
+  if (value === null) return "—";
+  return value.toLocaleString("en-US", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 3,
+  });
+}
+
+function formatSummaryHours(value: number): string {
+  return value.toLocaleString("en-US", {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 3,
+  });
+}
+
+function localBadge(status: TacverseLocalStatus) {
+  if (status === "downloaded") {
+    return {
+      label: "Downloaded",
+      className: "border-emerald-400/25 bg-emerald-500/10 text-emerald-200",
+    };
+  }
+  if (status === "incomplete") {
+    return {
+      label: "Incomplete",
+      className: "border-amber-400/25 bg-amber-500/10 text-amber-200",
+    };
+  }
+  return {
+    label: "Missing",
+    className: "border-slate-400/20 bg-slate-500/10 text-slate-400",
+  };
+}
+
 export default function WorkbenchDatasetStatistics({
-  organization,
+  categoryFilter = "all",
   refreshToken = 0,
 }: {
-  organization: string;
+  categoryFilter?: TacverseHubCategoryFilter;
   refreshToken?: number;
-  /** Optional episode payload supplied by the episode-viewer Workbench. */
-  episodeData?: EpisodeData;
 }) {
-  const [payload, setPayload] = useState<WorkbenchStatisticsResponse | null>(
-    null,
-  );
+  const [payload, setPayload] =
+    useState<TacverseDatasetStatisticsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
-  const [statisticsFilter, setStatisticsFilter] = useState(() =>
-    createWorkbenchStatisticsFilterSummary([]),
+  const [query, setQuery] = useState("");
+  const [issuesOnly, setIssuesOnly] = useState(false);
+  const [sort, setSort] = useState<TacverseDatasetSort>("updated");
+  const [now, setNow] = useState(() => Date.now());
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(
+    () => new Set(),
   );
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
     setError(null);
-    setStatisticsFilter(createWorkbenchStatisticsFilterSummary([]));
 
-    fetch(`/api/workbench/statistics?org=${encodeURIComponent(organization)}`, {
-      cache: "no-store",
-      signal: controller.signal,
-    })
+    fetch(
+      "/api/workbench/dataset-statistics?category=" +
+        encodeURIComponent(categoryFilter),
+      {
+        cache: "no-store",
+        signal: controller.signal,
+      },
+    )
       .then(async (response) => {
         const result = (await response
           .json()
-          .catch(() => ({}))) as WorkbenchStatisticsResponse;
+          .catch(() => ({}))) as TacverseDatasetStatisticsResponse;
         if (!response.ok) {
           throw new Error(
             result.error ||
-              `Workbench statistics request failed (${response.status})`,
+              `Dataset statistics request failed (${response.status})`,
           );
         }
-        if (!result.datasets || !result.delta) {
-          throw new Error("Workbench statistics response is incomplete.");
+        if (!Array.isArray(result.datasets)) {
+          throw new Error("Dataset statistics response is incomplete.");
         }
         return result;
       })
-      .then((result) => {
-        setStatisticsFilter(
-          result.statisticsFilter ?? createWorkbenchStatisticsFilterSummary([]),
-        );
-        setPayload(result);
-      })
+      .then(setPayload)
       .catch((reason: unknown) => {
         if (reason instanceof DOMException && reason.name === "AbortError") {
           return;
@@ -80,17 +148,35 @@ export default function WorkbenchDatasetStatistics({
       });
 
     return () => controller.abort();
-  }, [organization, refreshToken, retryToken]);
+  }, [categoryFilter, refreshToken, retryToken]);
+
+  const summary = useMemo(
+    () =>
+      summarizeTacverseDatasetStatistics(
+        payload?.datasets ?? [],
+        payload?.categoryTotal ?? 0,
+      ),
+    [payload],
+  );
+  const rows = useMemo(
+    () =>
+      filterTacverseDatasetStatistics(
+        sortTacverseDatasetStatistics(payload?.datasets ?? [], sort),
+        query,
+        issuesOnly,
+      ),
+    [issuesOnly, payload, query, sort],
+  );
 
   if (loading) {
     return (
       <section className="rounded-xl border border-white/10 bg-[var(--surface-0)]/40 p-5 text-sm text-slate-400">
-        Loading dataset statistics…
+        Loading TacVerse dataset statistics…
       </section>
     );
   }
 
-  if (error || !payload?.datasets || !payload.delta) {
+  if (error || !payload) {
     return (
       <section className="rounded-xl border border-amber-400/25 bg-amber-400/5 p-5 text-sm text-amber-200">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -99,7 +185,7 @@ export default function WorkbenchDatasetStatistics({
               Dataset statistics could not be loaded
             </p>
             <p className="mt-1 text-xs text-amber-200/75">
-              {error || "The Workbench statistics response was incomplete."}
+              {error || "The dataset statistics response was incomplete."}
             </p>
           </div>
           <button
@@ -115,21 +201,274 @@ export default function WorkbenchDatasetStatistics({
   }
 
   return (
-    <div className="space-y-3">
-      <WorkbenchStatisticsFilterNotice filter={statisticsFilter} />
-      {(payload.errors?.length ?? 0) > 0 && (
-        <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 p-3 text-xs text-amber-200/80">
-          {payload.errors?.length} dataset path
-          {payload.errors?.length === 1 ? "" : "s"} could not be scanned. The
-          available datasets are still shown below.
+    <section
+      aria-labelledby="dataset-statistics-title"
+      className="rounded-lg border border-cyan-400/15 bg-[var(--surface-0)]/60 p-4 sm:p-5"
+    >
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2
+            id="dataset-statistics-title"
+            className="text-sm font-semibold text-cyan-200"
+          >
+            Dataset statistics/TacVerse
+          </h2>
+          <p className="mt-1 text-[11px] text-slate-500">
+            Hub catalog visible to the current credential
+            {payload.refreshedAt
+              ? ` · refreshed ${new Date(payload.refreshedAt).toLocaleString()}`
+              : " · not refreshed yet"}
+          </p>
         </div>
+        <label className="flex items-center gap-2 text-[10px] text-slate-500">
+          Sort
+          <select
+            value={sort}
+            onChange={(event) =>
+              setSort(event.target.value as TacverseDatasetSort)
+            }
+            aria-label="Sort TacVerse datasets"
+            className="rounded-md border border-white/10 bg-[var(--surface-1)] px-2 py-1.5 text-xs text-slate-200 focus:border-cyan-400 focus:outline-none"
+          >
+            <option value="updated">Recently updated</option>
+            <option value="created">Recently created</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        <KpiCard label="Datasets" value={summary.datasets.toLocaleString()} />
+        <KpiCard label="Episodes" value={formatCompact(summary.episodes)} />
+        <KpiCard label="Frames" value={formatCompact(summary.frames)} />
+        <KpiCard
+          label="Recorded hours"
+          value={formatSummaryHours(summary.hours)}
+          tone="accent"
+        />
+        <KpiCard
+          label="Issues"
+          value={summary.issues.toLocaleString()}
+          tone={summary.issues > 0 ? "warn" : "ok"}
+        />
+        <KpiCard label="Downloads" value={formatCompact(summary.downloads)} />
+      </div>
+
+      {payload.refreshedAt === null && payload.hubTotal === 0 && (
+        <p className="mt-4 rounded-md border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-xs text-amber-200">
+          Hub catalog is empty. Please Refresh statistics first.
+        </p>
       )}
-      <HomepageDatasetStatistics
-        datasets={payload.datasets}
-        delta={payload.delta}
-        preserveDatasetOrder
-        rowLinkTarget="organization-workbench"
-      />
-    </div>
+
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <label className="relative min-w-0 flex-1">
+          <span className="sr-only">Filter TacVerse dataset statistics</span>
+          <svg
+            className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500"
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            aria-hidden
+          >
+            <circle cx="8.5" cy="8.5" r="5.5" />
+            <path d="m13 13 4 4" />
+          </svg>
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Filter by dataset name or robot_type"
+            className="w-full rounded-md border border-white/10 bg-[var(--surface-1)]/60 py-2 pl-9 pr-3 text-xs text-slate-100 placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none"
+          />
+        </label>
+        <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-white/10 bg-[var(--surface-1)]/60 px-3 py-2 text-xs text-slate-300">
+          <input
+            type="checkbox"
+            checked={issuesOnly}
+            onChange={(event) => setIssuesOnly(event.target.checked)}
+            className="accent-cyan-400"
+          />
+          Issues only
+        </label>
+      </div>
+
+      {(payload.catalogFailures?.length ?? 0) > 0 && (
+        <p className="mt-3 rounded-md border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-[11px] text-amber-200/80">
+          {payload.catalogFailures?.length.toLocaleString()} repositories had
+          metadata errors and are retained with unavailable values.
+        </p>
+      )}
+
+      <div className="mt-3 max-h-[34rem] overflow-auto rounded-md border border-white/10">
+        <table className="w-full min-w-[1080px] border-collapse text-left text-xs">
+          <thead className="sticky top-0 z-10 bg-[var(--surface-2)] text-[10px] uppercase tracking-wider text-slate-400">
+            <tr>
+              <th className="px-3 py-2.5 font-medium">Dataset</th>
+              <th className="px-3 py-2.5 font-medium">robot_type</th>
+              <th className="px-3 py-2.5 font-medium">Updated</th>
+              <th className="px-3 py-2.5 text-right font-medium">Downloads</th>
+              <th className="px-3 py-2.5 font-medium">Local</th>
+              <th className="px-3 py-2.5 text-right font-medium">Episodes</th>
+              <th className="px-3 py-2.5 text-right font-medium">Frames</th>
+              <th className="px-3 py-2.5 text-right font-medium">Hours</th>
+              <th className="px-3 py-2.5 text-right font-medium">Avg / ep</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/5">
+            {rows.map((row) => {
+              const renderCells = (
+                item: TacverseDatasetStatisticsRow,
+                child = false,
+              ) => {
+                const local = localBadge(item.localStatus);
+                const averageSeconds =
+                  item.episodes !== null &&
+                  item.episodes > 0 &&
+                  item.hours !== null
+                    ? (item.hours * 3600) / item.episodes
+                    : null;
+                const mixedRobotTypes = item.robotTypes.length > 1;
+                return (
+                  <>
+                    <td className="max-w-[24rem] px-3 py-2.5">
+                      <div
+                        className={
+                          child
+                            ? "flex items-start gap-2 pl-7"
+                            : "flex items-start gap-2"
+                        }
+                      >
+                        {!child && item.rowType === "folder" && (
+                          <button
+                            type="button"
+                            aria-expanded={expandedFolders.has(item.repoId)}
+                            aria-label={`Toggle children for ${item.repoId}`}
+                            onClick={() =>
+                              setExpandedFolders((current) => {
+                                const next = new Set(current);
+                                if (next.has(item.repoId))
+                                  next.delete(item.repoId);
+                                else next.add(item.repoId);
+                                return next;
+                              })
+                            }
+                            className="mt-0.5 w-4 shrink-0 text-cyan-300"
+                          >
+                            {expandedFolders.has(item.repoId) ? "▾" : "▸"}
+                          </button>
+                        )}
+                        <div className="min-w-0">
+                          <a
+                            href={item.hubUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block truncate font-medium text-slate-200 hover:text-cyan-200"
+                            title={`Open ${item.repoId} on Hugging Face`}
+                          >
+                            {child ? item.name : item.repoId}
+                          </a>
+                          <div className="mt-0.5 flex flex-wrap gap-1">
+                            {item.rowType === "folder" && (
+                              <span className="rounded border border-cyan-400/20 bg-cyan-400/5 px-1 text-[9px] uppercase text-cyan-200">
+                                Folder · {item.children.length} children
+                              </span>
+                            )}
+                            {item.metricsState !== "ok" && (
+                              <span
+                                className="rounded border border-amber-400/20 bg-amber-400/5 px-1 text-[9px] uppercase text-amber-200"
+                                title={
+                                  item.metricsState === "partial"
+                                    ? "Known values are aggregated; some child metadata is unavailable."
+                                    : "Statistics metadata is unavailable."
+                                }
+                              >
+                                {item.metricsState}
+                              </span>
+                            )}
+                            {item.categoryWarning && (
+                              <span
+                                className="rounded border border-amber-400/20 bg-amber-400/5 px-1 text-[9px] text-amber-200"
+                                title={item.categoryWarning}
+                              >
+                                robot_type warning
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    <td
+                      className="px-3 py-2.5 text-slate-400"
+                      title={
+                        mixedRobotTypes ? item.robotTypes.join(", ") : undefined
+                      }
+                    >
+                      {mixedRobotTypes
+                        ? `${item.robotTypes.length} robot types`
+                        : (item.robotType ?? "—")}
+                    </td>
+                    <td
+                      className="whitespace-nowrap px-3 py-2.5 text-slate-400"
+                      title={fullTimestamp(item.lastModified)}
+                    >
+                      {child
+                        ? "—"
+                        : formatRelativeUpdatedAt(item.lastModified, now)}
+                    </td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-slate-300">
+                      {formatNullableCount(item.downloads)}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span
+                        className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] ${local.className}`}
+                      >
+                        {local.label}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-slate-300">
+                      {formatNullableCount(item.episodes)}
+                    </td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-slate-300">
+                      {formatNullableCount(item.frames)}
+                    </td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-slate-300">
+                      {formatNullableHours(item.hours)}
+                    </td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-slate-300">
+                      {formatEpisodeLength(averageSeconds)}
+                    </td>
+                  </>
+                );
+              };
+              return (
+                <Fragment key={row.repoId}>
+                  <tr className="hover:bg-white/[0.025]">{renderCells(row)}</tr>
+                  {row.rowType === "folder" &&
+                    expandedFolders.has(row.repoId) &&
+                    row.children.map((child) => (
+                      <tr
+                        key={child.repoId}
+                        className="bg-cyan-400/[0.025] hover:bg-cyan-400/[0.05]"
+                      >
+                        {renderCells(child, true)}
+                      </tr>
+                    ))}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+        {rows.length === 0 && (
+          <div className="px-4 py-8 text-center text-xs text-slate-500">
+            No datasets match the current filters.
+          </div>
+        )}
+      </div>
+      <div className="mt-2 text-[10px] text-slate-500">
+        Showing {rows.length.toLocaleString()} of{" "}
+        {payload.categoryTotal.toLocaleString()} datasets in this category ·{" "}
+        {payload.hubTotal.toLocaleString()} total in the TacVerse Hub catalog
+      </div>
+    </section>
   );
 }

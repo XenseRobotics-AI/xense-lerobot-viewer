@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import type {
   DatasetDisplayInfo,
   EpisodeData,
@@ -17,7 +18,15 @@ import {
   type HfAccount,
 } from "@/utils/hfAccountClient";
 import { assignEpisodesToBins } from "@/utils/episodeLengthHistogram";
+import {
+  formatTransferRate,
+  formatTransferred,
+} from "@/components/sync-progress";
 import { runSync } from "@/utils/syncClient";
+import {
+  parseTacverseHubCategoryFilter,
+  type TacverseHubCategoryFilter,
+} from "@/utils/workbenchHubCategory";
 
 type QualityCheckResult = {
   id: string;
@@ -47,6 +56,10 @@ type StatisticsProgress = {
   percent?: number;
   repo?: string;
   repoId?: string;
+  filesDone?: number;
+  filesTotal?: number;
+  bytes?: number;
+  bytesPerSecond?: number;
 };
 
 const STATISTICS_ENDPOINTS = [
@@ -226,6 +239,7 @@ export default function DatasetReviewPanel({
   encodedPath,
   datasetName,
 }: DatasetReviewPanelProps) {
+  const searchParams = useSearchParams();
   const organization = datasetName.split("/", 1)[0]?.trim() ?? "";
   const [quality, setQuality] = useState<QualityResponse | null>(null);
   const [qualityError, setQualityError] = useState<string | null>(null);
@@ -252,18 +266,33 @@ export default function DatasetReviewPanel({
   const [statisticsProgressError, setStatisticsProgressError] = useState<
     string | null
   >(null);
+  const [hubCategoryFilter, setHubCategoryFilter] =
+    useState<TacverseHubCategoryFilter>(() =>
+      parseTacverseHubCategoryFilter(searchParams.get("workbenchHubCategory")),
+    );
   const [workbenchView, setWorkbenchView] = useState<
     "dataset-statistics" | "checks" | "grouping"
   >("grouping");
   const qualityRequestIdRef = useRef(0);
+  const statisticsOrganization =
+    workbenchView === "checks" ? organization : "TacVerse";
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (hubCategoryFilter === "all") {
+      url.searchParams.delete("workbenchHubCategory");
+    } else {
+      url.searchParams.set("workbenchHubCategory", hubCategoryFilter);
+    }
+    window.history.replaceState(window.history.state, "", url);
+  }, [hubCategoryFilter]);
   useEffect(() => {
     const controller = new AbortController();
     setHfAccount(null);
-    readHfAccount(controller.signal, organization || undefined)
+    readHfAccount(controller.signal, statisticsOrganization || undefined)
       .then(setHfAccount)
       .catch(() => undefined);
     return () => controller.abort();
-  }, [organization]);
+  }, [statisticsOrganization]);
 
   const statisticsRefreshAbortRef = useRef<AbortController | null>(null);
 
@@ -330,10 +359,8 @@ export default function DatasetReviewPanel({
         ? `${quality.aggregate.n_warn} warnings`
         : "All custom checks passed"
     : null;
-  const displayDatasetName = quality?.datasetName || datasetName;
-
   const refreshStatistics = async () => {
-    if (!organization) {
+    if (!statisticsOrganization) {
       setStatisticsRefreshError(
         "Workbench statistics requires a dataset organization.",
       );
@@ -354,7 +381,7 @@ export default function DatasetReviewPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          org: organization,
+          org: statisticsOrganization,
           endpoint: statisticsEndpoint,
           ...(explicitToken ? { token: explicitToken } : {}),
         }),
@@ -439,7 +466,7 @@ export default function DatasetReviewPanel({
 
       setStatisticsProgress({ phase: "stats", percent: 0 });
       const result = await runSync(
-        organization,
+        statisticsOrganization,
         (progress) => {
           setStatisticsProgress({
             phase: progress.phase === "complete" ? "complete" : "stats",
@@ -447,6 +474,10 @@ export default function DatasetReviewPanel({
             total: progress.total,
             percent: progress.percent,
             repo: progress.repo,
+            filesDone: progress.filesDone,
+            filesTotal: progress.filesTotal,
+            bytes: progress.bytes,
+            bytesPerSecond: progress.bytesPerSecond,
           });
         },
         {
@@ -471,7 +502,21 @@ export default function DatasetReviewPanel({
             ? "Stats files are already up to date."
             : `Stats files synced: ${result.downloaded.toLocaleString()} datasets.`
           : `Stats files synced: ${result.downloaded.toLocaleString()} datasets, ${result.failed.length.toLocaleString()} failed.`;
-      setStatisticsRefreshMessage(`${catalogMessage} ${syncMessage}`);
+      const archivedRepos = result.archivedRepos ?? 0;
+      const archivedSnapshots = result.archivedMetaSnapshots ?? 0;
+      const archivedFiles = result.archivedFiles ?? 0;
+      const archiveFailures = result.archiveFailures?.length ?? 0;
+      const archiveMessage =
+        archivedRepos || archivedSnapshots || archivedFiles || archiveFailures
+          ? ` Archived ${archivedRepos.toLocaleString()} removed datasets and ${archivedSnapshots.toLocaleString()} meta snapshots (${archivedFiles.toLocaleString()} files)${
+              archiveFailures
+                ? `; ${archiveFailures.toLocaleString()} archive operations failed.`
+                : "."
+            }`
+          : "";
+      setStatisticsRefreshMessage(
+        `${catalogMessage} ${syncMessage}${archiveMessage}`,
+      );
     } catch (error: unknown) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       const message =
@@ -491,7 +536,7 @@ export default function DatasetReviewPanel({
   };
 
   const verifyStatisticsAccount = async () => {
-    if (!organization) return;
+    if (!statisticsOrganization) return;
     setAccountBusy(true);
     setStatisticsRefreshError(null);
     try {
@@ -499,7 +544,7 @@ export default function DatasetReviewPanel({
       const account = await checkHfAccount(
         token || undefined,
         undefined,
-        organization,
+        statisticsOrganization,
         statisticsEndpoint,
       );
       setHfAccount(account);
@@ -548,15 +593,7 @@ export default function DatasetReviewPanel({
     <div className="mx-auto w-full max-w-6xl space-y-6 py-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[10px] uppercase tracking-[0.18em] text-cyan-300">
-            Workbench
-          </p>
-          <h2
-            className="mt-1 truncate text-xl font-semibold text-slate-100"
-            title={displayDatasetName}
-          >
-            {displayDatasetName}
-          </h2>
+          <h2 className="text-xl font-semibold text-slate-100">Workbench</h2>
           <p className="mt-1 text-xs text-slate-500">
             Read-only dataset statistics and Workbench custom checks. Doctor and
             Parquet remain independent.
@@ -575,7 +612,11 @@ export default function DatasetReviewPanel({
           <button
             type="button"
             onClick={refreshStatistics}
-            disabled={statisticsAction !== null || accountBusy || !organization}
+            disabled={
+              statisticsAction !== null ||
+              accountBusy ||
+              !statisticsOrganization
+            }
             className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-3 py-1.5 text-xs text-cyan-100 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {statisticsAction === "refresh"
@@ -619,7 +660,11 @@ export default function DatasetReviewPanel({
           <button
             type="button"
             onClick={() => void verifyStatisticsAccount()}
-            disabled={accountBusy || statisticsAction !== null || !organization}
+            disabled={
+              accountBusy ||
+              statisticsAction !== null ||
+              !statisticsOrganization
+            }
             className="rounded-md border border-white/10 px-2.5 py-1.5 text-[11px] text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {accountBusy ? "Checking account…" : "Check account"}
@@ -704,6 +749,21 @@ export default function DatasetReviewPanel({
             {(statisticsProgress?.repo || statisticsProgress?.repoId) &&
               ` · ${statisticsProgress.repo || statisticsProgress.repoId}`}
           </p>
+          {statisticsProgress?.phase === "stats" && (
+            <p className="mt-1 text-[11px] tabular-nums text-cyan-200/80">
+              {statisticsProgress.filesTotal
+                ? `Meta files ${(
+                    statisticsProgress.filesDone ?? 0
+                  ).toLocaleString()} / ${statisticsProgress.filesTotal.toLocaleString()}`
+                : "Resolving meta file list…"}
+              {statisticsProgress.bytes
+                ? ` · ${formatTransferred(statisticsProgress.bytes)}`
+                : ""}
+              {statisticsProgress.bytesPerSecond
+                ? ` · ${formatTransferRate(statisticsProgress.bytesPerSecond)}`
+                : " · waiting for network bytes…"}
+            </p>
+          )}
           {statisticsProgressError && (
             <p className="mt-1 text-[11px] text-amber-200">
               {statisticsProgressError}
@@ -728,7 +788,7 @@ export default function DatasetReviewPanel({
         {(
           [
             ["grouping", "Grouped statistics"],
-            ["dataset-statistics", "Dataset statistics"],
+            ["dataset-statistics", "Dataset statistics/TacVerse"],
             ["checks", "Current dataset checks"],
           ] as const
         ).map(([value, label]) => (
@@ -747,15 +807,54 @@ export default function DatasetReviewPanel({
         ))}
       </div>
 
+      {workbenchView !== "checks" && (
+        <fieldset className="rounded-lg border border-white/10 bg-[var(--surface-1)]/35 px-3 py-2.5">
+          <legend className="px-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+            Dataset category
+          </legend>
+          <div
+            className="flex flex-wrap items-center gap-x-5 gap-y-2"
+            role="radiogroup"
+            aria-label="Dataset category"
+          >
+            {(
+              [
+                ["all", "All datasets"],
+                ["taccap-g1", "TacVerse/taccap-g1 · Dated"],
+                ["xtac-umi-g1", "TacVerse/xtac-umi-g1"],
+                ["taccap-g1-merged", "TacVerse/taccap-g1 · Merged"],
+                ["folder", "Folder repositories"],
+                ["other", "Other datasets"],
+              ] as const
+            ).map(([value, label]) => (
+              <label
+                key={value}
+                className="inline-flex cursor-pointer items-center gap-2 text-xs text-slate-300"
+              >
+                <input
+                  type="radio"
+                  name="workbenchHubCategory"
+                  value={value}
+                  checked={hubCategoryFilter === value}
+                  onChange={() => setHubCategoryFilter(value)}
+                  className="accent-cyan-400"
+                />
+                <span>{label}</span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      )}
+
       {workbenchView === "dataset-statistics" ? (
         <WorkbenchDatasetStatistics
-          organization={organization}
+          categoryFilter={hubCategoryFilter}
           refreshToken={statisticsRefreshToken}
-          episodeData={episodeData}
         />
       ) : workbenchView === "grouping" ? (
         <WorkbenchGroupingPanel
-          organization={organization}
+          organization="TacVerse"
+          categoryFilter={hubCategoryFilter}
           refreshToken={statisticsRefreshToken}
           episodeData={episodeData}
         />

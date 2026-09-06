@@ -1,3 +1,4 @@
+/* Hub catalog schema is shared with scripts/hf_catalog.py. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -6,23 +7,47 @@ import {
 } from "@/utils/workbenchRollup";
 import { WORKBENCH_UPLOADER_NAMES } from "@/utils/workbenchUploaderNames";
 
-export type HfCatalogEntry = {
-  repoId?: string;
-  org?: string;
+export type HfCatalogFolderChild = {
   name?: string;
-  uploader?: string | null;
-  uploaderDisplayName?: string | null;
-  lastModified?: string | null;
+  path?: string;
   totalEpisodes?: number | null;
   totalFrames?: number | null;
   totalTasks?: number | null;
   fps?: number | null;
   durationHours?: number | null;
   robotType?: string | null;
+  metadataState?: "ok" | "error";
+  metadataError?: string;
+  [key: string]: unknown;
+};
+
+export type HfCatalogEntry = {
+  repoId?: string;
+  org?: string;
+  name?: string;
+  uploader?: string | null;
+  uploaderDisplayName?: string | null;
+  createdAt?: string | null;
+  lastModified?: string | null;
+  downloads?: number | null;
+  sha?: string | null;
+  totalEpisodes?: number | null;
+  totalFrames?: number | null;
+  totalTasks?: number | null;
+  fps?: number | null;
+  durationHours?: number | null;
+  robotType?: string | null;
+  layout?: "dataset" | "folder";
+  children?: HfCatalogFolderChild[];
+  metadataState?: "ok" | "error" | "partial" | "unknown";
+  metadataError?: string;
   [key: string]: unknown;
 };
 
 export type HfCatalogDocument = {
+  catalogVersion?: number;
+  org?: string;
+  refreshedAt?: string | null;
   datasets?: HfCatalogEntry[];
   [key: string]: unknown;
 };
@@ -220,4 +245,18 @@ export async function readHfCatalog(
 ): Promise<HfCatalogDocument> {
   const raw = await fs.readFile(hfCatalogCachePath(root, org), "utf8");
   return mergeWorkbenchHistory(JSON.parse(raw) as HfCatalogDocument, org);
+}
+
+/**
+ * Read the Hub catalog exactly as the refresh script wrote it.
+ *
+ * Dataset statistics uses the catalog as its membership authority, so it must
+ * not inherit the legacy Workbench log entries added by `readHfCatalog`.
+ */
+export async function readRawHfCatalog(
+  root: string,
+  org: string,
+): Promise<HfCatalogDocument> {
+  const raw = await fs.readFile(hfCatalogCachePath(root, org), "utf8");
+  return JSON.parse(raw) as HfCatalogDocument;
 }

@@ -24,7 +24,19 @@ export function formatTransferred(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "";
   if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(2)} GB`;
   if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
-  return `${Math.round(bytes / 1000)} kB`;
+  if (bytes >= 1_000) return `${Math.round(bytes / 1000)} kB`;
+  return `${Math.round(bytes)} B`;
+}
+
+export function formatTransferRate(bytesPerSecond: number): string {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return "";
+  if (bytesPerSecond >= 1_000_000_000)
+    return `${(bytesPerSecond / 1_000_000_000).toFixed(2)} GB/s`;
+  if (bytesPerSecond >= 1_000_000)
+    return `${(bytesPerSecond / 1_000_000).toFixed(1)} MB/s`;
+  if (bytesPerSecond >= 1_000)
+    return `${(bytesPerSecond / 1_000).toFixed(1)} kB/s`;
+  return `${Math.round(bytesPerSecond)} B/s`;
 }
 
 /** Phase line, overall bar, and — while a repo is moving — its own bar. */
@@ -43,6 +55,7 @@ export function SyncProgressView({ progress }: { progress: SyncProgress }) {
         })
       : null,
     p.bytes ? formatTransferred(p.bytes) : null,
+    p.bytesPerSecond ? formatTransferRate(p.bytesPerSecond) : null,
   ]
     .filter(Boolean)
     .join(" · ");

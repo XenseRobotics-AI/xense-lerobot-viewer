@@ -1,7 +1,7 @@
 import path from "node:path";
 import { readCorpusHistory } from "@/lib/corpus-history-store";
 import { readDatasetTasks } from "@/lib/dataset-quality-loader";
-import { readHfCatalog, type HfCatalogEntry } from "@/lib/hf-catalog-cache";
+import { readRawHfCatalog, type HfCatalogEntry } from "@/lib/hf-catalog-cache";
 import { discoverLocalDatasets } from "@/lib/local-datasets-discovery";
 import {
   defaultWorkbenchWorkstationMappings,
@@ -14,7 +14,20 @@ import {
 import { readWorkbenchPersonnelConfig } from "@/lib/workbench-personnel-store";
 import { readWorkbenchTacFlowScoreLedger } from "@/lib/workbench-score-ledger";
 import type { WorkbenchDatasetScore } from "@/types/workbench-score.types";
-import { bucketOf, type DateEvidence } from "@/lib/dataset-facets";
+import { type DateEvidence } from "@/lib/dataset-facets";
+import { WORKBENCH_UPLOADER_NAMES } from "@/utils/workbenchUploaderNames";
+import {
+  canonicalHubRepoId,
+  classifyTacverseHubRepository,
+  countTacverseHubCategories,
+  EMPTY_TACVERSE_HUB_CATEGORY_COUNTS,
+  hubRepoIdForLocalDatasetPath,
+  isTacverseHubCategoryFilter,
+  matchesTacverseHubCategory,
+  type TacverseHubCategoryCounts,
+  type TacverseHubCategoryFilter,
+  type TacverseHubClassificationInput,
+} from "@/utils/workbenchHubCategory";
 import { computeCorpusStats } from "@/utils/corpusStats";
 import {
   computeDailyDelta,
@@ -79,14 +92,17 @@ type NormalizedWorkbenchMappings = {
 function metadataFromCatalogEntry(
   entry: HfCatalogEntry | undefined,
 ): WorkbenchDatasetMetadata {
+  const uploader = typeof entry?.uploader === "string" ? entry.uploader : null;
   return {
     lastModified:
       typeof entry?.lastModified === "string" ? entry.lastModified : null,
-    uploader: typeof entry?.uploader === "string" ? entry.uploader : null,
+    uploader,
     uploaderDisplayName:
       typeof entry?.uploaderDisplayName === "string"
         ? entry.uploaderDisplayName
-        : null,
+        : uploader
+          ? (WORKBENCH_UPLOADER_NAMES[uploader] ?? null)
+          : null,
     durationHours:
       typeof entry?.durationHours === "number" &&
       Number.isFinite(entry.durationHours)
@@ -255,40 +271,118 @@ function normalizeWorkbenchMappingsForResponse(
   };
 }
 
+type WorkbenchHubScope = {
+  entries: Map<string, { entry: HfCatalogEntry; rank: number }>;
+  refreshedAt: string | null;
+  hubTotal: number;
+  categoryTotal: number;
+  categoryCounts: TacverseHubCategoryCounts;
+  folderRepoIds: Set<string>;
+};
+
+function hubCategoryInput(
+  entry: HfCatalogEntry & { repoId: string },
+): TacverseHubClassificationInput {
+  return {
+    repoId: entry.repoId,
+    robotType: typeof entry.robotType === "string" ? entry.robotType : null,
+    layout: typeof entry.layout === "string" ? entry.layout : null,
+    children: Array.isArray(entry.children) ? entry.children : null,
+  };
+}
+
 async function readCatalogByRepo(
   root: string,
   organization: string,
-): Promise<Map<string, { entry: HfCatalogEntry; rank: number }>> {
+  category: TacverseHubCategoryFilter,
+): Promise<WorkbenchHubScope> {
   try {
-    const catalog = await readHfCatalog(root, organization);
-    return new Map(
-      (catalog.datasets ?? [])
-        .filter((entry): entry is HfCatalogEntry & { repoId: string } =>
-          Boolean(entry.repoId),
-        )
-        .map((entry, rank) => [entry.repoId, { entry, rank }]),
+    const catalog = await readRawHfCatalog(root, organization);
+    const rawEntries = Array.isArray(catalog.datasets) ? catalog.datasets : [];
+    const entries = rawEntries.flatMap((entry) => {
+      const repoId = canonicalHubRepoId(
+        String(entry.repoId ?? ""),
+        organization,
+      );
+      return repoId ? [{ ...entry, repoId }] : [];
+    });
+    const categoryCounts = countTacverseHubCategories(
+      entries.map(hubCategoryInput),
     );
+    const folderRepoIds = new Set(
+      entries
+        .filter(
+          (entry) =>
+            classifyTacverseHubRepository(hubCategoryInput(entry)).category ===
+            "folder",
+        )
+        .map((entry) => entry.repoId),
+    );
+    const selectedEntries = entries.filter((entry) =>
+      matchesTacverseHubCategory(hubCategoryInput(entry), category),
+    );
+    return {
+      entries: new Map(
+        selectedEntries.map((entry, rank) => [entry.repoId, { entry, rank }]),
+      ),
+      refreshedAt:
+        typeof catalog.refreshedAt === "string" ? catalog.refreshedAt : null,
+      hubTotal: entries.length,
+      categoryTotal: selectedEntries.length,
+      categoryCounts,
+      folderRepoIds,
+    };
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return new Map();
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return {
+        entries: new Map(),
+        refreshedAt: null,
+        hubTotal: 0,
+        categoryTotal: 0,
+        categoryCounts: EMPTY_TACVERSE_HUB_CATEGORY_COUNTS,
+        folderRepoIds: new Set(),
+      };
+    }
     throw error;
   }
 }
 
-/**
- * Local TacVerse paths include a storage bucket that does not exist in the
- * Hub id: `TacVerse/merged/name` and `TacVerse/released/name` both correspond
- * to `TacVerse/name`.
- */
 function catalogEntryForLocalDataset(
   catalog: Map<string, { entry: HfCatalogEntry; rank: number }>,
   organization: string,
   relativePath: string,
+  folderRepoIds: ReadonlySet<string>,
 ): { entry: HfCatalogEntry; rank: number } | undefined {
-  const direct = catalog.get(relativePath);
-  if (direct) return direct;
-  if (bucketOf(relativePath) === null) return undefined;
-  const name = relativePath.split("/").filter(Boolean).at(-1);
-  return name ? catalog.get(`${organization}/${name}`) : undefined;
+  const repoId = hubRepoIdForLocalDatasetPath(
+    relativePath,
+    organization,
+    folderRepoIds,
+  );
+  if (!repoId) return undefined;
+  const matched = catalog.get(repoId);
+  if (!matched || matched.entry.layout !== "folder") return matched;
+  const segments = relativePath.split(/[\\/]+/u).filter(Boolean);
+  if (segments.length !== 3) return matched;
+  const childName = segments[2];
+  const child = matched.entry.children?.find(
+    (candidate) => candidate.path === childName || candidate.name === childName,
+  );
+  if (!child) return undefined;
+  return {
+    rank: matched.rank,
+    entry: {
+      ...matched.entry,
+      ...child,
+      repoId: `${repoId}/${childName}`,
+      layout: "dataset",
+      children: [],
+      uploader: matched.entry.uploader,
+      uploaderDisplayName: matched.entry.uploaderDisplayName,
+      createdAt: matched.entry.createdAt,
+      lastModified: matched.entry.lastModified,
+      downloads: null,
+    },
+  };
 }
 
 /**
@@ -298,21 +392,73 @@ function catalogEntryForLocalDataset(
  */
 export async function GET(request: Request): Promise<Response> {
   try {
-    const organization = new URL(request.url).searchParams.get("org")?.trim();
+    const searchParams = new URL(request.url).searchParams;
+    const organization = searchParams.get("org")?.trim();
     if (!organization) {
       return Response.json(
         { error: "Workbench statistics requires a dataset organization." },
         { status: 400 },
       );
     }
+    const requestedCategory = searchParams.get("category");
+    if (
+      requestedCategory !== null &&
+      !isTacverseHubCategoryFilter(requestedCategory)
+    ) {
+      return Response.json(
+        {
+          error:
+            "category must be one of: all, taccap-g1, xtac-umi-g1, taccap-g1-merged, folder, other.",
+        },
+        { status: 400 },
+      );
+    }
+    const categoryFilter: TacverseHubCategoryFilter =
+      requestedCategory ?? "all";
 
     const discovery = await discoverLocalDatasets();
+    const hubScope = await readCatalogByRepo(
+      discovery.root,
+      organization,
+      categoryFilter,
+    );
     const organizationDatasets = discovery.datasets.filter(
       (dataset) => getDatasetPrefix(dataset.relativePath) === organization,
     );
-    const filteredDatasets =
-      filterWorkbenchStatisticsDatasets(organizationDatasets);
-    const datasets = filteredDatasets.included;
+    const hubScopedDatasets = organizationDatasets.filter((dataset) =>
+      Boolean(
+        catalogEntryForLocalDataset(
+          hubScope.entries,
+          organization,
+          dataset.relativePath,
+          hubScope.folderRepoIds,
+        ),
+      ),
+    );
+    const isFolderChild = (relativePath: string): boolean => {
+      const segments = relativePath.split(/[\\/]+/u).filter(Boolean);
+      return (
+        segments.length === 3 &&
+        hubScope.folderRepoIds.has(`${organization}/${segments[1]}`)
+      );
+    };
+    const filteredOrdinaryDatasets = filterWorkbenchStatisticsDatasets(
+      hubScopedDatasets.filter(
+        (dataset) => !isFolderChild(dataset.relativePath),
+      ),
+    );
+    const ordinaryIncludedPaths = new Set(
+      filteredOrdinaryDatasets.included.map((dataset) => dataset.relativePath),
+    );
+    const datasets = hubScopedDatasets.filter(
+      (dataset) =>
+        isFolderChild(dataset.relativePath) ||
+        ordinaryIncludedPaths.has(dataset.relativePath),
+    );
+    const filteredDatasets = {
+      included: datasets,
+      summary: filteredOrdinaryDatasets.summary,
+    };
     const workstationMappings = await readWorkbenchWorkstationMappings(
       organization,
       discovery.root,
@@ -334,13 +480,14 @@ export async function GET(request: Request): Promise<Response> {
     } catch {
       // A corrupt or absent score ledger must not hide Workbench statistics.
     }
-    const catalog = await readCatalogByRepo(discovery.root, organization);
+    const catalog = hubScope.entries;
     const workbenchDatasets: WorkbenchDatasetSummary[] = await Promise.all(
       datasets.map(async (dataset) => {
         const remote = catalogEntryForLocalDataset(
           catalog,
           organization,
           dataset.relativePath,
+          hubScope.folderRepoIds,
         )?.entry;
         const withTasks = {
           ...dataset,
@@ -364,11 +511,13 @@ export async function GET(request: Request): Promise<Response> {
         catalog,
         organization,
         left.relativePath,
+        hubScope.folderRepoIds,
       );
       const rightCatalog = catalogEntryForLocalDataset(
         catalog,
         organization,
         right.relativePath,
+        hubScope.folderRepoIds,
       );
       if (leftCatalog && rightCatalog) {
         return (
@@ -381,7 +530,7 @@ export async function GET(request: Request): Promise<Response> {
       if (rightCatalog) return 1;
       return left.relativePath.localeCompare(right.relativePath);
     });
-    const replayCandidate = organizationDatasets.find((dataset) =>
+    const replayCandidate = hubScopedDatasets.find((dataset) =>
       isTacCapReplayDatasetPath(dataset.relativePath),
     );
     let displayReplayDataset: WorkbenchDatasetSummary | null =
@@ -393,6 +542,7 @@ export async function GET(request: Request): Promise<Response> {
         catalog,
         organization,
         replayCandidate.relativePath,
+        hubScope.folderRepoIds,
       )?.entry;
       const withTasks = {
         ...replayCandidate,
@@ -431,6 +581,16 @@ export async function GET(request: Request): Promise<Response> {
     };
     const delta = computeDailyDelta(scopedHistory, today, dayKey(now));
 
+    const locallyMatchedRepoIds = new Set<string>();
+    for (const dataset of workbenchDatasets) {
+      const repoId = hubRepoIdForLocalDatasetPath(
+        dataset.relativePath,
+        organization,
+        hubScope.folderRepoIds,
+      );
+      if (repoId) locallyMatchedRepoIds.add(repoId);
+    }
+
     const normalizedStoredMappings = normalizeWorkbenchMappingsForResponse(
       workstationMappings.mappings,
       workbenchDatasets,
@@ -441,6 +601,12 @@ export async function GET(request: Request): Promise<Response> {
     );
     return Response.json({
       datasets: workbenchDatasets,
+      categoryFilter,
+      refreshedAt: hubScope.refreshedAt,
+      hubTotal: hubScope.hubTotal,
+      categoryTotal: hubScope.categoryTotal,
+      categoryCounts: hubScope.categoryCounts,
+      localMatchedTotal: locallyMatchedRepoIds.size,
       displayReplayDataset,
       dataUpdatedAt: latestDataUpdatedAt(workbenchDatasets),
       statisticsFilter: filteredDatasets.summary,

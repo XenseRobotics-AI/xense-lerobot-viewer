@@ -530,6 +530,19 @@ describe("Workbench statistics route", () => {
     await writeDataset("TacVerse/merged/taccap-g1-arrange-desk-items-09902");
     await writeDataset("TacVerse/merged/taccap-g1-operate-shoe-box-0812");
     await writeDataset("TacVerse/taccap-g1-arrange-desk-items-0902");
+    const cacheDir = path.join(root, ".xense-viewer", "hf-catalog");
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(
+      path.join(cacheDir, "TacVerse.json"),
+      JSON.stringify({
+        org: "TacVerse",
+        datasets: [
+          { repoId: "TacVerse/taccap-g1-arrange-desk-items-09902" },
+          { repoId: "TacVerse/taccap-g1-operate-shoe-box-0812" },
+          { repoId: "TacVerse/taccap-g1-arrange-desk-items-0902" },
+        ],
+      }),
+    );
 
     const response = await GET(
       new Request("http://localhost/api/workbench/statistics?org=TacVerse"),
@@ -566,5 +579,189 @@ describe("Workbench statistics route", () => {
     expect(payload.displayReplayDataset?.relativePath).toBe(
       "TacVerse/merged/taccap-g1-operate-shoe-box-0812",
     );
+  });
+
+  test("gates local data through raw Hub membership and applies the top-level category first", async () => {
+    await writeDataset("TacVerse/taccap-g1-first-party-0905");
+    await writeDataset("TacVerse/released/xtac-umi-g1-other-0905");
+    await writeDataset("TacVerse/local-only-0905");
+    const history = path.join(root, "dataset-log.json");
+    process.env.TACVERSE_WORKBENCH_DATASET_LOG = history;
+    await fs.writeFile(
+      history,
+      JSON.stringify({
+        datasets: {
+          "TacVerse/history-only-0905": { uploader: "legacy" },
+        },
+      }),
+    );
+    const cacheDir = path.join(root, ".xense-viewer", "hf-catalog");
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(
+      path.join(cacheDir, "TacVerse.json"),
+      JSON.stringify({
+        org: "TacVerse",
+        refreshedAt: "2026-09-05T08:00:00Z",
+        datasets: [
+          { repoId: "TacVerse/taccap-g1-first-party-0905" },
+          { repoId: "TacVerse/xtac-umi-g1-other-0905" },
+          { repoId: "TacVerse/taccap-g1-hub-only-0905" },
+          { repoId: "OtherOrg/not-a-member" },
+          { repoId: "TacVerse/raw/not-canonical" },
+        ],
+      }),
+    );
+
+    const firstPartyResponse = await GET(
+      new Request(
+        "http://localhost/api/workbench/statistics?org=TacVerse&category=taccap-g1",
+      ),
+    );
+    const firstParty = await firstPartyResponse.json();
+    expect(firstParty).toMatchObject({
+      categoryFilter: "taccap-g1",
+      refreshedAt: "2026-09-05T08:00:00Z",
+      hubTotal: 3,
+      categoryTotal: 2,
+      categoryCounts: {
+        "taccap-g1": 2,
+        "xtac-umi-g1": 1,
+        "taccap-g1-merged": 0,
+        folder: 0,
+        other: 0,
+      },
+      localMatchedTotal: 1,
+    });
+    expect(
+      firstParty.datasets.map(
+        (dataset: { relativePath: string }) => dataset.relativePath,
+      ),
+    ).toEqual(["TacVerse/taccap-g1-first-party-0905"]);
+
+    const otherResponse = await GET(
+      new Request(
+        "http://localhost/api/workbench/statistics?org=TacVerse&category=xtac-umi-g1",
+      ),
+    );
+    const xtac = await otherResponse.json();
+    expect(xtac).toMatchObject({ categoryTotal: 1, localMatchedTotal: 1 });
+    expect(
+      xtac.datasets.map(
+        (dataset: { relativePath: string }) => dataset.relativePath,
+      ),
+    ).toEqual(["TacVerse/released/xtac-umi-g1-other-0905"]);
+
+    const invalid = await GET(
+      new Request(
+        "http://localhost/api/workbench/statistics?org=TacVerse&category=invalid",
+      ),
+    );
+    expect(invalid.status).toBe(400);
+  });
+
+  test("returns an empty Hub scope before refresh instead of local fallback", async () => {
+    await writeDataset("TacVerse/taccap-g1-local-only-0905");
+    const response = await GET(
+      new Request("http://localhost/api/workbench/statistics?org=TacVerse"),
+    );
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      refreshedAt: null,
+      hubTotal: 0,
+      categoryTotal: 0,
+      localMatchedTotal: 0,
+      datasets: [],
+    });
+  });
+  test("maps Folder children to one Hub parent while retaining child statistics", async () => {
+    await writeDataset("TacVerse/sampledata/child-a");
+    await writeDataset("TacVerse/sampledata/child-b");
+    await writeDataset("TacVerse/sampledata/merged");
+    const cacheDir = path.join(root, ".xense-viewer", "hf-catalog");
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(
+      path.join(cacheDir, "TacVerse.json"),
+      JSON.stringify({
+        catalogVersion: 2,
+        org: "TacVerse",
+        datasets: [
+          {
+            repoId: "TacVerse/sampledata",
+            layout: "folder",
+            children: [
+              {
+                name: "child-a",
+                path: "child-a",
+                totalEpisodes: 4,
+                totalFrames: 7200,
+                fps: 10,
+                durationHours: 0.2,
+                robotType: "robot-a",
+                metadataState: "ok",
+              },
+              {
+                name: "child-b",
+                path: "child-b",
+                totalEpisodes: 6,
+                totalFrames: 10800,
+                fps: 10,
+                durationHours: 0.3,
+                robotType: "robot-b",
+                metadataState: "ok",
+              },
+              {
+                name: "merged",
+                path: "merged",
+                totalEpisodes: 1,
+                totalFrames: 3600,
+                fps: 10,
+                durationHours: 0.1,
+                robotType: "robot-c",
+                metadataState: "ok",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const response = await GET(
+      new Request(
+        "http://localhost/api/workbench/statistics?org=TacVerse&category=folder",
+      ),
+    );
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      categoryFilter: "folder",
+      hubTotal: 1,
+      categoryTotal: 1,
+      localMatchedTotal: 1,
+      categoryCounts: {
+        "taccap-g1": 0,
+        "xtac-umi-g1": 0,
+        "taccap-g1-merged": 0,
+        folder: 1,
+        other: 0,
+      },
+    });
+    expect(
+      payload.datasets.map(
+        (dataset: { relativePath: string }) => dataset.relativePath,
+      ),
+    ).toEqual([
+      "TacVerse/sampledata/child-a",
+      "TacVerse/sampledata/child-b",
+      "TacVerse/sampledata/merged",
+    ]);
+    expect(payload.datasets[0]).toMatchObject({
+      total_episodes: 4,
+      total_frames: 7200,
+      durationHours: 0.2,
+    });
+    expect(payload.datasets[1]).toMatchObject({
+      total_episodes: 6,
+      total_frames: 10800,
+      durationHours: 0.3,
+    });
   });
 });

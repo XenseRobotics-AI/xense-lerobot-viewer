@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
-"""Build a lightweight Hugging Face dataset catalog for the local Viewer.
-
-This command is intentionally explicit: the Next route invokes it only after a
-user presses Refresh statistics. It reads small metadata files from the Hub,
-never downloads videos or parquet data, and writes a cache under the local
-dataset root. Credentials come from HF_TOKEN / the normal huggingface_hub
-cache and are never included in emitted JSON.
-"""
+"""Build the lightweight, versioned Hugging Face catalog used by Workbench."""
 
 from __future__ import annotations
 
 import argparse
 import json
+from concurrent.futures import ThreadPoolExecutor, wait
 import os
 import sys
 import tempfile
@@ -19,9 +13,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Catalog/account metadata is small and authenticated against the authority
-# that issued the token. Large dataset transfers remain free to use a mirror.
 os.environ.setdefault("HF_ENDPOINT", "https://huggingface.co")
+os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "15")
+os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
+
+CATALOG_VERSION = 2
+RESERVED_ROOT_DIRECTORIES = {"data", "videos", "meta"}
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -39,9 +36,64 @@ def iso(value: Any) -> str | None:
 
 
 def safe_error(exc: Exception, token: str | None) -> str:
-    """Keep Hub diagnostics useful without persisting the bearer token."""
     message = str(exc)
     return message.replace(token, "[REDACTED]") if token else message
+
+
+def safe_segment(value: str) -> bool:
+    return (
+        bool(value)
+        and value not in {".", ".."}
+        and "/" not in value
+        and "\\" not in value
+        and not value.startswith(".")
+    )
+
+
+def is_missing_entry(exc: Exception) -> bool:
+    if type(exc).__name__ in {"EntryNotFoundError", "RemoteEntryNotFoundError", "FileNotFoundError"}:
+        return True
+    message = str(exc).lower()
+    return "404" in message and ("not found" in message or "entry" in message)
+
+
+def cached_snapshot(repo_id: str, revision: str | None) -> Path | None:
+    if not revision or "/" in revision or "\\" in revision or revision in {".", ".."}:
+        return None
+    parts = repo_id.split("/")
+    if len(parts) != 2 or any(not safe_segment(part) for part in parts):
+        return None
+    cache_root = Path(
+        os.environ.get("HF_HUB_CACHE")
+        or Path.home() / ".cache" / "huggingface" / "hub"
+    )
+    snapshot = (
+        cache_root
+        / f"datasets--{parts[0]}--{parts[1]}"
+        / "snapshots"
+        / revision
+    )
+    return snapshot if snapshot.is_dir() else None
+
+
+def cached_folder_child_names(
+    repo_id: str, revision: str | None
+) -> list[str] | None:
+    snapshot = cached_snapshot(repo_id, revision)
+    if snapshot is None:
+        return None
+    names = {
+        item.name
+        for item in snapshot.iterdir()
+        if item.is_dir()
+        and safe_segment(item.name)
+        and item.name not in RESERVED_ROOT_DIRECTORIES
+        and (item / "meta" / "info.json").is_file()
+    }
+    # A partial HF snapshot may contain payload files but no metadata. In that
+    # case the Hub must remain the source of truth rather than misclassifying a
+    # regular dataset as an empty Folder.
+    return sorted(names) if names else None
 
 
 def local_state(root: Path, repo_id: str) -> str:
@@ -64,18 +116,32 @@ def read_cache(path: Path) -> dict[str, Any]:
         return {}
 
 
+def reusable_cache_entries(cached: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    if cached.get("catalogVersion") != CATALOG_VERSION:
+        return {}
+    return {
+        str(entry.get("repoId")): entry
+        for entry in cached.get("datasets", [])
+        if isinstance(entry, dict) and entry.get("repoId")
+    }
+
+
 def uploader_for(api: Any, repo_id: str, token: str | None) -> str | None:
     try:
-        commits = list(api.list_repo_commits(repo_id=repo_id, repo_type="dataset", token=token))
+        commits = list(
+            api.list_repo_commits(
+                repo_id=repo_id, repo_type="dataset", token=token
+            )
+        )
         if not commits:
             return None
-        # The Hub returns newest first; the final item is the earliest author.
         commit = commits[-1]
         authors = getattr(commit, "authors", None)
-        if isinstance(authors, (list, tuple)) and authors:
-            author = authors[0]
-        else:
-            author = getattr(commit, "author", None)
+        author = (
+            authors[0]
+            if isinstance(authors, (list, tuple)) and authors
+            else getattr(commit, "author", None)
+        )
         if isinstance(author, str) and author.strip():
             return author.strip()
         if isinstance(author, dict):
@@ -86,64 +152,300 @@ def uploader_for(api: Any, repo_id: str, token: str | None) -> str | None:
     return None
 
 
-def build_entry(api: Any, item: Any, root: Path, token: str | None, old: dict[str, Any] | None, force: bool) -> dict[str, Any]:
+def catalog_fields(item: Any) -> dict[str, Any]:
+    downloads = getattr(item, "downloads", None)
+    try:
+        downloads = int(downloads) if downloads is not None else None
+    except (TypeError, ValueError):
+        downloads = None
+    return {
+        "sha": str(getattr(item, "sha", None))
+        if getattr(item, "sha", None)
+        else None,
+        "createdAt": iso(
+            getattr(item, "createdAt", None)
+            or getattr(item, "created_at", None)
+        ),
+        "lastModified": iso(
+            getattr(item, "lastModified", None)
+            or getattr(item, "last_modified", None)
+        ),
+        "downloads": downloads,
+    }
+
+
+def info_fields(info: dict[str, Any]) -> dict[str, Any]:
+    def number(key: str) -> float | None:
+        value = info.get(key)
+        try:
+            parsed = float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed is not None and parsed >= 0 else None
+
+    frames = number("total_frames")
+    episodes = number("total_episodes")
+    tasks = number("total_tasks")
+    fps = number("fps")
+    duration = (
+        frames / fps / 3600
+        if frames is not None and fps is not None and frames > 0 and fps > 0
+        else None
+    )
+
+    def integer_if_whole(value: float | None) -> int | float | None:
+        if value is None:
+            return None
+        return int(value) if value.is_integer() else value
+
+    robot_type = info.get("robot_type")
+    return {
+        "totalEpisodes": integer_if_whole(episodes),
+        "totalFrames": integer_if_whole(frames),
+        "totalTasks": integer_if_whole(tasks),
+        "fps": fps,
+        "durationHours": round(duration, 6) if duration is not None else None,
+        "robotType": robot_type.strip()
+        if isinstance(robot_type, str) and robot_type.strip()
+        else None,
+    }
+
+
+def minimal_entry(
+    item: Any, root: Path, metadata_error: str | None = None
+) -> dict[str, Any]:
     repo_id = str(getattr(item, "id", ""))
-    sha = getattr(item, "sha", None)
-    sha = str(sha) if sha else None
-    if old and not force and old.get("sha") == sha:
-        entry = dict(old)
-        entry["localState"] = local_state(root, repo_id)
-        return entry
-
-    info: dict[str, Any] = {}
-    metadata_error: str | None = None
-    try:
-        from huggingface_hub import hf_hub_download
-
-        info_file = hf_hub_download(
-            repo_id=repo_id,
-            filename="meta/info.json",
-            repo_type="dataset",
-            token=token,
-        )
-        parsed = json.loads(Path(info_file).read_text(encoding="utf-8"))
-        if isinstance(parsed, dict):
-            info = parsed
-    except Exception as exc:
-        metadata_error = safe_error(exc, token)
-
-    frames = info.get("total_frames")
-    episodes = info.get("total_episodes")
-    fps = info.get("fps")
-    try:
-        frames_num = float(frames or 0)
-    except (TypeError, ValueError):
-        frames_num = 0.0
-    try:
-        episodes_num = int(episodes or 0)
-    except (TypeError, ValueError):
-        episodes_num = 0
-    try:
-        fps_num = float(fps or 0)
-    except (TypeError, ValueError):
-        fps_num = 0.0
-    duration = frames_num / fps_num / 3600 if frames_num > 0 and fps_num > 0 else 0
     return {
         "repoId": repo_id,
         "org": repo_id.split("/", 1)[0] if "/" in repo_id else "",
         "name": repo_id.rsplit("/", 1)[-1],
+        "layout": "dataset",
+        "children": [],
         "localState": local_state(root, repo_id),
-        "totalEpisodes": episodes_num,
-        "totalFrames": int(frames_num) if frames_num.is_integer() else frames_num,
-        "totalTasks": int(info.get("total_tasks") or 0),
-        "fps": fps_num,
-        "durationHours": round(duration, 6),
-        "robotType": info.get("robot_type"),
-        "sha": sha,
-        "lastModified": iso(getattr(item, "lastModified", None)),
-        "uploader": uploader_for(api, repo_id, token),
-        "metadataState": "ok" if not metadata_error else "error",
+        "totalEpisodes": None,
+        "totalFrames": None,
+        "totalTasks": None,
+        "fps": None,
+        "durationHours": None,
+        "robotType": None,
+        **catalog_fields(item),
+        "metadataState": "error" if metadata_error else "unknown",
         **({"metadataError": metadata_error} if metadata_error else {}),
+    }
+
+
+def root_child_names(
+    api: Any, repo_id: str, token: str | None, revision: str | None = None
+) -> list[str]:
+    cached = cached_folder_child_names(repo_id, revision)
+    if cached is not None:
+        return cached
+    list_tree = getattr(api, "list_repo_tree", None)
+    if callable(list_tree):
+        items = list(
+            list_tree(
+                repo_id=repo_id,
+                path_in_repo="",
+                recursive=False,
+                repo_type="dataset",
+                token=token,
+            )
+        )
+        output: set[str] = set()
+        for item in items:
+            raw_path = getattr(item, "path", None)
+            item_type = str(getattr(item, "type", "")).lower()
+            if not isinstance(raw_path, str) or not safe_segment(raw_path):
+                continue
+            if item_type == "file":
+                continue
+            if (
+                raw_path not in RESERVED_ROOT_DIRECTORIES
+                and raw_path not in {"README.md", ".gitattributes"}
+            ):
+                output.add(raw_path)
+        return sorted(output)
+
+    files = api.list_repo_files(
+        repo_id=repo_id, repo_type="dataset", token=token
+    )
+    output = set()
+    for filename in files:
+        parts = str(filename).split("/")
+        if (
+            len(parts) == 3
+            and parts[1] == "meta"
+            and parts[2] == "info.json"
+            and safe_segment(parts[0])
+            and parts[0] not in RESERVED_ROOT_DIRECTORIES
+        ):
+            output.add(parts[0])
+    return sorted(output)
+
+
+def read_downloaded_info(
+    repo_id: str,
+    filename: str,
+    token: str | None,
+    revision: str | None = None,
+) -> dict[str, Any]:
+    # A cached Folder snapshot proves the root metadata file is absent. Avoid
+    # a doomed Hub request before probing the cached child files.
+    if filename == "meta/info.json" and cached_folder_child_names(repo_id, revision):
+        raise FileNotFoundError(filename)
+    from huggingface_hub import hf_hub_download
+
+    try:
+        downloaded = hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            repo_type="dataset",
+            token=token,
+            local_files_only=True,
+        )
+    except Exception:
+        downloaded = hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            repo_type="dataset",
+            token=token,
+        )
+    parsed = json.loads(Path(downloaded).read_text(encoding="utf-8"))
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{filename} must contain a JSON object")
+    return parsed
+
+
+def folder_children(
+    api: Any,
+    repo_id: str,
+    token: str | None,
+    progress: Any | None = None,
+    revision: str | None = None,
+) -> list[dict[str, Any]]:
+    names = root_child_names(api, repo_id, token, revision)
+    if not names:
+        return []
+
+    def probe(child_name: str) -> dict[str, Any] | None:
+        filename = f"{child_name}/meta/info.json"
+        try:
+            info = read_downloaded_info(repo_id, filename, token, revision)
+            return {
+                "name": child_name,
+                "path": child_name,
+                **info_fields(info),
+                "metadataState": "ok",
+            }
+        except Exception as exc:
+            if is_missing_entry(exc):
+                return None
+            return {
+                "name": child_name,
+                "path": child_name,
+                "totalEpisodes": None,
+                "totalFrames": None,
+                "totalTasks": None,
+                "fps": None,
+                "durationHours": None,
+                "robotType": None,
+                "metadataState": "error",
+                "metadataError": safe_error(exc, token),
+            }
+
+    results: dict[str, dict[str, Any] | None] = {}
+    pending = set()
+    with ThreadPoolExecutor(max_workers=min(16, len(names))) as pool:
+        futures = {
+            pool.submit(probe, child_name): child_name for child_name in names
+        }
+        pending.update(futures)
+        completed = 0
+        while pending:
+            done, pending = wait(pending, timeout=5)
+            if not done:
+                if progress:
+                    progress(completed, len(names), None)
+                continue
+            for future in done:
+                child_name = futures[future]
+                results[child_name] = future.result()
+                completed += 1
+                if progress:
+                    progress(completed, len(names), child_name)
+    return [
+        results[name]
+        for name in names
+        if results.get(name) is not None
+    ]
+
+
+def build_entry(
+    api: Any,
+    item: Any,
+    root: Path,
+    token: str | None,
+    old: dict[str, Any] | None,
+    force: bool,
+    progress: Any | None = None,
+) -> dict[str, Any]:
+    repo_id = str(getattr(item, "id", ""))
+    fields = catalog_fields(item)
+    sha = fields["sha"]
+    if (
+        old
+        and not force
+        and old.get("sha") == sha
+    ):
+        entry = dict(old)
+        entry["localState"] = local_state(root, repo_id)
+        entry.update(fields)
+        return entry
+
+    try:
+        info = read_downloaded_info(repo_id, "meta/info.json", token, sha)
+    except Exception as exc:
+        if not is_missing_entry(exc):
+            return minimal_entry(item, root, safe_error(exc, token))
+        try:
+            children = folder_children(
+                api, repo_id, token, progress, revision=sha
+            )
+        except Exception as child_exc:
+            return minimal_entry(item, root, safe_error(child_exc, token))
+        if not children:
+            return minimal_entry(item, root, safe_error(exc, token))
+        child_errors = [
+            child
+            for child in children
+            if child.get("metadataState") == "error"
+        ]
+        return {
+            **minimal_entry(item, root),
+            "layout": "folder",
+            "children": children,
+            **fields,
+            "uploader": uploader_for(api, repo_id, token),
+            "metadataState": "partial" if child_errors else "ok",
+            **(
+                {
+                    "metadataError": (
+                        f"{len(child_errors)} Folder child metadata file(s) could not be parsed"
+                    )
+                }
+                if child_errors
+                else {}
+            ),
+        }
+
+    return {
+        **minimal_entry(item, root),
+        "layout": "dataset",
+        "children": [],
+        **info_fields(info),
+        **fields,
+        "uploader": uploader_for(api, repo_id, token),
+        "metadataState": "ok",
     }
 
 
@@ -164,11 +466,9 @@ def main() -> int:
     root = Path(args.root).resolve()
     cache_path = Path(args.cache).resolve()
     cached = read_cache(cache_path)
-    old_by_repo = {
-        str(entry.get("repoId")): entry
-        for entry in cached.get("datasets", [])
-        if isinstance(entry, dict) and entry.get("repoId")
-    }
+    # Schema upgrades deliberately invalidate same-SHA entries so Folder layout
+    # is discovered on the next explicit Refresh statistics.
+    old_by_repo = reusable_cache_entries(cached)
     token = os.environ.get("HF_TOKEN") or None
     api = HfApi()
     try:
@@ -176,7 +476,7 @@ def main() -> int:
             api.list_datasets(
                 author=args.org,
                 sort="lastModified",
-                expand=["sha"],
+                expand=["sha", "createdAt", "lastModified", "downloads"],
                 token=token,
             )
         )
@@ -194,23 +494,85 @@ def main() -> int:
     total = len(repos)
     for index, item in enumerate(repos, start=1):
         repo_id = str(getattr(item, "id", ""))
-        emit({"type": "progress", "progress": {"phase": "metadata", "index": index, "total": total, "repoId": repo_id}})
+        emit(
+            {
+                "type": "progress",
+                "progress": {
+                    "phase": "metadata",
+                    "index": index,
+                    "total": total,
+                    "repoId": repo_id,
+                },
+            }
+        )
         try:
-            entries.append(build_entry(api, item, root, token, old_by_repo.get(repo_id), args.force))
+            def folder_progress(
+                completed: int,
+                child_total: int,
+                child_name: str | None,
+            ) -> None:
+                fraction = completed / child_total if child_total else 1
+                emit(
+                    {
+                        "type": "progress",
+                        "progress": {
+                            "phase": "folder",
+                            "index": index,
+                            "total": total,
+                            "repoId": repo_id,
+                            "child": child_name,
+                            "childIndex": completed,
+                            "childTotal": child_total,
+                            "percent": round(
+                                ((index - 1) + fraction) / total * 100, 1
+                            )
+                            if total
+                            else 100,
+                        },
+                    }
+                )
+
+            entry = build_entry(
+                api,
+                item,
+                root,
+                token,
+                old_by_repo.get(repo_id),
+                args.force,
+                folder_progress,
+            )
+            entries.append(entry)
+            if entry.get("metadataState") in {"error", "partial"}:
+                failures.append(
+                    {
+                        "repoId": repo_id,
+                        "error": str(
+                            entry.get("metadataError") or "Metadata unavailable"
+                        ),
+                    }
+                )
         except Exception as exc:
-            failures.append({"repoId": repo_id, "error": safe_error(exc, token)})
+            error = safe_error(exc, token)
+            failures.append({"repoId": repo_id, "error": error})
+            entries.append(minimal_entry(item, root, error))
 
     result = {
+        "catalogVersion": CATALOG_VERSION,
         "org": args.org,
         "refreshedAt": datetime.now(timezone.utc).isoformat(),
         "datasets": entries,
         "failures": failures,
     }
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f"{args.org}.", suffix=".tmp", dir=str(cache_path.parent))
+    fd, temporary = tempfile.mkstemp(
+        prefix=f"{args.org}.", suffix=".tmp", dir=str(cache_path.parent)
+    )
     os.close(fd)
     try:
-        Path(temporary).write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        Path(temporary).write_text(
+            json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
         os.replace(temporary, cache_path)
     finally:
         try:

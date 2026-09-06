@@ -86,6 +86,11 @@ import type { WorkbenchPersonnelConfig } from "@/types/workbench-personnel.types
 import { computeWorkbenchPersonnelRollup } from "@/utils/workbenchPersonnel";
 import type { WorkbenchDatasetScore } from "@/types/workbench-score.types";
 import {
+  EMPTY_TACVERSE_HUB_CATEGORY_COUNTS,
+  type TacverseHubCategoryCounts,
+  type TacverseHubCategoryFilter,
+} from "@/utils/workbenchHubCategory";
+import {
   createWorkbenchStatisticsFilterSummary,
   type WorkbenchStatisticsFilterSummary,
 } from "@/utils/workbenchStatisticsFilter";
@@ -204,6 +209,12 @@ type WorkbenchStatisticsPayload = {
   rewardRuleDefaults?: WorkbenchRewardRulesConfig;
   personnelConfig?: WorkbenchPersonnelConfig;
   statisticsFilter?: WorkbenchStatisticsFilterSummary;
+  categoryFilter?: TacverseHubCategoryFilter;
+  refreshedAt?: string | null;
+  hubTotal?: number;
+  categoryTotal?: number;
+  categoryCounts?: TacverseHubCategoryCounts;
+  localMatchedTotal?: number;
   error?: string;
 };
 
@@ -573,10 +584,12 @@ function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
 
 export default function WorkbenchGroupingPanel({
   organization,
+  categoryFilter = "all",
   refreshToken = 0,
   episodeData,
 }: {
   organization: string;
+  categoryFilter?: TacverseHubCategoryFilter;
   refreshToken?: number;
   episodeData?: EpisodeData;
 }) {
@@ -596,10 +609,25 @@ export default function WorkbenchGroupingPanel({
   const [statisticsFilter, setStatisticsFilter] = useState(() =>
     createWorkbenchStatisticsFilterSummary([]),
   );
+  const [hubScope, setHubScope] = useState<{
+    refreshedAt: string | null;
+    hubTotal: number;
+    categoryTotal: number;
+    categoryCounts: TacverseHubCategoryCounts;
+    localMatchedTotal: number;
+  }>({
+    refreshedAt: null,
+    hubTotal: 0,
+    categoryTotal: 0,
+    categoryCounts: EMPTY_TACVERSE_HUB_CATEGORY_COUNTS,
+    localMatchedTotal: 0,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [localRefreshToken, setLocalRefreshToken] = useState(0);
   const [dataUpdatedAt, setDataUpdatedAt] = useState<string | null>(null);
+  const loadedCategoryRef = useRef(categoryFilter);
+  const categoryRangeCheckPendingRef = useRef(categoryFilter !== "all");
   const latestRangeAppliedRef = useRef(
     Boolean(
       searchParams.get("workbenchStart") || searchParams.get("workbenchEnd"),
@@ -706,10 +734,20 @@ export default function WorkbenchGroupingPanel({
     setLoading(true);
     setError(null);
     setStatisticsFilter(createWorkbenchStatisticsFilterSummary([]));
-    fetch(`/api/workbench/statistics?org=${encodeURIComponent(organization)}`, {
-      cache: "no-store",
-      signal: controller.signal,
-    })
+    if (loadedCategoryRef.current !== categoryFilter) {
+      categoryRangeCheckPendingRef.current = true;
+      setDatasets([]);
+    }
+    fetch(
+      "/api/workbench/statistics?org=" +
+        encodeURIComponent(organization) +
+        "&category=" +
+        encodeURIComponent(categoryFilter),
+      {
+        cache: "no-store",
+        signal: controller.signal,
+      },
+    )
       .then(async (response) => {
         const payload = (await response
           .json()
@@ -738,7 +776,16 @@ export default function WorkbenchGroupingPanel({
         const legacyDefaults = cleanStringRecord(
           payload.workstationMappings?.legacyDefaults,
         );
+        loadedCategoryRef.current = payload.categoryFilter ?? categoryFilter;
         setDatasets(payload.datasets ?? []);
+        setHubScope({
+          refreshedAt: payload.refreshedAt ?? null,
+          hubTotal: payload.hubTotal ?? 0,
+          categoryTotal: payload.categoryTotal ?? 0,
+          categoryCounts:
+            payload.categoryCounts ?? EMPTY_TACVERSE_HUB_CATEGORY_COUNTS,
+          localMatchedTotal: payload.localMatchedTotal ?? 0,
+        });
         setDisplayReplayDataset(payload.displayReplayDataset ?? null);
         setDataUpdatedAt(payload.dataUpdatedAt ?? null);
         setStatisticsFilter(
@@ -788,7 +835,7 @@ export default function WorkbenchGroupingPanel({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [organization, refreshToken, localRefreshToken]);
+  }, [categoryFilter, organization, refreshToken, localRefreshToken]);
 
   const rollupDatasets = useMemo<WorkbenchRollupDataset[]>(
     () =>
@@ -841,12 +888,29 @@ export default function WorkbenchGroupingPanel({
     [workstationRollupDatasets],
   );
   useEffect(() => {
-    if (latestRangeAppliedRef.current || availableDays.length === 0) return;
+    if (availableDays.length === 0) return;
+    if (!latestRangeAppliedRef.current) {
+      const next = getWorkbenchLatestAvailableDateTimeRange(availableDays);
+      setStartDateTime(next.startDateTime);
+      setEndDateTime(next.endDateTime);
+      latestRangeAppliedRef.current = true;
+      return;
+    }
+    if (!categoryRangeCheckPendingRef.current) return;
+    categoryRangeCheckPendingRef.current = false;
+    const startDay = dayKeyFromDateTimeInput(startDateTime);
+    const endDay = dayKeyFromDateTimeInput(endDateTime);
+    const rangeStillAvailable = Boolean(
+      startDay &&
+      endDay &&
+      startDay < endDay &&
+      availableDays.some((day) => day >= startDay && day < endDay),
+    );
+    if (rangeStillAvailable) return;
     const next = getWorkbenchLatestAvailableDateTimeRange(availableDays);
     setStartDateTime(next.startDateTime);
     setEndDateTime(next.endDateTime);
-    latestRangeAppliedRef.current = true;
-  }, [availableDays]);
+  }, [availableDays, endDateTime, startDateTime]);
   const range = useMemo(
     () =>
       normalizeWorkbenchDateRange(
@@ -2294,6 +2358,29 @@ export default function WorkbenchGroupingPanel({
             </ul>
           </details>
         </section>
+      )}
+      {!loading && hubScope.refreshedAt === null && hubScope.hubTotal === 0 && (
+        <div className="rounded-md border border-amber-400/25 bg-amber-400/5 p-3 text-xs text-amber-200">
+          Hub catalog is empty. Please Refresh statistics first.
+        </div>
+      )}
+      {!loading && hubScope.hubTotal > 0 && (
+        <div className="rounded-md border border-cyan-400/15 bg-cyan-400/[0.04] p-3 text-xs text-cyan-100/80">
+          Hub scope: {hubScope.categoryTotal.toLocaleString()} repositories in
+          this category, {hubScope.hubTotal.toLocaleString()} total · Dated{" "}
+          {hubScope.categoryCounts["taccap-g1"].toLocaleString()} · XTac{" "}
+          {hubScope.categoryCounts["xtac-umi-g1"].toLocaleString()} · Merged{" "}
+          {hubScope.categoryCounts["taccap-g1-merged"].toLocaleString()} ·
+          Folder {hubScope.categoryCounts.folder.toLocaleString()} · Other{" "}
+          {hubScope.categoryCounts.other.toLocaleString()}. Local statistics
+          matched {hubScope.localMatchedTotal.toLocaleString()} repositories;{" "}
+          {Math.max(
+            0,
+            hubScope.categoryTotal - hubScope.localMatchedTotal,
+          ).toLocaleString()}{" "}
+          Hub repositories without eligible local data do not participate in
+          Grouped calculations.
+        </div>
       )}
       <WorkbenchStatisticsFilterNotice filter={statisticsFilter} />
 

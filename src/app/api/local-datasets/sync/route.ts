@@ -105,6 +105,15 @@ type SyncResult = {
   skipped: number;
   failed: { repo: string; error: string }[];
   listOnly: boolean;
+  archivedRepos?: number;
+  archivedMetaSnapshots?: number;
+  archivedFiles?: number;
+  archiveFailures?: Array<{
+    scope: string;
+    repo?: string;
+    path?: string;
+    error: string;
+  }>;
   /** Per-repo size/file count — only on the single-repo path. */
   details?: SyncRepoDetail[];
 };
@@ -391,8 +400,9 @@ export async function POST(request: NextRequest): Promise<Response> {
     return Response.json({ error: "Expected a JSON body." }, { status: 400 });
   }
 
-  // Workbench's metadata-only path transfers just info/hardware JSON and uses
-  // the direct TacVerse target resolver. Keep every full-dataset entry point
+  // Workbench's metadata-only path transfers the complete meta/** snapshot
+  // and uses the direct TacVerse target resolver. Keep every full-dataset
+  // entry point
   // closed until the engine-side downloader shares the bucket layout contract.
   if (FULL_SYNC_DISABLED && body.metadataOnly !== true) {
     return Response.json({ error: SYNC_DISABLED_REASON }, { status: 503 });

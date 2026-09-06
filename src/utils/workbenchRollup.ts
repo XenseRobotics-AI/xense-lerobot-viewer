@@ -3,6 +3,7 @@ import type { DateEvidence, DatasetFacets } from "@/lib/dataset-facets";
 import { getDatasetPrefix } from "@/utils/datasetGrouping";
 import { WORKBENCH_UPLOADER_NAMES } from "@/utils/workbenchUploaderNames";
 import { isWorkbenchStatisticsExcludedDataset } from "@/utils/workbenchStatisticsFilter";
+import { hasValidWorkbenchMonthDaySuffix } from "@/utils/workbenchHubCategory";
 
 export type WorkbenchRollupDimension =
   | "uploader"
@@ -44,20 +45,6 @@ function normalizedPathSegments(relativePath: string): string[] {
   return relativePath.split(/[\\/]+/u).filter(Boolean);
 }
 
-function hasValidMonthDaySuffix(relativePath: string): boolean {
-  const leaf = workbenchDatasetName(relativePath);
-  const match = /-(\d{2})(\d{2})$/u.exec(leaf);
-  if (!match) return false;
-  const month = Number(match[1]);
-  const day = Number(match[2]);
-  const candidate = new Date(Date.UTC(2026, month - 1, day));
-  return (
-    candidate.getUTCFullYear() === 2026 &&
-    candidate.getUTCMonth() === month - 1 &&
-    candidate.getUTCDate() === day
-  );
-}
-
 /** Classify a Workbench dataset from its canonical TacVerse path. */
 export function workbenchDatasetSourceKey(
   relativePath: string,
@@ -69,10 +56,16 @@ export function workbenchDatasetSourceKey(
   if (segments.length === 2 && WORKBENCH_TACFLOW_DATASET_LEAVES.has(leaf)) {
     return "tacflow";
   }
-  if (leaf.startsWith("taccap-g1-") && hasValidMonthDaySuffix(relativePath)) {
+  if (
+    leaf.startsWith("taccap-g1-") &&
+    hasValidWorkbenchMonthDaySuffix(relativePath)
+  ) {
     return "taccap-g1";
   }
-  if (leaf.startsWith("xtac-umi-g1-") && hasValidMonthDaySuffix(relativePath)) {
+  if (
+    leaf.startsWith("xtac-umi-g1-") &&
+    hasValidWorkbenchMonthDaySuffix(relativePath)
+  ) {
     return "xtac-umi-g1";
   }
   return "unclassified";
