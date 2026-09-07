@@ -1546,6 +1546,19 @@ async function* iterateEpisodeMetadataFilesV3(
 ): AsyncGenerator<Record<string, unknown>[], void, unknown> {
   let chunkIndex = 0;
   let fileIndex = 0;
+  // One metadata row per episode, so the episode count tells us when the last
+  // shard has been read. Without it the only way to learn where the tree ends
+  // is to request shards that are not there — two 404s per walk, which the dev
+  // server logs as errors even though the walk succeeded. This is a stop
+  // condition, not the terminator: an info.json that under-reports just falls
+  // through to the probe below, exactly as before.
+  let remainingEpisodes = Number.POSITIVE_INFINITY;
+  try {
+    const { info } = await getDatasetVersionAndInfo(repoId);
+    if (info.total_episodes > 0) remainingEpisodes = info.total_episodes;
+  } catch {
+    // No usable info.json — probe for the missing shard instead.
+  }
 
   while (true) {
     const path = buildV3EpisodesMetadataPath(chunkIndex, fileIndex);
@@ -1590,6 +1603,8 @@ async function* iterateEpisodeMetadataFilesV3(
     }
 
     yield rows;
+    remainingEpisodes -= rows.length;
+    if (remainingEpisodes <= 0) return;
     fileIndex++;
   }
 }

@@ -50,6 +50,55 @@ Each LeRobot dataset under `LOCAL_DATASET_ROOT` (default `${HOME}/.cache/hugging
 
 `sizeBytes` comes from `directorySizeBytes()`, a recursive walk of the dataset directory. It counts **everything on disk**, including the `.cache/huggingface` bookkeeping a Hub sync leaves behind — the figure answers "what does this cost me on disk", and `IGNORE_DIRS` only governs where datasets are _found_. Symlinks are skipped rather than followed, so a linked-in `videos/` is attributed to whoever owns the bytes instead of being double-counted. Apparent size is summed, not allocated blocks, so it reads slightly under `du` (which also charges for directory inodes). The walk is cheap enough to run inline on every homepage render — ~8 ms for 20 datasets / 4k files — so there is no cache to invalidate.
 
+### Robot types and dataset shapes
+
+A dataset's **shape** — `observation.state` dimensions plus the number of
+`observation.images.*` streams — is the signature of the rig that recorded it,
+and `src/lib/dataset-facets.ts` holds the one table that says which is which:
+
+| `robot_type`        | state dims | video streams | cameras                      |
+| ------------------- | ---------- | ------------- | ---------------------------- |
+| `bi_taccap_gripper` | 20         | 6             | 4 tactile + 2 wrist          |
+| `bi_rdt_gripper`    | 20         | 7             | 4 tactile + 2 wrist + `side` |
+| `xtac_umi_g1`       | 29         | 8             | 4 tactile + 2 wrist + 2 head |
+
+`shapeAnomalyOf(stateDim, videoStreams, robotType)` flags a dataset only when it
+disagrees with **its own** robot type. That is not a stylistic choice: TacCap and
+RDT both record 20 state dims and differ only in stream count, so a flat
+whitelist of allowed pairs reads a TacCap capture that silently gained a seventh
+camera as a valid RDT dataset and never flags it — which is exactly the
+half-configured case the badge exists to catch. An unrecognised or missing
+`robot_type` has no expectation to check against and falls back to "matches some
+known rig", which still flags a genuinely foreign shape (lerobot's 2-dim PushT).
+
+Robot names are matched through `normalizeRobotType` in `src/lib/so101-robot.ts`
+— lowercased, separators stripped, then compared as a substring, so
+`xtac-umi-g1`, `xtac_umi_g1` and `XTac UMI G1` are one robot and a versioned
+spelling still resolves. It is shared with `isTacCapRobot` deliberately: two
+matchers that disagree on how a name is read is the failure this file already
+warns about for the URDF predicates.
+
+Note `bi_rdt_gripper` matches none of the URDF predicates, so it gets no **3D
+Replay** tab — no RDT URDF is bundled. Its state layout is the same bimanual
+`left_tcp.*` / `right_tcp.*` / `*_gripper.pos` naming TacCap uses, so the
+Episodes `3D` chart mode and the Action Insights spatial trajectories, which key
+off feature names rather than robot type, work already.
+
+Where it surfaces: every dataset card carries the shape as a badge — neutral
+when it matches the robot type, amber when it does not — and the homepage
+category cards list the robot types present in each source, because a source
+directory is an owner rather than a rig and can hold several.
+
+### Switching the scanned path
+
+`LOCAL_DATASET_ROOT` is the anchor for the stores; which directory is _scanned_ can be switched at runtime from the homepage header (`src/components/dataset-path-switcher.tsx`).
+
+- `src/lib/dataset-locations-store.ts` keeps the alternative paths at `<root>/.xense-viewer/locations.json` (atomic tmp+rename like the other stores) and exposes `resolveBrowsePath(root, requested)`, which accepts the request only when it names a listed location — a cookie is user input, so an unlisted path falls back to the root instead of scanning wherever it points.
+- The selection rides in the `xense-browse-path` cookie. `src/utils/browsePath.ts` holds the cookie name and serializer because the switcher is a client component and the store imports `node:fs` (same split as `i18n/config` vs `i18n/locale-server`).
+- `discoverLocalDatasets(requestedPath?)` scans that one directory and returns `{ root, browsePath, locations, datasets, errors }`. Away from the root, `encodedPath` carries the **absolute** path — `resolveServerLocalDatasetPath` already accepted those, so no file route changes — and a browsed directory that is itself a dataset is listed under its own basename.
+- Routes: `GET/POST/DELETE /api/local-datasets/locations`, and `POST /api/local-datasets/pick-folder`, which opens the **desktop's** folder dialog server-side (`src/lib/native-folder-dialog.ts`, zenity or kdialog) and returns `picked` / `cancelled` / `unavailable`. A browser cannot hand a page an absolute path, so the server asks the desktop instead; The window opens on the server's desktop whatever address the browser used: this viewer is normally reached by the host's LAN address even from the host itself (see `allowedDevOrigins`), so a loopback-only rule just meant the button never worked. `pickFolder` allows one dialog at a time, which keeps windows from stacking and caps what a caller can spawn. Everything that can go wrong (no display, no tool, crash, 3-minute timeout) comes back as `unavailable`, since the fallback — type the path — is the same for all of them.
+- `DatasetCardGrid` takes `canDelete`; it is false away from the root, hiding both the per-card Delete and the `TrashStrip`, because `local-dataset-trash.ts` guards on the root and would refuse those datasets.
+
 ### Repo IDs and routing
 
 Internally a local dataset is referred to by a `local:`-prefixed `repoId` (legacy wrapper, retained for minimal blast radius across `fetch-data`, `versionUtils`, sidebar, viewer). Helpers in `src/utils/datasetRoute.ts`:
@@ -117,7 +166,7 @@ Episode entry pages call `probeDatasetHealth()` in `src/app/_local/[encodedPath]
 - Integer columns from parquet come out as **BigInt** — always use `bigIntToNumber()` from `src/utils/typeGuards.ts`
 - Row-range selection: `dataset_from_index` / `dataset_to_index` allow reading only the episode's rows from a shared parquet file
 - Fallback format uses numeric keys `"0"`.."9"` when column names are unavailable
-- Episode metadata can span **multiple chunks** (when episode count exceeds `chunks_size`). Always walk via the `iterateEpisodeMetadataFilesV3(repoId, version)` async generator in `fetch-data.ts` — it advances chunk-000 → chunk-001 → … and stops on the first missing `file-000`. Never hardcode `chunk-000`.
+- Episode metadata can span **multiple chunks** (when episode count exceeds `chunks_size`). Always walk via the `iterateEpisodeMetadataFilesV3(repoId, version)` async generator in `fetch-data.ts` — it advances chunk-000 → chunk-001 → … Never hardcode `chunk-000`. The walk normally stops on a **count**: one metadata row is one episode, so it ends as soon as it has read `info.total_episodes` rows. The old terminator — request the next shard, take the 404 as the end — is still there underneath and still correct, but it fires only when `info.json` under-reports, so an ordinary dataset no longer logs two 404s per walk. The stop is safe because the episode list itself is `Array.from({length: info.total_episodes})`: an episode past that count is one the UI can never ask for.
 - Multi-task episodes: episode-metadata rows carry a `tasks` field (`list[str]`) — prefer it over the legacy single `task_index` lookup. `EpisodeMetadataV3.tasks?: string[]` exposes it.
 - `meta/tasks.parquet` lookup: rows are **not** ordered by `task_index`, and the task string lives in a named pandas index (`__index_level_0__`). Always filter by the `task_index` **column** (`row.task_index === taskIndexNum`), never by row position.
 - **Language columns (v3.1)**: `loadEpisodeDataV3` always requests `language_persistent` / `language_events` in `v3DataColumns`. `hyparquet` silently ignores columns a dataset doesn't have, so this is safe for plain v3.0 datasets — `extractLanguageAtoms()` just returns `[]`. These columns are decoded as `list<struct<role,content,style,timestamp,camera,tool_calls>>`. See the Annotations section below.
@@ -363,6 +412,10 @@ Every user-facing panel is translated (625 keys). To extend: add keys to both di
 | `src/i18n/format.ts` / `rich.tsx`                                 | `interpolate` / `pluralKey`; `richInterpolate` for React-node placeholders                                                                                         |
 | `src/context/locale-context.tsx`                                  | `LocaleProvider` (mounted in the root layout) + `useLocale()` / `useT()` → `t`, `tp`, `tRich`, `tpRich`                                                            |
 | `src/components/language-switcher.tsx`                            | EN / 中 toggle for the top right of each page header                                                                                                               |
+| `src/lib/dataset-facets.ts`                                       | Pure browsing facets: bucket, capture dates, and the robot→shape table (`expectedShapeOf`, `shapeAnomalyOf`) — no `node:` imports                                  |
+| `src/lib/dataset-facets-server.ts`                                | Server half: reads capture dates off disk and derives shape from `info.json` features                                                                              |
+| `src/utils/corpusFilters.ts`                                      | Pure secondary filters for one category — bucket, capture date, odd-shape shortcut, and the chip counts                                                            |
+| `src/app/dataset-card-grid.tsx`                                   | The level-2 dataset grid: name/robot/tag filters, health + shape badges, per-card tag editor and Delete                                                            |
 | `src/lib/local-datasets-discovery.ts`                             | Server-side scanner: walks the local root, returns datasets + `DatasetIntegrity`                                                                                   |
 | `src/app/page.tsx`                                                | Server component → calls `discoverLocalDatasets()` → renders `LocalDatasetGrid`                                                                                    |
 | `src/app/local-dataset-grid.tsx`                                  | Client grid: filter, health filter, "Open episode N" quick-jump, card with health badge                                                                            |

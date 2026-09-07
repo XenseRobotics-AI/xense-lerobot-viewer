@@ -74,6 +74,7 @@ export const zh: Record<MessageKey, string> = {
   "home.groupHealthy": "{count} 个正常",
   "home.groupIssues_one": "{count} 个异常",
   "home.groupIssues_other": "{count} 个异常",
+  "home.groupRobotsMore": "另 {count} 种",
 
   // ── homepage: dataset card grid (level 2) ───────────────────────────────
   "grid.back": "数据集",
@@ -109,8 +110,9 @@ export const zh: Record<MessageKey, string> = {
   "grid.datePresetCutoffHint": "首发口径:{date} 及以后采集的",
   "grid.anomalyOnly": "只看形态异常（{count}）",
   "grid.anomalyOnlyHint":
-    "正常形态：20 维 + 6 路，或 29 维 + 8 路；仅其他组合会标记为异常。",
+    "每种机器人类型只有一种正确形态：bi_taccap_gripper 为 20 维 + 6 路，bi_rdt_gripper 为 20 维 + 7 路，xtac_umi_g1 为 29 维 + 8 路。仅与自身机器人类型不符的数据集会被标记。",
   "grid.shapeBadge": "{dim} 维 + {streams} 路",
+  "grid.shapeExpected": "{robot} 应为 {dim} 维 + {streams} 路",
   "grid.bucketMerged": "已合并",
   "grid.bucketRaw": "按天原始",
   "grid.bucketFailed": "已隔离",
@@ -209,6 +211,19 @@ export const zh: Record<MessageKey, string> = {
   "repofetch.downloadSized": "下载 {size}",
   "repofetch.redownload": "重新下载",
   "repofetch.redownloadTitle": "忽略本地提交检查，重新拉取该数据集",
+  "pathswitch.button": "切换",
+  "pathswitch.title": "切换数据集路径",
+  "pathswitch.hint": "扫描其他目录。在下面选择，或选取一个文件夹来记住并切换。",
+  "pathswitch.defaultRoot": "默认",
+  "pathswitch.forget": "忘记此路径",
+  "pathswitch.forgetAria": "忘记 {path}",
+  "pathswitch.placeholder": "/数据集目录的绝对路径",
+  "pathswitch.inputAria": "数据集路径",
+  "pathswitch.use": "使用",
+  "pathswitch.choose": "选择文件夹…",
+  "pathswitch.choosing": "对话框已打开…",
+  "pathswitch.dialogTitle": "选择数据集文件夹",
+  "pathswitch.dialogUnavailable": "无法打开文件夹对话框：{reason}",
   "repofetch.another": "下载另一个",
 
   // ── homepage: trash ─────────────────────────────────────────────────────

@@ -37,6 +37,16 @@ export type DatasetGroup = {
   totalBytes: number;
   /** First non-null thumbnail among the group's datasets, used as the card art. */
   thumbnailVideoUrl: string | null;
+  /**
+   * Distinct `robot_type` values in the group, most-used first.
+   *
+   * Summarised here rather than in the card so the landing page can name the
+   * rig without opening the category: a source directory is an owner, not a
+   * robot, and one source can hold several (TacVerse carries both TacCap and
+   * RDT captures). Datasets with no declared robot type are simply absent —
+   * an empty array means "nothing declared", never "one unknown robot".
+   */
+  robotTypes: string[];
 };
 
 /**
@@ -70,6 +80,24 @@ export function compareDatasetsBySize(
 }
 
 /**
+ * Distinct robot types across a set of datasets, ordered by how many datasets
+ * declare each — so a category card leads with the rig that actually
+ * characterises the source, and a handful of stragglers do not outrank it.
+ * Ties break on name so the order is stable across renders.
+ */
+export function rankRobotTypes(datasets: LocalDatasetSummary[]): string[] {
+  const counts = new Map<string, number>();
+  for (const ds of datasets) {
+    const robot = ds.robot_type?.trim();
+    if (!robot) continue;
+    counts.set(robot, (counts.get(robot) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([robot]) => robot);
+}
+
+/**
  * Bucket datasets by prefix, aggregating per-group health counts and episode
  * totals, and picking the first available thumbnail as the category art.
  *
@@ -95,6 +123,7 @@ export function groupDatasetsByPrefix(
         totalFrames: 0,
         totalBytes: 0,
         thumbnailVideoUrl: null,
+        robotTypes: [],
       };
       groups.set(prefix, group);
     }
@@ -114,6 +143,7 @@ export function groupDatasetsByPrefix(
     group.thumbnailVideoUrl =
       group.datasets.find((ds) => ds.thumbnailVideoUrl)?.thumbnailVideoUrl ??
       null;
+    group.robotTypes = rankRobotTypes(group.datasets);
   }
 
   return ordered.sort(

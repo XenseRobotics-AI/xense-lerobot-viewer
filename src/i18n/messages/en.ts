@@ -66,6 +66,7 @@ export const en = {
   "home.groupHealthy": "{count} healthy",
   "home.groupIssues_one": "{count} issue",
   "home.groupIssues_other": "{count} issues",
+  "home.groupRobotsMore": "+{count} more",
 
   // ── homepage: dataset card grid (level 2) ───────────────────────────────
   "grid.back": "Datasets",
@@ -102,8 +103,9 @@ export const en = {
     "First-release rule: captured on or after {date}",
   "grid.anomalyOnly": "Odd shape only ({count})",
   "grid.anomalyOnlyHint":
-    "Normal shapes: 20-dim + 6 streams or 29-dim + 8 streams. Only other combinations are flagged.",
+    "Each robot type records one correct shape: bi_taccap_gripper 20-dim + 6 streams, bi_rdt_gripper 20-dim + 7 streams, xtac_umi_g1 29-dim + 8 streams. Only a dataset that disagrees with its own robot type is flagged.",
   "grid.shapeBadge": "{dim}-dim + {streams} streams",
+  "grid.shapeExpected": "{robot} should record {dim}-dim + {streams} streams",
   "grid.bucketMerged": "merged",
   "grid.bucketRaw": "raw",
   "grid.bucketFailed": "failed",
@@ -211,6 +213,22 @@ export const en = {
   "repofetch.redownloadTitle":
     "Ignore the local commit check and fetch the dataset again",
   "repofetch.another": "Download another",
+
+  // ── dataset path switcher ───────────────────────────────────────────────
+  "pathswitch.button": "Change",
+  "pathswitch.title": "Change the dataset path",
+  "pathswitch.hint":
+    "Scan a different directory. Pick one below, or choose a folder to remember and switch to.",
+  "pathswitch.defaultRoot": "default",
+  "pathswitch.forget": "Forget this path",
+  "pathswitch.forgetAria": "Forget {path}",
+  "pathswitch.placeholder": "/absolute/path/to/datasets",
+  "pathswitch.inputAria": "Dataset path",
+  "pathswitch.use": "Use",
+  "pathswitch.choose": "Choose folder…",
+  "pathswitch.choosing": "Dialog open…",
+  "pathswitch.dialogTitle": "Choose a dataset folder",
+  "pathswitch.dialogUnavailable": "No folder dialog: {reason}",
 
   // ── homepage: trash ─────────────────────────────────────────────────────
   "trash.dialogTitle": "Delete dataset",

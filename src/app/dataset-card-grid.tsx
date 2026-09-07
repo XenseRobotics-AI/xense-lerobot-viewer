@@ -20,6 +20,7 @@ import {
   getDatasetTaskName,
 } from "@/utils/datasetGrouping";
 import { formatBytes } from "@/utils/byteSize";
+import { expectedShapeOf } from "@/lib/dataset-facets";
 import {
   BUCKET_ORDER,
   CAPTURE_CUTOFF,
@@ -40,6 +41,12 @@ type DatasetCardGridProps = {
   root: string;
   prefix: string;
   datasets: LocalDatasetSummary[];
+  /**
+   * False while browsing a switched-to location: the trash lives under the
+   * default root and refuses anything outside it, so the card hides the
+   * button rather than offering an action that cannot work.
+   */
+  canDelete: boolean;
   onBack: () => void;
 };
 
@@ -114,6 +121,7 @@ export default function DatasetCardGrid({
   root,
   prefix,
   datasets,
+  canDelete,
   onBack,
 }: DatasetCardGridProps) {
   const { t, tpRich, tRich } = useLocale();
@@ -633,7 +641,7 @@ export default function DatasetCardGrid({
         </div>
       )}
 
-      <TrashStrip refreshKey={trashVersion} />
+      {canDelete && <TrashStrip refreshKey={trashVersion} />}
 
       {filtered.length === 0 ? (
         <div className="rounded-md border border-white/10 bg-[var(--surface-1)]/40 p-10 text-center text-slate-400">
@@ -644,6 +652,7 @@ export default function DatasetCardGrid({
           {filtered.map((ds) => {
             const health = describeIntegrity(ds.integrity, t);
             const taskName = getDatasetTaskName(ds.relativePath);
+            const expectedShape = expectedShapeOf(ds.robot_type);
             const borderTone =
               health.tone === "error"
                 ? "border-red-500/60 hover:border-red-400"
@@ -705,43 +714,66 @@ export default function DatasetCardGrid({
                     </svg>
                     {t("grid.tagsButton")}
                   </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setDeletingDatasetKey(ds.encodedPath);
-                    }}
-                    title={t("grid.deleteTitle")}
-                    aria-label={t("grid.deleteAria", {
-                      path: ds.relativePath,
-                    })}
-                    className="inline-flex items-center gap-1 rounded-full bg-black/70 px-2 py-0.5 text-[10px] font-medium text-slate-200 backdrop-blur-sm transition-colors hover:bg-red-500/90 hover:text-white"
-                  >
-                    <svg
-                      className="h-3 w-3"
-                      viewBox="0 0 20 20"
-                      fill="currentColor"
-                      aria-hidden
+                  {canDelete && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setDeletingDatasetKey(ds.encodedPath);
+                      }}
+                      title={t("grid.deleteTitle")}
+                      aria-label={t("grid.deleteAria", {
+                        path: ds.relativePath,
+                      })}
+                      className="inline-flex items-center gap-1 rounded-full bg-black/70 px-2 py-0.5 text-[10px] font-medium text-slate-200 backdrop-blur-sm transition-colors hover:bg-red-500/90 hover:text-white"
                     >
-                      <path
-                        fillRule="evenodd"
-                        d="M8.5 2a1 1 0 00-.95.68L7.2 3.75H4.5a.75.75 0 000 1.5h11a.75.75 0 000-1.5h-2.7l-.35-1.07A1 1 0 0011.5 2h-3zM5.75 6.75h8.5l-.6 8.4A2 2 0 0111.66 17H8.34a2 2 0 01-1.99-1.85l-.6-8.4z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
-                    {t("grid.deleteButton")}
-                  </button>
+                      <svg
+                        className="h-3 w-3"
+                        viewBox="0 0 20 20"
+                        fill="currentColor"
+                        aria-hidden
+                      >
+                        <path
+                          fillRule="evenodd"
+                          d="M8.5 2a1 1 0 00-.95.68L7.2 3.75H4.5a.75.75 0 000 1.5h11a.75.75 0 000-1.5h-2.7l-.35-1.07A1 1 0 0011.5 2h-3zM5.75 6.75h8.5l-.6 8.4A2 2 0 0111.66 17H8.34a2 2 0 01-1.99-1.85l-.6-8.4z"
+                          clipRule="evenodd"
+                        />
+                      </svg>
+                      {t("grid.deleteButton")}
+                    </button>
+                  )}
                 </div>
 
-                {/* Shape anomaly — sits under the health badge rather than
-                    beside it, because the two are independent: a
-                    half-configured capture is perfectly healthy on disk, which
-                    is exactly why it needs saying out loud. */}
-                {ds.facets.shapeAnomaly && (
-                  <div className="absolute right-2 top-9 z-20 rounded-full bg-amber-400/90 px-2 py-0.5 text-[10px] font-semibold text-slate-900 shadow">
+                {/* Shape — sits under the health badge rather than beside
+                    it, because the two are independent: a half-configured
+                    capture is perfectly healthy on disk, which is exactly why
+                    it needs saying out loud.
+
+                    Always rendered, because the shape is now what tells the
+                    robot types apart (TacCap and RDT differ only in stream
+                    count). Amber is reserved for a shape that contradicts the
+                    dataset's own robot type; a matching one stays neutral so
+                    the warning still reads as a warning. */}
+                {ds.facets.stateDim !== null && (
+                  <div
+                    title={
+                      ds.facets.shapeAnomaly && expectedShape
+                        ? t("grid.shapeExpected", {
+                            robot: ds.robot_type ?? "",
+                            dim: expectedShape.stateDim,
+                            streams: expectedShape.videoStreams,
+                          })
+                        : undefined
+                    }
+                    className={`absolute right-2 top-9 z-20 rounded-full px-2 py-0.5 text-[10px] font-semibold shadow ${
+                      ds.facets.shapeAnomaly
+                        ? "bg-amber-400/90 text-slate-900"
+                        : "bg-black/70 text-slate-200 ring-1 ring-white/15 backdrop-blur-sm"
+                    }`}
+                  >
                     {t("grid.shapeBadge", {
-                      dim: ds.facets.stateDim ?? "?",
+                      dim: ds.facets.stateDim,
                       streams: ds.facets.videoStreams,
                     })}
                   </div>

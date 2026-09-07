@@ -6,6 +6,7 @@ import HoverPlayVideo from "@/components/hover-play-video";
 import CorpusDashboard from "@/components/corpus-dashboard";
 import RepoFetchPanel from "@/components/repo-fetch-panel";
 import LanguageSwitcher from "@/components/language-switcher";
+import DatasetPathSwitcher from "@/components/dataset-path-switcher";
 import { formatCompact } from "@/utils/corpusStats";
 import type { DailyDelta } from "@/utils/corpusHistory";
 import { useLocale } from "@/context/locale-context";
@@ -18,6 +19,8 @@ type OverallCounts = {
 
 type CategoryLandingProps = {
   root: string;
+  browsePath: string;
+  locations: string[];
   groups: DatasetGroup[];
   overall: OverallCounts;
   errors: { path: string; message: string }[];
@@ -32,6 +35,8 @@ function formatTotalEpisodes(value: number): string {
 
 export default function CategoryLanding({
   root,
+  browsePath,
+  locations,
   groups,
   overall,
   errors,
@@ -64,11 +69,20 @@ export default function CategoryLanding({
           <h1 className="mt-3 text-xl font-medium tracking-tight text-slate-300">
             {t("home.subtitle")}
           </h1>
-          <p className="mt-2 text-sm text-slate-400">
+          {/* A div, not a p: DatasetPathSwitcher renders a popover div, which
+              is invalid inside a paragraph and breaks hydration. */}
+          <div className="mt-2 text-sm text-slate-400">
             {tRich("home.browsing", {
-              root: <span className="font-mono text-cyan-200/90">{root}</span>,
+              root: (
+                <span className="font-mono text-cyan-200/90">{browsePath}</span>
+              ),
             })}
-          </p>
+            <DatasetPathSwitcher
+              root={root}
+              browsePath={browsePath}
+              locations={locations}
+            />
+          </div>
         </div>
         <LanguageSwitcher className="mt-1.5" />
       </header>
@@ -137,7 +151,9 @@ export default function CategoryLanding({
           {groups.length === 0 ? (
             <>
               {tRich("home.emptyTitle", {
-                root: <span className="font-mono text-slate-200">{root}</span>,
+                root: (
+                  <span className="font-mono text-slate-200">{browsePath}</span>
+                ),
               })}
               <br />
               <span className="text-xs text-slate-500">
@@ -181,6 +197,33 @@ export default function CategoryLanding({
                 </div>
 
                 <div className="relative z-20 w-full px-3 py-3 text-slate-100">
+                  {/* Robot types in this source — a source directory is an
+                      owner, not a rig, and one can hold several. Named here so
+                      the rig is readable without drilling in. Capped at two
+                      because the card is 4-up on a wide screen; the rest are
+                      counted rather than wrapped into a second row. */}
+                  {group.robotTypes.length > 0 && (
+                    <div className="mb-1.5 flex flex-wrap items-center gap-1">
+                      {group.robotTypes.slice(0, 2).map((robot) => (
+                        <span
+                          key={robot}
+                          className="rounded bg-cyan-500/20 px-1.5 py-0.5 text-[10px] text-cyan-200 ring-1 ring-cyan-400/20"
+                        >
+                          {robot}
+                        </span>
+                      ))}
+                      {group.robotTypes.length > 2 && (
+                        <span
+                          className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-slate-300"
+                          title={group.robotTypes.join(", ")}
+                        >
+                          {t("home.groupRobotsMore", {
+                            count: group.robotTypes.length - 2,
+                          })}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   <div className="flex items-center gap-1.5">
                     <svg
                       className="h-4 w-4 shrink-0 text-cyan-300"

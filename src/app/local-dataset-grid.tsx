@@ -14,6 +14,8 @@ import DatasetCardGrid from "./dataset-card-grid";
 
 type LocalDatasetGridProps = {
   root: string;
+  browsePath: string;
+  locations: string[];
   datasets: LocalDatasetSummary[];
   errors: { path: string; message: string }[];
   delta: DailyDelta;
@@ -41,6 +43,8 @@ function organizationHref(prefix: string, view: OrganizationView): string {
  */
 export default function LocalDatasetGrid({
   root,
+  browsePath,
+  locations,
   datasets,
   errors,
   delta,
@@ -158,9 +162,10 @@ export default function LocalDatasetGrid({
 
     return (
       <DatasetCardGrid
-        root={root}
+        root={browsePath}
         prefix={selectedPrefix}
         datasets={categoryDatasets}
+        canDelete={browsePath === root}
         onBack={clearCategory}
       />
     );
@@ -169,6 +174,8 @@ export default function LocalDatasetGrid({
   return (
     <CategoryLanding
       root={root}
+      browsePath={browsePath}
+      locations={locations}
       groups={groups}
       overall={overall}
       delta={delta}
