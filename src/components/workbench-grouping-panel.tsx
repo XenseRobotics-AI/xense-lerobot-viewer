@@ -47,6 +47,7 @@ import {
   WORKBENCH_DATASET_SOURCE_KEYS,
   WORKBENCH_DATASET_SOURCE_LABELS,
   countHalfOpenDays,
+  getWorkbenchDatasetWorkstation,
   getWorkbenchDefaultDateTimeRange,
   getWorkbenchDateTimeRangeShortcut,
   getWorkbenchLatestAvailableDateTimeRange,
@@ -1012,14 +1013,16 @@ export default function WorkbenchGroupingPanel({
     const rows = new Map<string, HeatmapRow>();
     const visibleDaySet = new Set(heatmapDays);
     for (const dataset of workstationRollupDatasets) {
-      const mappingKey =
-        dataset.robotId?.trim() || dataset.leftGripperSn?.trim() || "";
-      const workstation = mappingKey
-        ? workstationDraft[mappingKey]?.trim() ||
-          workstationMappings[mappingKey]?.trim() ||
-          workstationDefaults[mappingKey]?.trim() ||
-          "未分配"
-        : "未分配";
+      const workstation =
+        getWorkbenchDatasetWorkstation(
+          dataset,
+          [workstationDraft, workstationMappings, workstationDefaults],
+          [
+            workstationLegacyDraft,
+            workstationLegacyMappings,
+            workstationLegacyDefaults,
+          ],
+        ) ?? "未分配";
       const row: HeatmapRow = rows.get(workstation) ?? {
         workstation,
         hoursByDay: {},
@@ -1051,6 +1054,9 @@ export default function WorkbenchGroupingPanel({
     workstationRollupDatasets,
     workstationDefaults,
     workstationDraft,
+    workstationLegacyDefaults,
+    workstationLegacyDraft,
+    workstationLegacyMappings,
     workstationMappings,
   ]);
   const dailyTrendTimeline = useMemo(
@@ -1080,18 +1086,17 @@ export default function WorkbenchGroupingPanel({
       const sourceDataset = workstationRollupDatasets.find(
         (dataset) => (dataset.robotId?.trim() || "—") === row.group,
       );
-      const workstation =
-        row.group === "—"
-          ? sourceDataset?.leftGripperSn
-            ? (workstationLegacyDraft[sourceDataset.leftGripperSn] ??
-              workstationLegacyMappings[sourceDataset.leftGripperSn] ??
-              workstationLegacyDefaults[sourceDataset.leftGripperSn] ??
-              "—")
-            : "—"
-          : (workstationDraft[row.group] ??
-            workstationMappings[row.group] ??
-            workstationDefaults[row.group] ??
-            "—");
+      const workstation = sourceDataset
+        ? (getWorkbenchDatasetWorkstation(
+            sourceDataset,
+            [workstationDraft, workstationMappings, workstationDefaults],
+            [
+              workstationLegacyDraft,
+              workstationLegacyMappings,
+              workstationLegacyDefaults,
+            ],
+          ) ?? "—")
+        : "—";
       const dailyHours: Record<string, number> = {};
       for (const dataset of workstationRollupDatasets) {
         const key = dataset.robotId?.trim() || "—";
@@ -1160,14 +1165,16 @@ export default function WorkbenchGroupingPanel({
         dataset.source ?? workbenchDatasetSourceKey(dataset.relativePath);
       const sourceLabel =
         dataset.sourceLabel ?? workbenchDatasetSourceLabel(sourceKey);
-      const mappingKey =
-        dataset.robotId?.trim() || dataset.leftGripperSn?.trim() || "";
-      const workstation = mappingKey
-        ? workstationDraft[mappingKey]?.trim() ||
-          workstationMappings[mappingKey]?.trim() ||
-          workstationDefaults[mappingKey]?.trim() ||
-          "未分配"
-        : "未分配";
+      const workstation =
+        getWorkbenchDatasetWorkstation(
+          dataset,
+          [workstationDraft, workstationMappings, workstationDefaults],
+          [
+            workstationLegacyDraft,
+            workstationLegacyMappings,
+            workstationLegacyDefaults,
+          ],
+        ) ?? "未分配";
       const key = [sourceKey, workstation].join("\u0000");
       const current = grouped.get(key) ?? {
         group: `${sourceLabel} · ${workstation}`,
@@ -1234,6 +1241,9 @@ export default function WorkbenchGroupingPanel({
     targetHours,
     workstationDefaults,
     workstationDraft,
+    workstationLegacyDefaults,
+    workstationLegacyDraft,
+    workstationLegacyMappings,
     workstationMappings,
     workstationRollupDatasets,
   ]);
@@ -1273,20 +1283,25 @@ export default function WorkbenchGroupingPanel({
         const datasetSource =
           dataset.source ?? workbenchDatasetSourceKey(dataset.relativePath);
         if (datasetSource !== sourceKey) return false;
-        const mappingKey =
-          dataset.robotId?.trim() || dataset.leftGripperSn?.trim() || "";
-        const mappedWorkstation = mappingKey
-          ? workstationDraft[mappingKey]?.trim() ||
-            workstationMappings[mappingKey]?.trim() ||
-            workstationDefaults[mappingKey]?.trim() ||
-            "未分配"
-          : "未分配";
+        const mappedWorkstation =
+          getWorkbenchDatasetWorkstation(
+            dataset,
+            [workstationDraft, workstationMappings, workstationDefaults],
+            [
+              workstationLegacyDraft,
+              workstationLegacyMappings,
+              workstationLegacyDefaults,
+            ],
+          ) ?? "未分配";
         return mappedWorkstation === workstation;
       }),
     [
       selectedWorkbenchDatasets,
       workstationDefaults,
       workstationDraft,
+      workstationLegacyDefaults,
+      workstationLegacyDraft,
+      workstationLegacyMappings,
       workstationMappings,
     ],
   );
@@ -1362,17 +1377,17 @@ export default function WorkbenchGroupingPanel({
   const personnelWorkstationMappings = useMemo(() => {
     const mappings: Record<string, string> = {};
     for (const dataset of workstationRollupDatasets) {
-      const robotId = dataset.robotId?.trim();
-      const leftGripperSn = dataset.leftGripperSn?.trim();
-      const key = robotId || leftGripperSn;
+      const key = dataset.robotId?.trim() || dataset.leftGripperSn?.trim();
       if (!key) continue;
-      const workstation = robotId
-        ? workstationDraft[robotId]?.trim() ||
-          workstationMappings[robotId]?.trim() ||
-          workstationDefaults[robotId]?.trim()
-        : workstationLegacyDraft[key]?.trim() ||
-          workstationLegacyMappings[key]?.trim() ||
-          workstationLegacyDefaults[key]?.trim();
+      const workstation = getWorkbenchDatasetWorkstation(
+        dataset,
+        [workstationDraft, workstationMappings, workstationDefaults],
+        [
+          workstationLegacyDraft,
+          workstationLegacyMappings,
+          workstationLegacyDefaults,
+        ],
+      );
       if (workstation) mappings[key] = workstation;
     }
     return mappings;
@@ -2743,20 +2758,20 @@ export default function WorkbenchGroupingPanel({
                                 day,
                                 datasets: sourceFilteredLocalDatasets.filter(
                                   (dataset) => {
-                                    const mappingKey =
-                                      dataset.robotId?.trim() ||
-                                      dataset.leftGripperSn?.trim() ||
-                                      "";
-                                    const mappedWorkstation = mappingKey
-                                      ? workstationDraft[mappingKey]?.trim() ||
-                                        workstationMappings[
-                                          mappingKey
-                                        ]?.trim() ||
-                                        workstationDefaults[
-                                          mappingKey
-                                        ]?.trim() ||
-                                        "未分配"
-                                      : "未分配";
+                                    const mappedWorkstation =
+                                      getWorkbenchDatasetWorkstation(
+                                        dataset,
+                                        [
+                                          workstationDraft,
+                                          workstationMappings,
+                                          workstationDefaults,
+                                        ],
+                                        [
+                                          workstationLegacyDraft,
+                                          workstationLegacyMappings,
+                                          workstationLegacyDefaults,
+                                        ],
+                                      ) ?? "未分配";
                                     return (
                                       mappedWorkstation === row.workstation &&
                                       workbenchDatasetRangeContributions(

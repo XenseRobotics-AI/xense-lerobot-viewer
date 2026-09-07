@@ -15,6 +15,7 @@ import {
   getWorkbenchDefaultDateRange,
   getWorkbenchDefaultDateTimeRange,
   getWorkbenchDateTimeRangeShortcut,
+  getWorkbenchDatasetWorkstation,
   getWorkbenchLeftSnWorkstation,
   getWorkbenchLeftSnTargetHours,
   getWorkbenchLatestAvailableDateTimeRange,
@@ -106,6 +107,47 @@ describe("isWorkbenchIgnoredRobotId", () => {
     expect(isWorkbenchIgnoredRobotId(" bi_taccap_0 ")).toBe(true);
     expect(isWorkbenchIgnoredRobotId("bi_taccap_8")).toBe(false);
     expect(isWorkbenchIgnoredRobotId(null)).toBe(false);
+  });
+});
+
+describe("getWorkbenchDatasetWorkstation", () => {
+  test("falls back to a legacy left-gripper mapping when robot_id is absent", () => {
+    expect(
+      getWorkbenchDatasetWorkstation(
+        dataset("TacVerse/taccap-g1-task-0905", {
+          robotId: null,
+          leftGripperSn: "TCGU01A28Z0055m",
+        }),
+        [{ bi_taccap_3: "B2" }],
+        [{ TCGU01A28Z0055m: "B2" }],
+      ),
+    ).toBe("B2");
+  });
+
+  test("uses the legacy mapping when a robot_id has no canonical entry", () => {
+    expect(
+      getWorkbenchDatasetWorkstation(
+        dataset("TacVerse/taccap-g1-task-0905", {
+          robotId: "bi_taccap_3",
+          leftGripperSn: "TCGU01A28Z0055m",
+        }),
+        [],
+        [{ TCGU01A28Z0055m: "B2" }],
+      ),
+    ).toBe("B2");
+  });
+
+  test("prefers the canonical robot_id mapping when both are available", () => {
+    expect(
+      getWorkbenchDatasetWorkstation(
+        dataset("TacVerse/taccap-g1-task-0905", {
+          robotId: "bi_taccap_3",
+          leftGripperSn: "TCGU01A28Z0055m",
+        }),
+        [{ bi_taccap_3: "B2" }],
+        [{ TCGU01A28Z0055m: "legacy" }],
+      ),
+    ).toBe("B2");
   });
 });
 

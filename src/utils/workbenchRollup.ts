@@ -289,6 +289,36 @@ export function getWorkbenchLeftSnWorkstation(
   return getWorkbenchRobotIdWorkstation(leftSn, mappings);
 }
 
+/**
+ * Resolve a dataset's workstation using the new robot_id mapping first, then
+ * the legacy left-gripper serial-number mapping. The latter is required for
+ * older or partially migrated metadata that has no usable robot_id.
+ */
+export function getWorkbenchDatasetWorkstation(
+  dataset: Pick<WorkbenchRollupDataset, "robotId" | "leftGripperSn">,
+  robotMappings: readonly Readonly<Record<string, string>>[] = [],
+  legacyMappings: readonly Readonly<Record<string, string>>[] = [],
+): string | null {
+  const lookup = (
+    key: string | null | undefined,
+    sources: readonly Readonly<Record<string, string>>[],
+  ) => {
+    const normalized = key?.trim();
+    if (!normalized) return null;
+    for (const source of sources) {
+      const value = source[normalized]?.trim();
+      if (value) return value;
+    }
+    return null;
+  };
+
+  return (
+    lookup(dataset.robotId, robotMappings) ??
+    lookup(dataset.leftGripperSn, legacyMappings) ??
+    null
+  );
+}
+
 function nonNegativeCount(value: number): number {
   return Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
 }
