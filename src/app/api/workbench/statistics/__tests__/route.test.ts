@@ -116,6 +116,77 @@ describe("Workbench statistics route", () => {
     ]);
   });
 
+  test("restores 0905 hardware identity and workstation mapping", async () => {
+    const repoId = "TacVerse/taccap-g1-operate-shoe-box-0905";
+    await writeDataset(
+      repoId,
+      { total_episodes: 12, total_frames: 43_200, fps: 10 },
+      {
+        epochs: [
+          {
+            recorded_at: "2026-09-05T08:30:00+08:00",
+            units: [
+              {
+                side: "left",
+                gripper_sn: "TCGU01A28Z0090m",
+                robot_id: "bi_taccap_3",
+              },
+            ],
+          },
+        ],
+      },
+    );
+    const cacheDir = path.join(root, ".xense-viewer", "hf-catalog");
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(
+      path.join(cacheDir, "TacVerse.json"),
+      JSON.stringify({
+        org: "TacVerse",
+        datasets: [
+          {
+            repoId,
+            totalEpisodes: 12,
+            totalFrames: 43_200,
+            fps: 10,
+            lastModified: "2026-09-05T08:30:00Z",
+          },
+        ],
+      }),
+    );
+    await writeWorkbenchWorkstationMappings(
+      "TacVerse",
+      { bi_taccap_3: "B2" },
+      root,
+    );
+
+    const response = await GET(
+      new Request("http://localhost/api/workbench/statistics?org=TacVerse"),
+    );
+    const payload = (await response.json()) as {
+      datasets: Array<{
+        robotId: string | null;
+        leftGripperSn: string | null;
+        capturedFrom: string | null;
+        capturedTo: string | null;
+        dailyAdditions: Array<{ day: string }>;
+      }>;
+      workstationMappings: { mappings: Record<string, string> };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.datasets).toHaveLength(1);
+    expect(payload.datasets[0]).toMatchObject({
+      robotId: "bi_taccap_3",
+      leftGripperSn: "TCGU01A28Z0090m",
+      capturedFrom: "2026-09-05",
+      capturedTo: "2026-09-05",
+      dailyAdditions: [{ day: "2026-09-05" }],
+    });
+    expect(payload.workstationMappings.mappings).toEqual({
+      bi_taccap_3: "B2",
+    });
+  });
+
   test("returns HF metadata fields and stable lastModified order", async () => {
     await writeDataset("TacVerse/older-0817", {
       total_episodes: 1,

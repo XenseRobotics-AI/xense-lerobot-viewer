@@ -44,7 +44,10 @@ from sync_hf_dataset import (
 )
 
 STATS_MARKER = os.path.join(".cache", "huggingface", "viewer_stats.json")
-STATS_MARKER_VERSION = 4
+# Version 4 was written from incomplete local HF snapshots on some machines.
+# Bump this whenever the manifest contract changes so the next refresh checks
+# the Hub again even when the repository SHA is unchanged.
+STATS_MARKER_VERSION = 5
 WORKFLOW_BUCKETS = {"merged", "raw", "failed", "released", "in-processing"}
 METADATA_LIST_TIMEOUT_SECONDS = 15
 METADATA_LIST_RETRIES = 2
@@ -208,41 +211,16 @@ def cached_metadata_file(
     return candidate if candidate.is_file() else None
 
 
-def cached_metadata_snapshot(
-    repo_id: str, revision: str | None
-) -> tuple[bool, list[str]]:
-    if not revision:
-        return False, []
-    parts = repo_id.split("/")
-    if len(parts) != 2 or any(
-        not part or part in {".", ".."} or "/" in part or "\\" in part
-        for part in parts
-    ):
-        return False, []
-    cache_root = Path(
-        os.environ.get("HF_HUB_CACHE")
-        or Path.home() / ".cache" / "huggingface" / "hub"
-    )
-    snapshot = (
-        cache_root
-        / f"datasets--{parts[0]}--{parts[1]}"
-        / "snapshots"
-        / revision
-    )
-    if not snapshot.is_dir():
-        return False, []
-    files = [
-        path.relative_to(snapshot).as_posix()
-        for path in snapshot.rglob("*")
-        if path.is_file() or path.is_symlink()
-    ]
-    return True, sorted({name for name in files if is_metadata_path(name)})
-
-
 def list_metadata_files(
     repo_id: str, token: str | None, revision: str | None = None
 ) -> list[str]:
-    """List a root meta tree, or direct Folder-child meta trees, with timeouts."""
+    """List the remote metadata tree, or direct Folder-child metadata trees.
+
+    The local HF snapshot is deliberately not consulted here. A snapshot may
+    be incomplete (for example, containing only ``meta/info.json``), so it is
+    suitable for accelerating downloads but cannot be the source of truth for
+    the manifest.
+    """
     from huggingface_hub import HfApi
 
     api = HfApi()
@@ -263,14 +241,13 @@ def list_metadata_files(
             and not name.startswith(("data/", "videos/"))
         ]
 
-    cached, cached_files = cached_metadata_snapshot(repo_id, revision)
-    if cached and cached_files:
-        return select_snapshot(cached_files)
-
     build_headers = getattr(api, "_build_hf_headers", None)
     if not callable(build_headers):
         files = api.list_repo_files(
-            repo_id=repo_id, repo_type="dataset", token=token
+            repo_id=repo_id,
+            repo_type="dataset",
+            revision=revision,
+            token=token,
         )
         return select_snapshot([str(filename) for filename in files])
 
@@ -279,13 +256,16 @@ def list_metadata_files(
         from huggingface_hub.utils import hf_raise_for_status, http_backoff
     except ImportError:
         files = api.list_repo_files(
-            repo_id=repo_id, repo_type="dataset", token=token
+            repo_id=repo_id,
+            repo_type="dataset",
+            revision=revision,
+            token=token,
         )
         return select_snapshot([str(filename) for filename in files])
 
     headers = build_headers(token=token)
     encoded_repo = "/".join(quote(part, safe="") for part in repo_id.split("/"))
-    revision = quote(constants.DEFAULT_REVISION, safe="")
+    revision_ref = quote(revision or constants.DEFAULT_REVISION, safe="")
 
     def tree_items(path_in_repo: str, recursive: bool) -> list[dict[str, Any]]:
         encoded_path = "/".join(
@@ -294,7 +274,7 @@ def list_metadata_files(
         suffix = f"/{encoded_path}" if encoded_path else ""
         url = (
             f"{api.endpoint}/api/datasets/{encoded_repo}/tree/"
-            f"{revision}{suffix}"
+            f"{revision_ref}{suffix}"
         )
         params: dict[str, str] | None = {
             "recursive": "true" if recursive else "false",
@@ -519,6 +499,7 @@ def download_metadata(
                     repo_id=repo_id,
                     filename=filename,
                     repo_type="dataset",
+                    revision=revision,
                     token=token,
                     local_dir=tmpdir,
                     local_files_only=True,
@@ -528,6 +509,7 @@ def download_metadata(
                     repo_id=repo_id,
                     filename=filename,
                     repo_type="dataset",
+                    revision=revision,
                     token=token,
                     local_dir=tmpdir,
                 )

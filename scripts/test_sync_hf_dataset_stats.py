@@ -68,7 +68,76 @@ class MetadataSyncTest(unittest.TestCase):
 
 
 
-    def test_folder_sync_copies_cached_snapshot_without_hub_downloads(self) -> None:
+    def test_remote_manifest_fills_missing_hardware_and_stats_from_partial_cache(self) -> None:
+        revision = "0905-sha"
+        remote_files = [
+            "README.md",
+            "data/chunk-000/file.parquet",
+            "videos/camera.mp4",
+            "meta/info.json",
+            "meta/hardware.json",
+            "meta/stats.json",
+        ]
+        contents = {
+            "meta/info.json": b'{"total_episodes": 1}',
+            "meta/hardware.json": b'{"robot_id":"bi_taccap_3"}',
+            "meta/stats.json": b'{"episodes": {}}',
+        }
+        calls: list[dict[str, object]] = []
+
+        class RemoteApi:
+            def list_repo_files(self, **kwargs):
+                calls.append(kwargs)
+                return remote_files
+
+        def download(*, filename: str, local_dir: str, **kwargs) -> str:
+            calls.append({"download": filename, **kwargs})
+            destination = Path(local_dir) / filename
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(contents[filename])
+            return str(destination)
+
+        hub = types.SimpleNamespace(HfApi=RemoteApi, hf_hub_download=download)
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as cache:
+            partial = (
+                Path(cache)
+                / "datasets--TacVerse--0905"
+                / "snapshots"
+                / revision
+                / "meta"
+                / "info.json"
+            )
+            partial.parent.mkdir(parents=True)
+            partial.write_bytes(contents["meta/info.json"])
+            target = Path(root) / "TacVerse" / "0905"
+            with patch.dict(
+                sys.modules, {"huggingface_hub": hub}
+            ), patch.dict("os.environ", {"HF_HUB_CACHE": cache}):
+                files, _archive = stats.download_metadata(
+                    "TacVerse/0905",
+                    str(target),
+                    root,
+                    "TacVerse",
+                    None,
+                    revision=revision,
+                )
+
+            self.assertEqual(
+                files, ["meta/hardware.json", "meta/info.json", "meta/stats.json"]
+            )
+            self.assertTrue(any("revision" in call and call["revision"] == revision for call in calls))
+            for filename, expected in contents.items():
+                self.assertEqual((target / filename).read_bytes(), expected)
+            stats.write_marker(str(target), revision, files)
+            marker = json.loads(
+                Path(stats.marker_path(str(target))).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                set(marker["files"]),
+                {"meta/info.json", "meta/hardware.json", "meta/stats.json"},
+            )
+
+    def test_folder_sync_uses_remote_manifest_and_cached_files_only_as_download_acceleration(self) -> None:
         with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as cache:
             revision = "cached-sha"
             snapshot = (
@@ -82,13 +151,15 @@ class MetadataSyncTest(unittest.TestCase):
             snapshot.mkdir(parents=True)
             source = snapshot / "info.json"
             source.write_bytes(b'{"total_episodes": 1}')
+            listed: list[dict[str, object]] = []
 
             class CachedApi:
-                def list_repo_files(self, **_kwargs):
-                    raise AssertionError("cached metadata should skip Hub listing")
+                def list_repo_files(self, **kwargs):
+                    listed.append(kwargs)
+                    return ["child-a/meta/info.json"]
 
             def unavailable_download(**_kwargs):
-                raise AssertionError("cached metadata should skip Hub download")
+                raise AssertionError("the explicitly listed cached file should be copied")
 
             hub = types.SimpleNamespace(
                 HfApi=CachedApi, hf_hub_download=unavailable_download
@@ -107,6 +178,7 @@ class MetadataSyncTest(unittest.TestCase):
                 )
 
             self.assertEqual(files, ["child-a/meta/info.json"])
+            self.assertEqual(listed[0]["revision"], revision)
             self.assertEqual(
                 (target / "child-a" / "meta" / "info.json").read_bytes(),
                 source.read_bytes(),
@@ -182,14 +254,41 @@ class MetadataSyncTest(unittest.TestCase):
             {"huggingface_hub": hub, "huggingface_hub.utils": utils},
         ):
             self.assertEqual(
-                stats.list_metadata_files("TacVerse/example", "token"),
+                stats.list_metadata_files(
+                    "TacVerse/example", "token", revision="0905-sha"
+                ),
                 ["meta/info.json"],
             )
 
         self.assertEqual(len(calls), 1)
-        self.assertTrue(calls[0]["url"].endswith("/tree/main/meta"))
+        self.assertTrue(calls[0]["url"].endswith("/tree/0905-sha/meta"))
         self.assertEqual(calls[0]["timeout"], stats.METADATA_LIST_TIMEOUT_SECONDS)
         self.assertEqual(calls[0]["max_retries"], stats.METADATA_LIST_RETRIES)
+
+    def test_remote_manifest_failure_leaves_existing_metadata_and_marker_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            target = Path(root) / "TacVerse" / "0905"
+            old = target / "meta" / "info.json"
+            old.parent.mkdir(parents=True)
+            old.write_text("old")
+            stats.write_marker(str(target), "old-sha", ["meta/info.json"])
+            marker_before = Path(stats.marker_path(str(target))).read_bytes()
+
+            hub = types.SimpleNamespace(
+                hf_hub_download=lambda **_kwargs: (_ for _ in ()).throw(
+                    AssertionError("download should not start when remote listing fails")
+                )
+            )
+            with patch.dict(sys.modules, {"huggingface_hub": hub}), patch.object(
+                stats, "list_metadata_files", side_effect=RuntimeError("remote listing failed")
+            ):
+                with self.assertRaisesRegex(RuntimeError, "remote listing failed"):
+                    stats.download_metadata(
+                        "TacVerse/0905", str(target), root, "TacVerse", None, revision="new-sha"
+                    )
+
+            self.assertEqual(old.read_text(), "old")
+            self.assertEqual(Path(stats.marker_path(str(target))).read_bytes(), marker_before)
 
     def test_missing_meta_tree_is_a_successful_empty_snapshot(self) -> None:
         class BoundedApi:
@@ -218,6 +317,20 @@ class MetadataSyncTest(unittest.TestCase):
             {"huggingface_hub": hub, "huggingface_hub.utils": utils},
         ):
             self.assertEqual(stats.list_metadata_files("TacVerse/empty", None), [])
+
+    def test_old_marker_version_forces_refresh_even_with_the_same_sha(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            target = Path(root) / "TacVerse" / "0905"
+            info = target / "meta" / "info.json"
+            info.parent.mkdir(parents=True)
+            info.write_text("{}")
+            marker = Path(stats.marker_path(str(target)))
+            marker.parent.mkdir(parents=True)
+            marker.write_text(
+                json.dumps({"version": 4, "sha": "same-sha", "files": {"meta/info.json": 2}})
+            )
+
+            self.assertFalse(stats.stats_is_current(str(target), "same-sha"))
 
     def test_dynamic_marker_accepts_an_empty_meta_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as root:
