@@ -49,11 +49,13 @@ import {
   filterWorkbenchStatisticsDatasets,
   type WorkbenchStatisticsFilterSummary,
 } from "@/utils/workbenchStatisticsFilter";
+import {
+  isWorkbenchReplayDatasetPath,
+  workbenchReplayDatasetRank,
+} from "@/utils/workbenchReplayDatasets";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const TACCAP_REPLAY_DATASET_LEAF = "taccap-g1-operate-shoe-box-0812";
 
 type WorkbenchDatasetMetadata = {
   lastModified: string | null;
@@ -130,11 +132,39 @@ function latestDataUpdatedAt(
 }
 
 function isTacCapReplayDatasetPath(relativePath: string): boolean {
+  return isWorkbenchReplayDatasetPath(relativePath);
+}
+
+function isWorkbenchReplayDatasetReady(
+  dataset: Pick<WorkbenchDatasetSummary, "integrity">,
+): boolean {
   return (
-    relativePath
-      .split(/[\\/]+/u)
-      .filter(Boolean)
-      .at(-1) === TACCAP_REPLAY_DATASET_LEAF
+    dataset.integrity.status === "ok" &&
+    dataset.integrity.hasData &&
+    dataset.integrity.hasVideos
+  );
+}
+
+function compareWorkbenchReplayDatasets(
+  left: Pick<WorkbenchDatasetSummary, "relativePath" | "integrity">,
+  right: Pick<WorkbenchDatasetSummary, "relativePath" | "integrity">,
+): number {
+  return (
+    Number(isWorkbenchReplayDatasetReady(right)) -
+      Number(isWorkbenchReplayDatasetReady(left)) ||
+    workbenchReplayDatasetRank(left.relativePath) -
+      workbenchReplayDatasetRank(right.relativePath) ||
+    left.relativePath.localeCompare(right.relativePath)
+  );
+}
+
+function selectWorkbenchReplayDataset<
+  T extends Pick<WorkbenchDatasetSummary, "relativePath" | "integrity">,
+>(datasets: readonly T[]): T | null {
+  return (
+    datasets
+      .filter((dataset) => isTacCapReplayDatasetPath(dataset.relativePath))
+      .sort(compareWorkbenchReplayDatasets)[0] ?? null
   );
 }
 
@@ -530,13 +560,9 @@ export async function GET(request: Request): Promise<Response> {
       if (rightCatalog) return 1;
       return left.relativePath.localeCompare(right.relativePath);
     });
-    const replayCandidate = hubScopedDatasets.find((dataset) =>
-      isTacCapReplayDatasetPath(dataset.relativePath),
-    );
+    const replayCandidate = selectWorkbenchReplayDataset(organizationDatasets);
     let displayReplayDataset: WorkbenchDatasetSummary | null =
-      workbenchDatasets.find((dataset) =>
-        isTacCapReplayDatasetPath(dataset.relativePath),
-      ) ?? null;
+      selectWorkbenchReplayDataset(workbenchDatasets);
     if (!displayReplayDataset && replayCandidate) {
       const remote = catalogEntryForLocalDataset(
         catalog,

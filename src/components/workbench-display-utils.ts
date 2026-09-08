@@ -2,7 +2,15 @@ import type { VideoInfo } from "@/types";
 import { getLinkedHubDatasetRepoId } from "@/utils/datasetRoute";
 import { extractTacCapGripperTracks } from "@/utils/taccapGripperReplay";
 import { groupUrdfReplayVideos } from "@/utils/urdfReplayVideos";
+import { WORKBENCH_REPLAY_DATASETS } from "@/utils/workbenchReplayDatasets";
 import type { WorkbenchRewardPreview } from "@/utils/workbenchRewards";
+
+export {
+  TACCAP_WORKBENCH_REPLAY_DATASET,
+  WORKBENCH_REPLAY_DATASETS,
+  XTAC_UMI_WORKBENCH_REPLAY_DATASET,
+  XTAC_UMI_WORKBENCH_REPLAY_DATASETS,
+} from "@/utils/workbenchReplayDatasets";
 
 export type WorkbenchDisplaySlideId =
   | "overview"
@@ -197,9 +205,6 @@ export type WorkbenchDisplayPersonnelRow = Readonly<{
   email: string;
 }>;
 
-export const TACCAP_WORKBENCH_REPLAY_DATASET =
-  "TacVerse/taccap-g1-operate-shoe-box-0812";
-
 export const TACCAP_WORKBENCH_REPLAY_DURATION_SECONDS = 15;
 
 export type WorkbenchDisplayReplaySource = Readonly<{
@@ -231,10 +236,9 @@ export function isTacCapWorkbenchReplaySource(
 ): boolean {
   if (episodeId !== 0) return false;
   const normalizedName = datasetName.trim();
-  return (
-    normalizedName === TACCAP_WORKBENCH_REPLAY_DATASET ||
-    getLinkedHubDatasetRepoId(normalizedName) ===
-      TACCAP_WORKBENCH_REPLAY_DATASET
+  const linkedRepoId = getLinkedHubDatasetRepoId(normalizedName);
+  return WORKBENCH_REPLAY_DATASETS.some(
+    (dataset) => normalizedName === dataset || linkedRepoId === dataset,
   );
 }
 

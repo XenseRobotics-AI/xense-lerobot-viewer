@@ -173,6 +173,23 @@ type ColumnDef = {
   value: string[];
 };
 
+function vectorValues(value: unknown): unknown[] | null {
+  if (Array.isArray(value)) return value;
+  if (!ArrayBuffer.isView(value)) return null;
+
+  const view = value as unknown as ArrayLike<unknown>;
+  return typeof view.length === "number" ? Array.from(view) : null;
+}
+
+function featureNames(names: unknown): string[] {
+  if (Array.isArray(names)) {
+    return names.filter((name): name is string => typeof name === "string");
+  }
+  if (!names || typeof names !== "object") return [];
+
+  return Object.values(names).flatMap(featureNames);
+}
+
 function parsePositiveIntEnv(
   value: string | undefined,
   fallback: number,
@@ -1267,7 +1284,7 @@ function extractLanguageAtoms(
 }
 
 // Process episode data for charts (v3.0 compatible)
-function processEpisodeDataForCharts(
+export function processEpisodeDataForCharts(
   episodeData: Record<string, unknown>[],
   info: DatasetMetadata,
 ): {
@@ -1317,21 +1334,18 @@ function processEpisodeDataForCharts(
         isChartableNumericFeature(value) && !excludedColumns.includes(key),
     )
     .map(([key, feature]) => {
-      let column_names: unknown = feature.names;
-      while (typeof column_names === "object" && column_names !== null) {
-        if (Array.isArray(column_names)) break;
-        column_names = Object.values(column_names)[0];
-      }
+      const columnNames = featureNames(feature.names);
       return {
         key,
-        value: Array.isArray(column_names)
-          ? column_names.map(
-              (name: string) => `${key}${SERIES_NAME_DELIMITER}${name}`,
-            )
-          : Array.from(
-              { length: feature.shape[0] || 1 },
-              (_, i) => `${key}${CHART_CONFIG.SERIES_NAME_DELIMITER}${i}`,
-            ),
+        value:
+          columnNames.length > 0
+            ? columnNames.map(
+                (name: string) => `${key}${SERIES_NAME_DELIMITER}${name}`,
+              )
+            : Array.from(
+                { length: feature.shape[0] || 1 },
+                (_, i) => `${key}${CHART_CONFIG.SERIES_NAME_DELIMITER}${i}`,
+              ),
       };
     });
 
@@ -1354,10 +1368,11 @@ function processEpisodeDataForCharts(
 
       // Find the matching column definition to get proper names
       const columnDef = columns.find((col) => col.key === featureName);
-      if (columnDef && Array.isArray(value) && value.length > 0) {
+      const vector = vectorValues(value);
+      if (columnDef && vector && vector.length > 0) {
         // Use the proper hierarchical naming from column definition
         columnDef.value.forEach((seriesName, idx) => {
-          if (idx < value.length) {
+          if (idx < vector.length) {
             allKeys.push(seriesName);
           }
         });
@@ -1405,9 +1420,10 @@ function processEpisodeDataForCharts(
         // Find the matching column definition to get proper series names
         const columnDef = columns.find((col) => col.key === featureName);
 
-        if (Array.isArray(value) && columnDef) {
+        const vector = vectorValues(value);
+        if (vector && columnDef) {
           // For array values like observation.state and action, use proper hierarchical naming
-          value.forEach((val, idx) => {
+          vector.forEach((val, idx) => {
             if (idx < columnDef.value.length) {
               const seriesName = columnDef.value[idx];
               obj[seriesName] = typeof val === "number" ? val : Number(val);

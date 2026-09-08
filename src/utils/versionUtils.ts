@@ -8,6 +8,7 @@ import {
   makeLocalRepoId,
 } from "./datasetRoute";
 import { tStandalone } from "@/i18n/standalone";
+import { fetchJson } from "@/utils/parquetUtils";
 
 /**
  * Dataset information structure from info.json
@@ -79,24 +80,7 @@ export async function getDatasetInfo(repoId: string): Promise<DatasetInfo> {
   try {
     const testUrl = buildVersionedUrl(repoId, "v3.0", "meta/info.json");
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-    const response = await fetch(testUrl, {
-      method: "GET",
-      cache: "no-store",
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      throw new Error(
-        tStandalone("err.datasetInfoFetch", { status: response.status }),
-      );
-    }
-
-    const data = await response.json();
+    const data = await fetchJson<DatasetInfo>(testUrl, { timeoutMs: 10000 });
 
     if (!data.features) {
       throw new Error(

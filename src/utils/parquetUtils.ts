@@ -5,6 +5,7 @@ import {
   parquetReadObjects,
   type AsyncBuffer,
 } from "hyparquet";
+import { parseLocalDatasetFileApiUrl } from "@/utils/datasetRoute";
 
 export interface DatasetMetadata {
   codebase_version: string;
@@ -30,8 +31,31 @@ export interface DatasetMetadata {
   >;
 }
 
-export async function fetchJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { cache: "no-store" });
+export async function fetchJson<T>(
+  url: string,
+  options: { timeoutMs?: number } = {},
+): Promise<T> {
+  const localJson = await readServerLocalDatasetText(url);
+  if (localJson !== null) {
+    return JSON.parse(localJson) as T;
+  }
+
+  const controller =
+    options.timeoutMs === undefined ? null : new AbortController();
+  const timeoutId =
+    controller && options.timeoutMs
+      ? setTimeout(() => controller.abort(), options.timeoutMs)
+      : null;
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      cache: "no-store",
+      signal: controller?.signal,
+    });
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
   if (!res.ok) {
     throw new Error(
       `Failed to fetch JSON ${url}: ${res.status} ${res.statusText}`,
@@ -51,18 +75,67 @@ export function formatStringWithVars(
 type ParquetFile = ArrayBuffer | AsyncBuffer;
 
 const parquetFileCache = new Map<string, AsyncBuffer>();
+function importServerOnlyModule<T>(specifier: string): Promise<T> {
+  const runtimeImport = new Function(
+    "specifier",
+    "return import(specifier)",
+  ) as <Module>(specifier: string) => Promise<Module>;
+  return runtimeImport<T>(specifier);
+}
 
 export async function fetchParquetFile(url: string): Promise<ParquetFile> {
   const cached = parquetFileCache.get(url);
   if (cached) return cached;
 
-  const file = await asyncBufferFromUrl({
-    url,
-    requestInit: { cache: "no-store" },
-  });
+  const file =
+    (await openServerLocalDatasetParquet(url)) ??
+    (await asyncBufferFromUrl({
+      url,
+      requestInit: { cache: "no-store" },
+    }));
   const wrapped = cachedAsyncBuffer(file);
   parquetFileCache.set(url, wrapped);
   return wrapped;
+}
+
+async function readServerLocalDatasetText(url: string): Promise<string | null> {
+  if (typeof window !== "undefined") return null;
+
+  const localFile = parseLocalDatasetFileApiUrl(url);
+  if (!localFile) return null;
+
+  const [{ statDatasetFile }, fs] = await Promise.all([
+    importServerOnlyModule<typeof import("@/lib/local-dataset-paths")>(
+      "@/lib/local-dataset-paths",
+    ),
+    importServerOnlyModule<typeof import("node:fs/promises")>(
+      "node:fs/promises",
+    ),
+  ]);
+  const file = await statDatasetFile(localFile.encodedPath, localFile.filePath);
+  if (!file) return null;
+  return fs.readFile(file.absolutePath, "utf8");
+}
+
+async function openServerLocalDatasetParquet(
+  url: string,
+): Promise<AsyncBuffer | null> {
+  if (typeof window !== "undefined") return null;
+
+  const localFile = parseLocalDatasetFileApiUrl(url);
+  if (!localFile) return null;
+
+  const [{ statDatasetFile }, { asyncBufferFromFile }] = await Promise.all([
+    importServerOnlyModule<typeof import("@/lib/local-dataset-paths")>(
+      "@/lib/local-dataset-paths",
+    ),
+    importServerOnlyModule<typeof import("hyparquet/src/node.js")>(
+      "hyparquet/src/node.js",
+    ),
+  ]);
+  const file = await statDatasetFile(localFile.encodedPath, localFile.filePath);
+  if (!file) return null;
+  return asyncBufferFromFile(file.absolutePath);
 }
 
 // Read specific columns from the Parquet file

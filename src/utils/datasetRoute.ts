@@ -84,6 +84,29 @@ export function getLocalDatasetFileBase(repoId: string): string {
   return `${LOCAL_FILE_ROUTE_PREFIX}/${encodeLocalDatasetPath(datasetPath)}`;
 }
 
+export function parseLocalDatasetFileApiUrl(
+  url: string,
+): { encodedPath: string; filePath: string[] } | null {
+  let pathname: string;
+  try {
+    pathname = new URL(url, "http://localhost").pathname;
+  } catch {
+    return null;
+  }
+
+  const prefix = `${LOCAL_FILE_ROUTE_PREFIX}/`;
+  if (!pathname.startsWith(prefix)) return null;
+
+  const segments = pathname
+    .slice(prefix.length)
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => decodeURIComponent(segment));
+  const [encodedPath, ...filePath] = segments;
+  if (!encodedPath || filePath.length === 0) return null;
+  return { encodedPath, filePath };
+}
+
 function trimTrailingSlashes(value: string): string {
   const trimmed = value.replace(/[\\/]+$/g, "");
   return trimmed || value;

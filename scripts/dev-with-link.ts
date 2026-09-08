@@ -7,7 +7,7 @@ const WORKBENCH_URL = "http://192.168.200.11:3000";
 
 const child = spawn(
   process.execPath,
-  ["x", "next", "dev", ...process.argv.slice(2)],
+  ["x", "next", "dev", "--turbopack", ...process.argv.slice(2)],
   {
     cwd: process.cwd(),
     env: process.env,

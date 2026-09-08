@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "bun scripts/dev-with-link.ts",
-    "dev:next": "next dev",
+    "dev:next": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

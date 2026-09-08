@@ -652,6 +652,48 @@ describe("Workbench statistics route", () => {
     );
   });
 
+  test("returns xtac samples replay datasets from local discovery without catalog membership", async () => {
+    await writeDataset("TacVerse/xtac-umi-g1-parts-sorting", {
+      robot_type: "xtac_umi_g1",
+    });
+
+    const response = await GET(
+      new Request("http://localhost/api/workbench/statistics?org=TacVerse"),
+    );
+    const payload = (await response.json()) as {
+      displayReplayDataset: { relativePath: string } | null;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.displayReplayDataset?.relativePath).toBe(
+      "TacVerse/xtac-umi-g1-parts-sorting",
+    );
+  });
+
+  test("prefers a complete replay dataset over incomplete local samples", async () => {
+    await writeDataset(
+      "TacVerse/xtac-umi-g1-parts-sorting",
+      { robot_type: "xtac_umi_g1" },
+      null,
+      { payload: false },
+    );
+    await writeDataset("TacVerse/xtac-umi-g1-block-to-box", {
+      robot_type: "xtac_umi_g1",
+    });
+
+    const response = await GET(
+      new Request("http://localhost/api/workbench/statistics?org=TacVerse"),
+    );
+    const payload = (await response.json()) as {
+      displayReplayDataset: { relativePath: string } | null;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.displayReplayDataset?.relativePath).toBe(
+      "TacVerse/xtac-umi-g1-block-to-box",
+    );
+  });
+
   test("gates local data through raw Hub membership and applies the top-level category first", async () => {
     await writeDataset("TacVerse/taccap-g1-first-party-0905");
     await writeDataset("TacVerse/released/xtac-umi-g1-other-0905");
