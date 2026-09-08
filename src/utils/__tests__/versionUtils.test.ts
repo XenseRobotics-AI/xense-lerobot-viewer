@@ -8,6 +8,7 @@ import {
   encodeLocalDatasetPath,
   makeLocalRepoId,
   normalizeRelativeLocalDatasetPath,
+  parseLocalDatasetFileApiUrl,
   repoIdFromRouteParams,
   resolveLocalDatasetInput,
   resolveServerLocalDatasetPath,
@@ -129,6 +130,27 @@ describe("local dataset route helpers", () => {
     expect(routePathFromRepoId(repoId, 12)).toBe(
       `/_local/${encodeLocalDatasetPath("/tmp/lerobot/local-dataset")}/episode_12`,
     );
+  });
+
+  test("parses local dataset file API URLs", () => {
+    const encodedPath = encodeLocalDatasetPath("/tmp/lerobot/local-dataset");
+    expect(
+      parseLocalDatasetFileApiUrl(
+        `/api/local-datasets/${encodedPath}/meta/info.json`,
+      ),
+    ).toEqual({
+      encodedPath,
+      filePath: ["meta", "info.json"],
+    });
+    expect(
+      parseLocalDatasetFileApiUrl(
+        `http://localhost:3000/api/local-datasets/${encodedPath}/data/chunk-000/file-000.parquet?download=1`,
+      ),
+    ).toEqual({
+      encodedPath,
+      filePath: ["data", "chunk-000", "file-000.parquet"],
+    });
+    expect(parseLocalDatasetFileApiUrl("/api/other/file")).toBeNull();
   });
 
   test("resolves local relative input against the configured root", () => {

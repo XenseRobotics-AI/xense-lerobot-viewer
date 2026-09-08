@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { makeLocalRepoId } from "@/utils/datasetRoute";
 import {
   TACCAP_WORKBENCH_REPLAY_DATASET,
+  XTAC_UMI_WORKBENCH_REPLAY_DATASET,
+  XTAC_UMI_WORKBENCH_REPLAY_DATASETS,
   WORKBENCH_DISPLAY_SLIDES,
   WORKBENCH_DISPLAY_TOTAL_DURATION_MS,
   WORKBENCH_DISPLAY_REPLAY_TOTAL_DURATION_MS,
@@ -411,7 +413,7 @@ function replayVideos() {
 }
 
 describe("TacCap Workbench replay", () => {
-  test("only enables the fixed dataset Episode 0 source", () => {
+  test("only enables fixed Episode 0 replay sources", () => {
     expect(
       isTacCapWorkbenchReplaySource(TACCAP_WORKBENCH_REPLAY_DATASET, 0),
     ).toBe(true);
@@ -423,6 +425,21 @@ describe("TacCap Workbench replay", () => {
         0,
       ),
     ).toBe(true);
+    expect(XTAC_UMI_WORKBENCH_REPLAY_DATASET).toBe(
+      "TacVerse/xtac-umi-g1-block-to-box",
+    );
+    for (const dataset of XTAC_UMI_WORKBENCH_REPLAY_DATASETS) {
+      expect(isTacCapWorkbenchReplaySource(dataset, 0)).toBe(true);
+      const leaf = dataset.split("/").at(-1);
+      expect(
+        isTacCapWorkbenchReplaySource(
+          makeLocalRepoId(
+            `/home/xense/.cache/huggingface/lerobot/TacVerse/${leaf}`,
+          ),
+          0,
+        ),
+      ).toBe(true);
+    }
     expect(
       isTacCapWorkbenchReplaySource(TACCAP_WORKBENCH_REPLAY_DATASET, 1),
     ).toBe(false);

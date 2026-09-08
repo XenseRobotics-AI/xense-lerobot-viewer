@@ -104,9 +104,10 @@ import {
   createWorkbenchDisplayReplaySnapshot,
   createWorkbenchDisplaySnapshot,
   isTacCapWorkbenchReplaySource,
-  TACCAP_WORKBENCH_REPLAY_DATASET,
+  WORKBENCH_REPLAY_DATASETS,
   type WorkbenchDisplaySnapshot,
 } from "@/components/workbench-display-utils";
+import { workbenchReplayDatasetRank } from "@/utils/workbenchReplayDatasets";
 
 const SOURCE_OPTIONS = WORKBENCH_DATASET_SOURCE_KEYS.map((value) => ({
   value,
@@ -165,10 +166,52 @@ type WorkbenchDataset = LocalDatasetSummary & {
 };
 
 function isTacCapReplayDataset(dataset: WorkbenchDataset): boolean {
+  const relativePath = dataset.relativePath.trim();
+  const linkedRepoId = getLinkedHubDatasetRepoId(
+    makeLocalRepoId(dataset.relativePath),
+  );
   return (
-    dataset.relativePath.trim() === TACCAP_WORKBENCH_REPLAY_DATASET ||
-    getLinkedHubDatasetRepoId(makeLocalRepoId(dataset.relativePath)) ===
-      TACCAP_WORKBENCH_REPLAY_DATASET
+    WORKBENCH_REPLAY_DATASETS.includes(relativePath) ||
+    (linkedRepoId !== null && WORKBENCH_REPLAY_DATASETS.includes(linkedRepoId))
+  );
+}
+
+function hasWorkbenchReplaySource(
+  selectedSourceSet: ReadonlySet<WorkbenchDatasetSourceKey>,
+): boolean {
+  return (
+    selectedSourceSet.has("taccap-g1") || selectedSourceSet.has("xtac-umi-g1")
+  );
+}
+
+function isWorkbenchReplayDatasetReady(dataset: WorkbenchDataset): boolean {
+  return (
+    dataset.integrity.status === "ok" &&
+    dataset.integrity.hasData &&
+    dataset.integrity.hasVideos
+  );
+}
+
+function compareWorkbenchReplayDatasets(
+  left: WorkbenchDataset,
+  right: WorkbenchDataset,
+): number {
+  return (
+    Number(isWorkbenchReplayDatasetReady(right)) -
+      Number(isWorkbenchReplayDatasetReady(left)) ||
+    workbenchReplayDatasetRank(left.relativePath) -
+      workbenchReplayDatasetRank(right.relativePath) ||
+    left.relativePath.localeCompare(right.relativePath)
+  );
+}
+
+function selectWorkbenchReplayDataset(
+  datasets: readonly WorkbenchDataset[],
+): WorkbenchDataset | null {
+  return (
+    datasets
+      .filter(isTacCapReplayDataset)
+      .sort(compareWorkbenchReplayDatasets)[0] ?? null
   );
 }
 
@@ -1952,19 +1995,18 @@ export default function WorkbenchGroupingPanel({
 
   const replayDataset = useMemo(
     () =>
-      replayEnabled && selectedSourceSet.has("taccap-g1")
-        ? (datasets.find(
-            (dataset) =>
-              dataset.relativePath.trim() === TACCAP_WORKBENCH_REPLAY_DATASET,
-          ) ??
-          datasets.find(isTacCapReplayDataset) ??
-          displayReplayDataset)
+      replayEnabled && hasWorkbenchReplaySource(selectedSourceSet)
+        ? (selectWorkbenchReplayDataset(
+            displayReplayDataset
+              ? [...datasets, displayReplayDataset]
+              : datasets,
+          ) ?? undefined)
         : undefined,
     [datasets, displayReplayDataset, replayEnabled, selectedSourceSet],
   );
   const currentEpisodeIsReplaySource = Boolean(
     replayEnabled &&
-    selectedSourceSet.has("taccap-g1") &&
+    hasWorkbenchReplaySource(selectedSourceSet) &&
     episodeData &&
     isTacCapWorkbenchReplaySource(
       episodeData.datasetInfo.repoId,
@@ -2853,6 +2895,7 @@ export default function WorkbenchGroupingPanel({
                       }
                       return (
                         <circle
+                          key={`daily-trend-${props.payload.date}`}
                           cx={props.cx}
                           cy={props.cy}
                           r={4}
