@@ -68,4 +68,16 @@ describe("TacVerse dataset statistics UI contract", () => {
     expect(source).toContain("workbench.recentlyCreated");
     expect(source).not.toContain("localStorage");
   });
+
+  test("localizes the statistics scope rule and grouped hour details", async () => {
+    const statistics = await componentSource(
+      "workbench-statistics-filter-notice.tsx",
+    );
+    const grouping = await componentSource("workbench-grouping-panel.tsx");
+
+    expect(statistics).toContain('t("workbench.statisticsScopeRule")');
+    expect(statistics).not.toContain("{filter.rule}");
+    expect(grouping).toContain('t("common.hours")');
+    expect(grouping).not.toContain('" hours"');
+  });
 });
