@@ -9,16 +9,16 @@ async function source(file: string): Promise<string> {
 describe("Workbench Hub category UI contract", () => {
   test("owns the checkbox filter above both statistics views and hides it for checks", async () => {
     const parent = await source("dataset-review-panel.tsx");
-    expect(parent).toContain("Dataset category");
-    expect(parent).toContain("All datasets");
-    for (const label of [
-      "TacVerse/taccap-g1 · Dated",
-      "TacVerse/xtac-umi-g1",
-      "TacVerse/taccap-g1 · Merged",
-      "Folder repositories",
-      "Other datasets",
+    for (const key of [
+      "workbench.datasetCategory",
+      "workbench.allDatasetsCategory",
+      "workbench.datedCategory",
+      "workbench.xtacCategory",
+      "workbench.mergedCategory",
+      "workbench.folderRepositories",
+      "workbench.otherDatasets",
     ]) {
-      expect(parent).toContain(label);
+      expect(parent).toContain(`t("${key}")`);
     }
     expect(parent).toContain('workbenchView !== "checks"');
     expect(parent).toContain('name="workbenchHubCategory"');
@@ -53,9 +53,9 @@ describe("Workbench Hub category UI contract", () => {
 
   test("keeps Rule, Avg / ep, and final Reward aligned across UI, CSV, and fullscreen", async () => {
     const grouping = await source("workbench-grouping-panel.tsx");
-    const avgHeader = grouping.indexOf(">Avg / ep</th>");
-    const ruleHeader = grouping.lastIndexOf(">Rule</th>", avgHeader);
-    const rewardHeader = grouping.indexOf(">Reward</th>", avgHeader);
+    const avgHeader = grouping.indexOf('t("workbench.avgPerEpisode")');
+    const ruleHeader = grouping.lastIndexOf('t("workbench.rule")', avgHeader);
+    const rewardHeader = grouping.indexOf('t("workbench.reward")', avgHeader);
     expect(ruleHeader).toBeGreaterThanOrEqual(0);
     expect(avgHeader).toBeGreaterThan(ruleHeader);
     expect(rewardHeader).toBeGreaterThan(avgHeader);
@@ -75,13 +75,12 @@ describe("Workbench Hub category UI contract", () => {
     expect(grouping).toContain("durationMultiplier: row.reward.multiplier");
 
     const display = await source("workbench-display.tsx");
-    const displayAvg = display.indexOf(">Avg / ep</th>");
-    expect(display.lastIndexOf(">Rule</th>", displayAvg)).toBeLessThan(
-      displayAvg,
-    );
-    expect(display.indexOf(">Reward</th>", displayAvg)).toBeGreaterThan(
-      displayAvg,
-    );
+    const displayAvg = display.indexOf('t("workbench.avgPerEpisode")');
+    const displayRule = display.lastIndexOf('t("workbench.rule")', displayAvg);
+    const displayReward = display.indexOf('t("workbench.reward")', displayAvg);
+    expect(displayRule).toBeGreaterThanOrEqual(0);
+    expect(displayRule).toBeLessThan(displayAvg);
+    expect(displayReward).toBeGreaterThan(displayAvg);
   });
 
   test("calculates workstation rewards only after source rows are aggregated", async () => {

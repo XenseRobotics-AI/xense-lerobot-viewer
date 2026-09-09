@@ -7,6 +7,7 @@ import WorkbenchPersonnelMappingEditor, {
 } from "@/components/workbench-personnel-mapping-editor";
 import type { WorkbenchPersonnelConfig } from "@/types/workbench-personnel.types";
 import { resolveWorkbenchPersonnelSchedule } from "@/utils/workbenchPersonnel";
+import { LocaleProvider } from "@/context/locale-context";
 
 function config(): WorkbenchPersonnelConfig {
   return {
@@ -34,13 +35,15 @@ function config(): WorkbenchPersonnelConfig {
 describe("WorkbenchPersonnelMappingEditor", () => {
   test("renders one editable row per workstation-person relationship", () => {
     const html = renderToStaticMarkup(
-      <WorkbenchPersonnelMappingEditor
-        organization="TacVerse"
-        config={config()}
-        workstationSuggestions={["A2", "A5", "B2"]}
-        defaultDay="2026-09-04"
-        onSaved={() => undefined}
-      />,
+      <LocaleProvider>
+        <WorkbenchPersonnelMappingEditor
+          organization="TacVerse"
+          config={config()}
+          workstationSuggestions={["A2", "A5", "B2"]}
+          defaultDay="2026-09-04"
+          onSaved={() => undefined}
+        />
+      </LocaleProvider>,
     );
 
     expect(html).toContain("Personnel mapping");
