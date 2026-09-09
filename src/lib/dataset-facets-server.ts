@@ -47,8 +47,10 @@ function span(days: string[]): { from: string; to: string } | null {
  *
  * 1. `meta/hardware.json` epochs carry `recorded_at` — a real timestamp with a
  *    timezone, written per recording session. Only this one is a measurement.
- * 2. `meta/tacflow/sessions.json` names each source day-repo; the date comes
- *    from that name's suffix.
+ * 2. `sessions.json` names each source day-repo; the date comes from that
+ *    name's suffix. TacFlow D103 moved it from `meta/tacflow/sessions.json` to
+ *    `meta/sessions.json`; the viewer reads **both** because it has to serve
+ *    migrated and un-migrated datasets side by side during the rollout.
  * 3. The dataset directory's own `-MMDD` suffix.
  *
  * Falls through to `none` rather than guessing. A dataset with no evidence is
@@ -75,9 +77,12 @@ export async function readCaptureDates(datasetDir: string): Promise<{
     };
   }
 
-  const sessions = (await readJson(
-    path.join(datasetDir, "meta", "tacflow", "sessions.json"),
-  )) as { sessions?: { source?: unknown }[] } | null;
+  const sessions = ((await readJson(
+    path.join(datasetDir, "meta", "sessions.json"),
+  )) ??
+    (await readJson(
+      path.join(datasetDir, "meta", "tacflow", "sessions.json"),
+    ))) as { sessions?: { source?: unknown }[] } | null;
   const sourceDays = (sessions?.sessions ?? [])
     .map((s) => (typeof s?.source === "string" ? dateFromName(s.source) : null))
     .filter((d): d is string => d !== null);
