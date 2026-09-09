@@ -25,7 +25,9 @@ export default function WorkbenchStatisticsFilterNotice({
           <div className="font-medium text-amber-200">
             {t("workbench.statisticsScope")}
           </div>
-          <p className="mt-1 max-w-4xl text-amber-100/75">{filter.rule}</p>
+          <p className="mt-1 max-w-4xl text-amber-100/75">
+            {t("workbench.statisticsScopeRule")}
+          </p>
         </div>
         <span className="shrink-0 rounded-full border border-amber-300/25 px-2 py-1 text-[10px] tabular-nums text-amber-200">
           {t("workbench.excluded", { count: excluded.length.toLocaleString() })}

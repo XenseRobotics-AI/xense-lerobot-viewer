@@ -1106,6 +1106,8 @@ export const en = {
   "workbench.sendFailed": "Send failed ({status}).",
   "workbench.sent": "Sent.",
   "workbench.statisticsScope": "Statistics scope",
+  "workbench.statisticsScopeRule":
+    "Exclude datasets whose local path contains the exact path segment `merged`; these are post-processing merge outputs and are not included in Workbench statistics.",
   "workbench.excluded": "{count} excluded",
   "workbench.viewExcluded": "View excluded datasets",
   "workbench.mail": "Email",

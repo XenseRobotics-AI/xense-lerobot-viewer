@@ -3041,7 +3041,8 @@ export default function WorkbenchGroupingPanel({
                                   row.workstation +
                                   " · " +
                                   formatHours(hours) +
-                                  " hours",
+                                  " " +
+                                  t("common.hours"),
                                 day,
                                 datasets: sourceFilteredLocalDatasets.filter(
                                   (dataset) => {

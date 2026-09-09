@@ -1061,6 +1061,8 @@ export const zh: Record<MessageKey, string> = {
   "workbench.sendFailed": "发送失败（{status}）。",
   "workbench.sent": "发送完成。",
   "workbench.statisticsScope": "统计范围",
+  "workbench.statisticsScopeRule":
+    "排除本地路径包含完整路径段 `merged` 的数据集；这些是后处理合并输出，不纳入 Workbench 统计。",
   "workbench.excluded": "已排除 {count} 个",
   "workbench.viewExcluded": "查看排除的数据集",
   "workbench.mail": "邮件发送",
