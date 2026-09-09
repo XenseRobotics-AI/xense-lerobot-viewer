@@ -54,7 +54,7 @@ describe("WorkbenchPersonnelMappingEditor", () => {
     expect(html).toContain(">Email</th>");
     expect(html).toContain(">Original collectors</th>");
     expect(html).toContain(">Action</th>");
-    expect(html).toContain('aria-label="Mapping 1 collector count"');
+    expect(html).toContain('aria-label="Mapping 1 original collector count"');
     expect(html).toContain('value="2"');
     expect(html).toContain('value="张三"');
     expect(html).toContain('value="李四"');
