@@ -57,6 +57,8 @@ function createDashboardMailInput(
         targetHours: 6,
         ratePercent: 125,
         rule: "达标",
+        averageEpisodeSeconds: 18.4,
+        durationMultiplier: 1.2,
         reward: 200,
       },
     ],
@@ -229,6 +231,17 @@ describe("workbench mail draft", () => {
     expect(textBody).toContain("Personnel: 张三");
     expect(textBody).toContain("WS hours: 7.50");
     expect(textBody).toContain("Avg target: 6.00");
+    expect(textBody).toContain("Avg / ep: 18.4s · ×1.2");
+    const workstationText = textBody.slice(
+      textBody.indexOf("WORKSTATION DETAIL"),
+      textBody.indexOf("PERSONNEL WORKLOAD"),
+    );
+    expect(workstationText.indexOf("Rule:")).toBeLessThan(
+      workstationText.indexOf("Avg / ep:"),
+    );
+    expect(workstationText.indexOf("Avg / ep:")).toBeLessThan(
+      workstationText.indexOf("Reward:"),
+    );
     expect(textBody).toContain("PERSONNEL WORKLOAD");
     expect(textBody).toContain("Personnel: 张三");
     expect(textBody).toContain("Workstation: A1, B2");
@@ -272,6 +285,17 @@ describe("workbench mail draft", () => {
     expect(htmlBody).toContain("张三");
     expect(htmlBody).toContain("zhang@example.com");
     expect(htmlBody).toContain("Personnel bonus total");
+    const workstationHtml = htmlBody.slice(
+      htmlBody.indexOf(`aria-label="Workstation detail"`),
+      htmlBody.indexOf(`aria-label="Personnel workload"`),
+    );
+    const workstationHeaderPositions = ["Rule", "Avg / ep", "Reward"].map(
+      (label) => workstationHtml.indexOf(">" + label + "</th>"),
+    );
+    expect(workstationHeaderPositions).toEqual(
+      [...workstationHeaderPositions].sort((left, right) => left - right),
+    );
+    expect(htmlBody).toContain("18.4s · ×1.2");
     const personnelHtml = htmlBody.slice(
       htmlBody.indexOf('aria-label="Personnel workload"'),
     );

@@ -44,10 +44,10 @@ from sync_hf_dataset import (
 )
 
 STATS_MARKER = os.path.join(".cache", "huggingface", "viewer_stats.json")
-# Version 4 was written from incomplete local HF snapshots on some machines.
+# Earlier markers allowed Folder child metadata into the manifest.
 # Bump this whenever the manifest contract changes so the next refresh checks
 # the Hub again even when the repository SHA is unchanged.
-STATS_MARKER_VERSION = 5
+STATS_MARKER_VERSION = 6
 WORKFLOW_BUCKETS = {"merged", "raw", "failed", "released", "in-processing"}
 METADATA_LIST_TIMEOUT_SECONDS = 15
 METADATA_LIST_RETRIES = 2
@@ -109,18 +109,27 @@ def read_marker(target: str) -> dict[str, Any] | None:
         return None
 
 
-def is_metadata_path(filename: str) -> bool:
-    """Allow only root meta/** or one direct Folder child's meta/** tree."""
+def _safe_metadata_parts(filename: str) -> list[str] | None:
     if not isinstance(filename, str) or not filename or "\\" in filename:
-        return False
+        return None
     if filename.startswith("/") or "\x00" in filename:
-        return False
+        return None
     parts = filename.split("/")
-    if any(part in {"", ".", ".."} for part in parts):
+    return None if any(part in {"", ".", ".."} for part in parts) else parts
+
+
+def is_metadata_path(filename: str) -> bool:
+    """Allow only a repository's root meta/** tree."""
+    parts = _safe_metadata_parts(filename)
+    return bool(parts and len(parts) >= 2 and parts[0] == "meta")
+
+
+def is_legacy_metadata_path(filename: str) -> bool:
+    """Recognize old direct-child metadata solely so it can be archived."""
+    parts = _safe_metadata_parts(filename)
+    if not parts:
         return False
-    if len(parts) >= 2 and parts[0] == "meta":
-        return True
-    return (
+    return is_metadata_path(filename) or (
         len(parts) >= 3
         and parts[1] == "meta"
         and parts[0] not in {"data", "videos", "meta"}
@@ -164,10 +173,18 @@ def stats_is_current(target: str, sha: str | None) -> bool:
     marker = read_marker(target)
     if not marker or marker.get("sha") != sha:
         return False
-    if marker.get("version") != STATS_MARKER_VERSION:
-        return False
+    version = marker.get("version")
     files = marker.get("files")
     if not isinstance(files, dict):
+        return False
+    if version == STATS_MARKER_VERSION:
+        pass
+    elif version == STATS_MARKER_VERSION - 1:
+        # Version 5 may be reused only when it contains root meta/**. A Folder
+        # marker from that version contains child/meta/** and must be rebuilt.
+        if not files:
+            return False
+    else:
         return False
     for filename, expected in files.items():
         if not isinstance(filename, str) or not is_metadata_path(filename):
@@ -227,19 +244,11 @@ def list_metadata_files(
 
     def select_snapshot(files: list[str]) -> list[str]:
         safe_files = sorted({name for name in files if is_metadata_path(name)})
-        if "meta/info.json" in safe_files:
-            return [name for name in safe_files if name.startswith("meta/")]
-        children = {
-            name.split("/", 1)[0]
-            for name in safe_files
-            if name.count("/") >= 2 and name.endswith("/meta/info.json")
-        }
-        return [
-            name
-            for name in safe_files
-            if name.split("/", 1)[0] in children
-            and not name.startswith(("data/", "videos/"))
-        ]
+        return (
+            [name for name in safe_files if name.startswith("meta/")]
+            if "meta/info.json" in safe_files
+            else []
+        )
 
     build_headers = getattr(api, "_build_hf_headers", None)
     if not callable(build_headers):
@@ -331,27 +340,7 @@ def list_metadata_files(
         return output
 
     root_meta = files_for_tree("meta")
-    if "meta/info.json" in root_meta:
-        return sorted(set(root_meta))
-
-    child_names: set[str] = set()
-    for item in tree_items("", False):
-        raw_path = item.get("path")
-        item_type = str(item.get("type", "")).lower()
-        if (
-            item_type != "file"
-            and isinstance(raw_path, str)
-            and "/" not in raw_path
-            and is_metadata_path(f"{raw_path}/meta/info.json")
-        ):
-            child_names.add(raw_path)
-
-    files: list[str] = []
-    for child in sorted(child_names):
-        child_files = files_for_tree(f"{child}/meta")
-        if f"{child}/meta/info.json" in child_files:
-            files.extend(child_files)
-    return sorted(set(files))
+    return sorted(set(root_meta)) if "meta/info.json" in root_meta else []
 
 
 def utc_stamp() -> str:
@@ -432,7 +421,7 @@ def archive_deleted_metadata(
         filename
         for filename in old_files
         if isinstance(filename, str)
-        and is_metadata_path(filename)
+        and is_legacy_metadata_path(filename)
         and filename not in remote_files
         and (Path(target) / filename).is_file()
     ]

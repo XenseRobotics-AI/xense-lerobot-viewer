@@ -72,8 +72,11 @@ import {
 } from "@/utils/workbenchActions";
 import {
   countWorkbenchRewardTargetHours,
+  DEFAULT_WORKBENCH_EPISODE_DURATION_LEVELS,
   evaluateWorkbenchRewardRules,
+  formatWorkbenchAverageEpisode,
   formatWorkbenchRewardAmount,
+  type WorkbenchEpisodeDurationLevel,
   type WorkbenchRewardRuleLevel,
   type WorkbenchRewardRulesConfig,
 } from "@/utils/workbenchRewards";
@@ -88,8 +91,10 @@ import { computeWorkbenchPersonnelRollup } from "@/utils/workbenchPersonnel";
 import type { WorkbenchDatasetScore } from "@/types/workbench-score.types";
 import {
   EMPTY_TACVERSE_HUB_CATEGORY_COUNTS,
+  EMPTY_TACVERSE_HUB_CATEGORY_SELECTION,
+  serializeTacverseHubCategorySelection,
   type TacverseHubCategoryCounts,
-  type TacverseHubCategoryFilter,
+  type TacverseHubCategorySelection,
 } from "@/utils/workbenchHubCategory";
 import {
   createWorkbenchStatisticsFilterSummary,
@@ -253,7 +258,7 @@ type WorkbenchStatisticsPayload = {
   rewardRuleDefaults?: WorkbenchRewardRulesConfig;
   personnelConfig?: WorkbenchPersonnelConfig;
   statisticsFilter?: WorkbenchStatisticsFilterSummary;
-  categoryFilter?: TacverseHubCategoryFilter;
+  categoryFilter?: TacverseHubCategorySelection;
   refreshedAt?: string | null;
   hubTotal?: number;
   categoryTotal?: number;
@@ -273,7 +278,13 @@ type WorkbenchDashboardRow = WorkbenchRollupRow & {
   dailyHours: Record<string, number>;
 };
 
-type RewardRulesDraft = WorkbenchRewardRulesConfig & { org: string };
+type RewardRulesDraft = Omit<
+  WorkbenchRewardRulesConfig,
+  "episodeDurationLevels"
+> & {
+  org: string;
+  episodeDurationLevels: WorkbenchEpisodeDurationLevel[];
+};
 
 type HeatmapRow = {
   workstation: string;
@@ -360,9 +371,7 @@ function recordsEqual(
   });
 }
 
-function cloneRewardLevels(
-  levels: WorkbenchRewardRuleLevel[],
-): WorkbenchRewardRuleLevel[] {
+function cloneRewardLevels<T extends object>(levels: readonly T[]): T[] {
   return levels.map((level) => ({ ...level }));
 }
 
@@ -375,6 +384,12 @@ function cloneRewardDraft(
     enabled: config.enabled,
     dailyTargetHours: config.dailyTargetHours,
     levels: cloneRewardLevels(config.levels),
+    episodeDurationLevels: cloneRewardLevels(
+      config.episodeDurationLevels ?? DEFAULT_WORKBENCH_EPISODE_DURATION_LEVELS,
+    ),
+    qualityBonusByGrade: config.qualityBonusByGrade
+      ? { ...config.qualityBonusByGrade }
+      : undefined,
   };
 }
 
@@ -417,6 +432,9 @@ function emptyRewardDraft(org: string): RewardRulesDraft {
         amount: 200,
       },
     ],
+    episodeDurationLevels: cloneRewardLevels(
+      DEFAULT_WORKBENCH_EPISODE_DURATION_LEVELS,
+    ),
   };
 }
 
@@ -449,6 +467,30 @@ function validateRewardDraft(draft: RewardRulesDraft): string | null {
         return "Level ranges must be continuous.";
       }
     }
+  }
+  const durationLevels = [...draft.episodeDurationLevels].sort(
+    (left, right) => left.minSeconds - right.minSeconds,
+  );
+  if (durationLevels.length === 0 || durationLevels[0].minSeconds !== 0) {
+    return "Episode duration levels must start at 0 seconds.";
+  }
+  for (let index = 0; index < durationLevels.length; index += 1) {
+    const level = durationLevels[index];
+    if (!Number.isFinite(level.multiplier) || level.multiplier <= 0) {
+      return "Episode duration multipliers must be positive numbers.";
+    }
+    if (index > 0) {
+      const previous = durationLevels[index - 1];
+      if (
+        previous.maxSeconds === null ||
+        Math.abs(previous.maxSeconds - level.minSeconds) > 1e-9
+      ) {
+        return "Episode duration ranges must be continuous.";
+      }
+    }
+  }
+  if (durationLevels.at(-1)?.maxSeconds !== null) {
+    return "The last episode duration level must be open-ended.";
   }
   return null;
 }
@@ -628,12 +670,12 @@ function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
 
 export default function WorkbenchGroupingPanel({
   organization,
-  categoryFilter = "all",
+  categoryFilter = EMPTY_TACVERSE_HUB_CATEGORY_SELECTION,
   refreshToken = 0,
   episodeData,
 }: {
   organization: string;
-  categoryFilter?: TacverseHubCategoryFilter;
+  categoryFilter?: TacverseHubCategorySelection;
   refreshToken?: number;
   episodeData?: EpisodeData;
 }) {
@@ -670,8 +712,9 @@ export default function WorkbenchGroupingPanel({
   const [error, setError] = useState<string | null>(null);
   const [localRefreshToken, setLocalRefreshToken] = useState(0);
   const [dataUpdatedAt, setDataUpdatedAt] = useState<string | null>(null);
-  const loadedCategoryRef = useRef(categoryFilter);
-  const categoryRangeCheckPendingRef = useRef(categoryFilter !== "all");
+  const categoryParam = serializeTacverseHubCategorySelection(categoryFilter);
+  const loadedCategoryRef = useRef(categoryParam);
+  const categoryRangeCheckPendingRef = useRef(categoryParam !== "all");
   const latestRangeAppliedRef = useRef(
     Boolean(
       searchParams.get("workbenchStart") || searchParams.get("workbenchEnd"),
@@ -778,7 +821,7 @@ export default function WorkbenchGroupingPanel({
     setLoading(true);
     setError(null);
     setStatisticsFilter(createWorkbenchStatisticsFilterSummary([]));
-    if (loadedCategoryRef.current !== categoryFilter) {
+    if (loadedCategoryRef.current !== categoryParam) {
       categoryRangeCheckPendingRef.current = true;
       setDatasets([]);
     }
@@ -786,7 +829,7 @@ export default function WorkbenchGroupingPanel({
       "/api/workbench/statistics?org=" +
         encodeURIComponent(organization) +
         "&category=" +
-        encodeURIComponent(categoryFilter),
+        encodeURIComponent(categoryParam),
       {
         cache: "no-store",
         signal: controller.signal,
@@ -820,7 +863,9 @@ export default function WorkbenchGroupingPanel({
         const legacyDefaults = cleanStringRecord(
           payload.workstationMappings?.legacyDefaults,
         );
-        loadedCategoryRef.current = payload.categoryFilter ?? categoryFilter;
+        loadedCategoryRef.current = serializeTacverseHubCategorySelection(
+          payload.categoryFilter ?? categoryFilter,
+        );
         setDatasets(payload.datasets ?? []);
         setHubScope({
           refreshedAt: payload.refreshedAt ?? null,
@@ -852,6 +897,12 @@ export default function WorkbenchGroupingPanel({
               rewardConfig?.dailyTargetHours ??
               rewardDefaultConfig.dailyTargetHours,
             levels: rewardConfig?.levels ?? rewardDefaultConfig.levels,
+            episodeDurationLevels:
+              rewardConfig?.episodeDurationLevels ??
+              rewardDefaultConfig.episodeDurationLevels,
+            qualityBonusByGrade:
+              rewardConfig?.qualityBonusByGrade ??
+              rewardDefaultConfig.qualityBonusByGrade,
           },
           organization,
         );
@@ -879,7 +930,13 @@ export default function WorkbenchGroupingPanel({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [categoryFilter, organization, refreshToken, localRefreshToken]);
+  }, [
+    categoryFilter,
+    categoryParam,
+    organization,
+    refreshToken,
+    localRefreshToken,
+  ]);
 
   const rollupDatasets = useMemo<WorkbenchRollupDataset[]>(
     () =>
@@ -1156,6 +1213,7 @@ export default function WorkbenchGroupingPanel({
         row.hours,
         targetHours ?? 0,
         rewardDraft,
+        row.episodes,
       );
       grouped.set(row.group, {
         ...row,
@@ -1239,22 +1297,18 @@ export default function WorkbenchGroupingPanel({
       if (!current.datasetPaths.has(dataset.relativePath)) {
         current.datasetPaths.add(dataset.relativePath);
         current.count += 1;
-        current.episodes +=
-          Number.isFinite(Number(dataset.total_episodes)) &&
-          Number(dataset.total_episodes) > 0
-            ? Math.trunc(Number(dataset.total_episodes))
-            : 0;
-        current.frames +=
-          Number.isFinite(Number(dataset.total_frames)) &&
-          Number(dataset.total_frames) > 0
-            ? Math.trunc(Number(dataset.total_frames))
-            : 0;
         const repoId = workbenchSourceRepoId(dataset.relativePath);
         if (!current.sourceRepoIds.includes(repoId)) {
           current.sourceRepoIds.push(repoId);
         }
       }
       for (const addition of additions) {
+        current.episodes += Number.isFinite(Number(addition.episodes))
+          ? Math.max(0, Math.trunc(Number(addition.episodes)))
+          : 0;
+        current.frames += Number.isFinite(Number(addition.frames))
+          ? Math.max(0, Math.trunc(Number(addition.frames)))
+          : 0;
         const hours = Number(addition.hours);
         if (!Number.isFinite(hours) || hours <= 0) continue;
         current.hours += hours;
@@ -1275,6 +1329,7 @@ export default function WorkbenchGroupingPanel({
           row.hours,
           targetHours ?? 0,
           rewardDraft,
+          row.episodes,
         ),
       };
     });
@@ -1502,6 +1557,8 @@ export default function WorkbenchGroupingPanel({
         row.workstation,
         row.hours,
         row.count,
+        row.reward.level?.label ?? row.reward.symbol,
+        formatWorkbenchAverageEpisode(row.reward),
         row.reward.amount,
         row.sourceRepoIds.join(" | "),
       ]);
@@ -1513,12 +1570,24 @@ export default function WorkbenchGroupingPanel({
         row.workstations.join(" | "),
         row.hours,
         row.targetHours,
+        row.rule,
+        "",
         row.reward.amount,
         row.email,
       ]);
     }
     for (const row of dailyTrendTimeline.rows) {
-      rows.push(["daily-trend", row.day, "", row.hours, row.datasets, "", ""]);
+      rows.push([
+        "daily-trend",
+        row.day,
+        "",
+        row.hours,
+        row.datasets,
+        "",
+        "",
+        "",
+        "",
+      ]);
     }
     const csv = workbenchCsv(
       [
@@ -1527,6 +1596,8 @@ export default function WorkbenchGroupingPanel({
         "workstation",
         "hours",
         "count_or_target",
+        "rule",
+        "avg_per_ep",
         "reward",
         "datasets_or_email",
       ],
@@ -1565,7 +1636,9 @@ export default function WorkbenchGroupingPanel({
     rewardDraft.enabled !== rewardDefaults.enabled ||
     rewardDraft.dailyTargetHours !== rewardDefaults.dailyTargetHours ||
     JSON.stringify(rewardDraft.levels) !==
-      JSON.stringify(rewardDefaults.levels);
+      JSON.stringify(rewardDefaults.levels) ||
+    JSON.stringify(rewardDraft.episodeDurationLevels) !==
+      JSON.stringify(rewardDefaults.episodeDurationLevels);
 
   const mailRollupDatasets = useMemo<WorkbenchRollupDataset[]>(
     () =>
@@ -1782,6 +1855,8 @@ export default function WorkbenchGroupingPanel({
           targetHours ?? 0,
         ),
         rule: row.reward.level?.label ?? row.reward.symbol,
+        averageEpisodeSeconds: row.reward.averageEpisodeSeconds,
+        durationMultiplier: row.reward.multiplier,
         reward: row.reward.amount,
       })),
       personnelRows: mailPersonnelRollup.rows.map((row) => ({
@@ -1953,6 +2028,19 @@ export default function WorkbenchGroupingPanel({
     [],
   );
 
+  const updateEpisodeDurationLevel = useCallback(
+    (index: number, patch: Partial<WorkbenchEpisodeDurationLevel>) => {
+      setRewardDraft((current) => ({
+        ...current,
+        episodeDurationLevels: current.episodeDurationLevels.map(
+          (level, levelIndex) =>
+            levelIndex === index ? { ...level, ...patch } : level,
+        ),
+      }));
+    },
+    [],
+  );
+
   const addRewardLevel = useCallback(() => {
     setRewardDraft((current) => {
       const last = current.levels.at(-1);
@@ -2096,6 +2184,8 @@ export default function WorkbenchGroupingPanel({
             ),
             rule: row.reward.level?.label ?? row.reward.symbol,
             ruleSymbol: row.reward.symbol,
+            averageEpisodeSeconds: row.reward.averageEpisodeSeconds,
+            durationMultiplier: row.reward.multiplier,
             reward: row.reward.amount,
           })),
           personnelRows: personnelRollup.rows.map((row) => ({
@@ -2618,6 +2708,7 @@ export default function WorkbenchGroupingPanel({
                     </th>
                     <th className="px-3 py-2.5 font-medium">Rate</th>
                     <th className="px-3 py-2.5 font-medium">Rule</th>
+                    <th className="px-3 py-2.5 font-medium">Avg / ep</th>
                     <th className="px-3 py-2.5 font-medium">Reward</th>
                   </tr>
                 </thead>
@@ -2703,6 +2794,9 @@ export default function WorkbenchGroupingPanel({
                           label={row.reward.level?.label}
                           symbol={row.reward.symbol}
                         />
+                      </td>
+                      <td className="px-3 py-2.5 text-slate-300 tabular-nums">
+                        {formatWorkbenchAverageEpisode(row.reward)}
                       </td>
                       <td className="px-3 py-2.5 text-slate-300 tabular-nums">
                         {formatWorkbenchRewardAmount(row.reward.amount)}
@@ -3349,6 +3443,90 @@ export default function WorkbenchGroupingPanel({
                     })}
                   </tbody>
                 </table>
+              </div>
+              <div className="mt-4">
+                <h5 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                  Episode duration multiplier
+                </h5>
+                <div className="overflow-x-auto rounded-md border border-white/10">
+                  <table className="w-full min-w-[650px] border-collapse text-left text-xs">
+                    <thead className="bg-[var(--surface-2)] text-slate-400">
+                      <tr>
+                        <th className="px-3 py-2.5 font-medium">Label</th>
+                        <th className="px-3 py-2.5 font-medium">Min seconds</th>
+                        <th className="px-3 py-2.5 font-medium">Max seconds</th>
+                        <th className="px-3 py-2.5 font-medium">Multiplier</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rewardDraft.episodeDurationLevels.map((level, index) => (
+                        <tr key={level.id} className="border-t border-white/5">
+                          <td className="px-3 py-2.5">
+                            <input
+                              value={level.label}
+                              onChange={(event) =>
+                                updateEpisodeDurationLevel(index, {
+                                  label: event.target.value,
+                                })
+                              }
+                              className="w-full rounded-md border border-white/10 bg-[var(--surface-0)] px-3 py-2 text-slate-100 focus:border-cyan-400 focus:outline-none"
+                            />
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={level.minSeconds}
+                              onChange={(event) =>
+                                updateEpisodeDurationLevel(index, {
+                                  minSeconds: parseNonNegativeNumber(
+                                    event.target.value,
+                                  ),
+                                })
+                              }
+                              className="w-28 rounded-md border border-white/10 bg-[var(--surface-0)] px-3 py-2 text-right tabular-nums text-slate-100 focus:border-cyan-400 focus:outline-none"
+                            />
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={level.maxSeconds ?? ""}
+                              placeholder="Open"
+                              onChange={(event) =>
+                                updateEpisodeDurationLevel(index, {
+                                  maxSeconds:
+                                    event.target.value === ""
+                                      ? null
+                                      : parseNonNegativeNumber(
+                                          event.target.value,
+                                        ),
+                                })
+                              }
+                              className="w-28 rounded-md border border-white/10 bg-[var(--surface-0)] px-3 py-2 text-right tabular-nums text-slate-100 focus:border-cyan-400 focus:outline-none"
+                            />
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <input
+                              type="number"
+                              min="0.01"
+                              step="0.05"
+                              value={level.multiplier}
+                              onChange={(event) =>
+                                updateEpisodeDurationLevel(index, {
+                                  multiplier: Number(event.target.value),
+                                })
+                              }
+                              className="w-28 rounded-md border border-white/10 bg-[var(--surface-0)] px-3 py-2 text-right tabular-nums text-slate-100 focus:border-cyan-400 focus:outline-none"
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </section>
           )}

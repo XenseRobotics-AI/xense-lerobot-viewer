@@ -154,7 +154,7 @@ describe("TacVerse dataset statistics route", () => {
     expect(await response.json()).toEqual({
       organization: "TacVerse",
       refreshedAt: null,
-      categoryFilter: "all",
+      categoryFilter: [],
       hubTotal: 0,
       categoryTotal: 0,
       categoryCounts: {
@@ -202,7 +202,7 @@ describe("TacVerse dataset statistics route", () => {
     );
     const all = await allResponse.json();
     expect(all).toMatchObject({
-      categoryFilter: "all",
+      categoryFilter: [],
       hubTotal: 3,
       categoryTotal: 3,
       categoryCounts: {
@@ -221,7 +221,7 @@ describe("TacVerse dataset statistics route", () => {
     );
     const firstParty = await firstPartyResponse.json();
     expect(firstParty).toMatchObject({
-      categoryFilter: "taccap-g1",
+      categoryFilter: ["taccap-g1"],
       hubTotal: 3,
       categoryTotal: 1,
       categoryCounts: {
@@ -239,6 +239,21 @@ describe("TacVerse dataset statistics route", () => {
         downloads: 11,
       }),
     ]);
+
+    const unionResponse = await GET(
+      new Request(
+        "http://localhost/api/workbench/dataset-statistics?category=xtac-umi-g1,taccap-g1",
+      ),
+    );
+    const union = await unionResponse.json();
+    expect(union.categoryFilter).toEqual(["taccap-g1", "xtac-umi-g1"]);
+    expect(union.categoryTotal).toBe(2);
+    expect(union.datasets.map((row: { repoId: string }) => row.repoId)).toEqual(
+      [
+        "TacVerse/taccap-g1-first-party-0905",
+        "TacVerse/xtac-umi-g1-other-0905",
+      ],
+    );
 
     const otherResponse = await GET(
       new Request(
@@ -267,7 +282,7 @@ describe("TacVerse dataset statistics route", () => {
     );
     expect(invalid.status).toBe(400);
   });
-  test("aggregates Folder children once and preserves partial child rows", async () => {
+  test("counts a Folder once and exposes only structural child names", async () => {
     await writeLocalDataset("TacVerse/sampledata/child-a");
     await writeLocalDataset("TacVerse/sampledata/child-b");
     await writeCatalog({
@@ -330,12 +345,12 @@ describe("TacVerse dataset statistics route", () => {
       hubRepoId: "TacVerse/sampledata",
       hubPath: null,
       downloads: 21,
-      episodes: 5,
-      frames: 18000,
-      hours: 0.5,
-      metricsState: "partial",
+      episodes: null,
+      frames: null,
+      hours: null,
+      metricsState: "unavailable",
       robotType: null,
-      robotTypes: ["robot-a", "robot-b"],
+      robotTypes: [],
     });
     expect(payload.datasets[0].children).toHaveLength(3);
     expect(payload.datasets[0].children[0]).toMatchObject({
@@ -344,7 +359,10 @@ describe("TacVerse dataset statistics route", () => {
       hubRepoId: "TacVerse/sampledata",
       hubPath: "child-a",
       downloads: null,
-      episodes: 2,
+      episodes: null,
+      frames: null,
+      hours: null,
+      robotType: null,
     });
     expect(payload.datasets[0].children[0].hubUrl).toEndWith(
       "/TacVerse/sampledata/tree/main/child-a",
@@ -352,7 +370,8 @@ describe("TacVerse dataset statistics route", () => {
     expect(payload.datasets[0].children[2]).toMatchObject({
       name: "broken",
       metricsState: "unavailable",
-      categoryWarning: "invalid JSON",
+      categoryWarning: null,
+      episodes: null,
     });
   });
 });

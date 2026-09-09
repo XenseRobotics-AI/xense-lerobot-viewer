@@ -37,6 +37,29 @@
       "B": 10,
       "C": 0,
       "D": -10
-    }
+    },
+    "episodeDurationLevels": [
+      {
+        "id": "under-20s",
+        "label": "Short",
+        "minSeconds": 0,
+        "maxSeconds": 20,
+        "multiplier": 1.2
+      },
+      {
+        "id": "20-40s",
+        "label": "Medium",
+        "minSeconds": 20,
+        "maxSeconds": 40,
+        "multiplier": 1.1
+      },
+      {
+        "id": "40s-plus",
+        "label": "Standard",
+        "minSeconds": 40,
+        "maxSeconds": null,
+        "multiplier": 1
+      }
+    ]
   }
 }

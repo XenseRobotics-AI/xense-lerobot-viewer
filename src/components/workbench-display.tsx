@@ -100,6 +100,18 @@ function rewardSymbol(value: number): "✅" | "❌" | "—" {
   return "—";
 }
 
+function formatAverageEpisode(
+  seconds: number | null | undefined,
+  multiplier: number | undefined,
+): string {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds)) return "—";
+  const factor =
+    typeof multiplier === "number" && Number.isFinite(multiplier)
+      ? multiplier
+      : 1;
+  return `${seconds.toFixed(1)}s · ×${factor.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+}
+
 function rewardToneClass(tone: WorkbenchDisplayRewardTone): string {
   if (tone === "positive") return styles.rewardPositive;
   if (tone === "negative") return styles.rewardNegative;
@@ -352,6 +364,7 @@ function WorkstationDetailSlide({
                 <th>Target</th>
                 <th>Rate</th>
                 <th>Rule</th>
+                <th>Avg / ep</th>
                 <th>Reward</th>
               </tr>
             </thead>
@@ -403,6 +416,12 @@ function WorkstationDetailSlide({
                         label={row.rule}
                         symbol={row.ruleSymbol ?? rewardSymbol(row.reward)}
                       />
+                    </td>
+                    <td>
+                      {formatAverageEpisode(
+                        row.averageEpisodeSeconds,
+                        row.durationMultiplier,
+                      )}
                     </td>
                     <td
                       className={

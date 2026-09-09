@@ -90,6 +90,7 @@ export async function PUT(request: NextRequest): Promise<Response> {
         enabled: config.enabled,
         dailyTargetHours: config.dailyTargetHours,
         levels: config.levels,
+        episodeDurationLevels: config.episodeDurationLevels,
         qualityBonusByGrade: config.qualityBonusByGrade,
       },
     }).catch(() => undefined);

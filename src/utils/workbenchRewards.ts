@@ -6,6 +6,14 @@ export type WorkbenchRewardRuleLevel = {
   amount: number;
 };
 
+export type WorkbenchEpisodeDurationLevel = {
+  id: string;
+  label: string;
+  minSeconds: number;
+  maxSeconds: number | null;
+  multiplier: number;
+};
+
 export type WorkbenchQualityGrade = "A" | "B" | "C" | "D";
 
 export type WorkbenchQualityBonusByGrade = Record<
@@ -17,6 +25,8 @@ export type WorkbenchRewardRulesConfig = {
   enabled: boolean;
   dailyTargetHours: number;
   levels: WorkbenchRewardRuleLevel[];
+  /** Optional only for source compatibility; normalization always supplies it. */
+  episodeDurationLevels?: WorkbenchEpisodeDurationLevel[];
   /** Quality pool amount per scored dataset. Kept optional for old configs. */
   qualityBonusByGrade?: WorkbenchQualityBonusByGrade;
 };
@@ -24,9 +34,37 @@ export type WorkbenchRewardRulesConfig = {
 export type WorkbenchRewardPreview = {
   percent: number | null;
   level: WorkbenchRewardRuleLevel | null;
+  baseAmount: number;
+  averageEpisodeSeconds: number | null;
+  episodeDurationLevel: WorkbenchEpisodeDurationLevel | null;
+  multiplier: number;
   amount: number;
   symbol: "✅" | "❌" | "…" | "—";
 };
+
+export const DEFAULT_WORKBENCH_EPISODE_DURATION_LEVELS = Object.freeze([
+  {
+    id: "under-20s",
+    label: "Short",
+    minSeconds: 0,
+    maxSeconds: 20,
+    multiplier: 1.2,
+  },
+  {
+    id: "20-40s",
+    label: "Medium",
+    minSeconds: 20,
+    maxSeconds: 40,
+    multiplier: 1.1,
+  },
+  {
+    id: "40s-plus",
+    label: "Standard",
+    minSeconds: 40,
+    maxSeconds: null,
+    multiplier: 1,
+  },
+] satisfies WorkbenchEpisodeDurationLevel[]);
 
 export const DEFAULT_WORKBENCH_QUALITY_BONUS_BY_GRADE = {
   A: 20,
@@ -109,13 +147,42 @@ function matchWorkbenchRewardPreview(
   hours: number,
   targetHours: number,
   levels: readonly WorkbenchRewardRuleLevel[],
+  episodeDurationLevels: readonly WorkbenchEpisodeDurationLevel[] = DEFAULT_WORKBENCH_EPISODE_DURATION_LEVELS,
+  totalEpisodes?: number | null,
 ): WorkbenchRewardPreview {
-  if (
-    !Number.isFinite(hours) ||
-    !Number.isFinite(targetHours) ||
-    targetHours <= 0
-  ) {
-    return { percent: null, level: null, amount: 0, symbol: "—" };
+  const validPerformance =
+    Number.isFinite(hours) && Number.isFinite(targetHours) && targetHours > 0;
+  const averageEpisodeSeconds =
+    Number.isFinite(hours) &&
+    hours >= 0 &&
+    typeof totalEpisodes === "number" &&
+    Number.isFinite(totalEpisodes) &&
+    totalEpisodes > 0
+      ? (hours * 3600) / totalEpisodes
+      : null;
+  const durationLevel =
+    averageEpisodeSeconds === null
+      ? null
+      : ([...episodeDurationLevels]
+          .sort((left, right) => left.minSeconds - right.minSeconds)
+          .find(
+            (entry) =>
+              averageEpisodeSeconds >= entry.minSeconds &&
+              (entry.maxSeconds === null ||
+                averageEpisodeSeconds < entry.maxSeconds),
+          ) ?? null);
+  const multiplier = durationLevel?.multiplier ?? 1;
+  if (!validPerformance) {
+    return {
+      percent: null,
+      level: null,
+      baseAmount: 0,
+      averageEpisodeSeconds,
+      episodeDurationLevel: durationLevel,
+      multiplier,
+      amount: 0,
+      symbol: "—",
+    };
   }
   const percent = (hours / targetHours) * 100;
   const level =
@@ -123,14 +190,25 @@ function matchWorkbenchRewardPreview(
       .sort((left, right) => left.minPercent - right.minPercent)
       .find((entry) => {
         if (percent < entry.minPercent) return false;
-        if (entry.maxPercent === null) return true;
-        return percent < entry.maxPercent;
+        return entry.maxPercent === null || percent < entry.maxPercent;
       }) ??
     levels.at(-1) ??
     null;
-  const amount = level?.amount ?? 0;
+  const baseAmount = level?.amount ?? 0;
+  const amount = roundWorkbenchMoney(
+    baseAmount > 0 ? baseAmount * multiplier : baseAmount,
+  );
   const symbol = amount > 0 ? "✅" : amount < 0 ? "❌" : "…";
-  return { percent, level, amount, symbol };
+  return {
+    percent,
+    level,
+    baseAmount,
+    averageEpisodeSeconds,
+    episodeDurationLevel: durationLevel,
+    multiplier,
+    amount,
+    symbol,
+  };
 }
 
 export function countWorkbenchRewardTargetHours(
@@ -158,9 +236,19 @@ export function previewWorkbenchRewardRules(
 export function evaluateWorkbenchRewardRules(
   hours: number,
   targetHours: number,
-  rules: Pick<WorkbenchRewardRulesConfig, "enabled" | "levels">,
+  rules: Pick<
+    WorkbenchRewardRulesConfig,
+    "enabled" | "levels" | "episodeDurationLevels"
+  >,
+  totalEpisodes?: number | null,
 ): WorkbenchRewardPreview {
-  const preview = matchWorkbenchRewardPreview(hours, targetHours, rules.levels);
+  const preview = matchWorkbenchRewardPreview(
+    hours,
+    targetHours,
+    rules.levels,
+    rules.episodeDurationLevels ?? DEFAULT_WORKBENCH_EPISODE_DURATION_LEVELS,
+    totalEpisodes,
+  );
   if (
     !Number.isFinite(hours) ||
     !Number.isFinite(targetHours) ||
@@ -169,9 +257,17 @@ export function evaluateWorkbenchRewardRules(
     return preview;
   }
   if (!rules.enabled) {
-    return { ...preview, amount: 0, symbol: "—" };
+    return { ...preview, baseAmount: 0, amount: 0, symbol: "—" };
   }
   return preview;
+}
+
+export function formatWorkbenchAverageEpisode(
+  preview: Pick<WorkbenchRewardPreview, "averageEpisodeSeconds" | "multiplier">,
+): string {
+  return preview.averageEpisodeSeconds === null
+    ? "—"
+    : `${preview.averageEpisodeSeconds.toFixed(1)}s · ×${preview.multiplier.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
 }
 
 export function formatWorkbenchRewardAmount(value: number): string {

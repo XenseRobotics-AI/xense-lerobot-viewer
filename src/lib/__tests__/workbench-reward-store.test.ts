@@ -38,6 +38,9 @@ describe("workbench reward rules store", () => {
     expect(config.enabled).toBe(true);
     expect(config.dailyTargetHours).toBe(6);
     expect(config.levels.at(-1)?.maxPercent).toBeNull();
+    expect(
+      config.episodeDurationLevels.map((level) => level.multiplier),
+    ).toEqual([1.2, 1.1, 1]);
     expect(config.qualityBonusByGrade).toEqual({ A: 20, B: 10, C: 0, D: -10 });
   });
 
@@ -74,6 +77,37 @@ describe("workbench reward rules store", () => {
     await expect(
       fs.readFile(workbenchRewardRulesPath("TacVerse", root), "utf8"),
     ).resolves.toContain('"qualityBonusByGrade"');
+    await expect(
+      fs.readFile(workbenchRewardRulesPath("TacVerse", root), "utf8"),
+    ).resolves.toContain('"episodeDurationLevels"');
+  });
+
+  test("migrates old stored rules by supplying default duration tiers", async () => {
+    const root = await temporaryRoot();
+    const destination = workbenchRewardRulesPath("TacVerse", root);
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    await fs.writeFile(
+      destination,
+      JSON.stringify({
+        enabled: true,
+        dailyTargetHours: 6,
+        levels: [
+          {
+            id: "all",
+            label: "All",
+            minPercent: 0,
+            maxPercent: null,
+            amount: 20,
+          },
+        ],
+      }),
+    );
+
+    const config = await readWorkbenchRewardRules("TacVerse", root);
+    expect(config.source).toBe("stored");
+    expect(config.episodeDurationLevels).toEqual(
+      defaultWorkbenchRewardRules("TacVerse").episodeDurationLevels,
+    );
   });
 
   test("evaluates reward levels by completion percentage", () => {

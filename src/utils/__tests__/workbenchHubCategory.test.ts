@@ -7,6 +7,8 @@ import {
   hubRepoIdForLocalDatasetPath,
   matchesTacverseHubCategory,
   parseTacverseHubCategoryFilter,
+  parseTacverseHubCategorySelection,
+  serializeTacverseHubCategorySelection,
   tacverseHubCategory,
 } from "@/utils/workbenchHubCategory";
 import { workbenchDatasetSourceKey } from "@/utils/workbenchRollup";
@@ -107,6 +109,21 @@ describe("TacVerse Hub categories", () => {
         folders,
       ),
     ).toBeNull();
+  });
+
+  test("round-trips multi-category URL state in stable order", () => {
+    const parsed = parseTacverseHubCategorySelection(
+      "xtac-umi-g1,taccap-g1,xtac-umi-g1",
+    );
+    expect(parsed).toEqual(["taccap-g1", "xtac-umi-g1"]);
+    expect(serializeTacverseHubCategorySelection(parsed)).toBe(
+      "taccap-g1,xtac-umi-g1",
+    );
+    expect(parseTacverseHubCategorySelection("all")).toEqual([]);
+    expect(serializeTacverseHubCategorySelection([])).toBe("all");
+    expect(
+      matchesTacverseHubCategory("TacVerse/xtac-umi-g1-demo", parsed),
+    ).toBe(true);
   });
 
   test("parses URL state and counts all five Hub categories", () => {

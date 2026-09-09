@@ -4,8 +4,11 @@ import { randomBytes } from "node:crypto";
 import defaultWorkbenchRewardRulesByOrg from "@/config/workbench-reward-rules.json";
 import { resolveLocalDatasetRoot } from "@/lib/local-datasets-discovery";
 import {
+  DEFAULT_WORKBENCH_EPISODE_DURATION_LEVELS,
   DEFAULT_WORKBENCH_QUALITY_BONUS_BY_GRADE,
+  evaluateWorkbenchRewardRules as evaluateRewardRules,
   normalizeWorkbenchQualityBonusByGrade,
+  type WorkbenchEpisodeDurationLevel,
   type WorkbenchQualityBonusByGrade,
 } from "@/utils/workbenchRewards";
 
@@ -15,6 +18,7 @@ const MAX_ORG_LENGTH = 128;
 const MAX_LEVEL_ID_LENGTH = 64;
 const MAX_LEVEL_LABEL_LENGTH = 64;
 const MAX_LEVELS = 12;
+const MAX_DURATION_LEVELS = 12;
 
 export type WorkbenchRewardRulesSource = "stored" | "defaults";
 
@@ -31,6 +35,7 @@ export type WorkbenchRewardRules = {
   enabled: boolean;
   dailyTargetHours: number;
   levels: WorkbenchRewardRuleLevel[];
+  episodeDurationLevels: WorkbenchEpisodeDurationLevel[];
   qualityBonusByGrade: WorkbenchQualityBonusByGrade;
   source: WorkbenchRewardRulesSource;
   updatedAt: string | null;
@@ -41,6 +46,7 @@ type WorkbenchRewardRulesFile = {
   enabled?: unknown;
   dailyTargetHours?: unknown;
   levels?: unknown;
+  episodeDurationLevels?: unknown;
   qualityBonusByGrade?: unknown;
   qualityBonus?: unknown;
   qualityBonuses?: unknown;
@@ -94,9 +100,7 @@ function cleanString(value: unknown): string | null {
   return trimmed ? trimmed : null;
 }
 
-function cloneLevels(
-  levels: WorkbenchRewardRuleLevel[],
-): WorkbenchRewardRuleLevel[] {
+function cloneLevels<T extends object>(levels: readonly T[]): T[] {
   return levels.map((level) => ({ ...level }));
 }
 
@@ -117,6 +121,7 @@ function defaultRewardRulesForOrg(
       enabled: parsed.enabled,
       dailyTargetHours: parsed.dailyTargetHours,
       levels: parsed.levels,
+      episodeDurationLevels: parsed.episodeDurationLevels,
       qualityBonusByGrade: parsed.qualityBonusByGrade,
     };
   }
@@ -125,6 +130,9 @@ function defaultRewardRulesForOrg(
     enabled: true,
     dailyTargetHours: 6,
     levels: cloneLevels(DEFAULT_LEVELS),
+    episodeDurationLevels: cloneLevels(
+      DEFAULT_WORKBENCH_EPISODE_DURATION_LEVELS,
+    ),
     qualityBonusByGrade: { ...DEFAULT_WORKBENCH_QUALITY_BONUS_BY_GRADE },
   };
 }
@@ -164,6 +172,51 @@ export function normalizeWorkbenchRewardRuleLevels(
   return levels.slice(0, MAX_LEVELS);
 }
 
+export function normalizeWorkbenchEpisodeDurationLevels(
+  input: unknown,
+): WorkbenchEpisodeDurationLevel[] {
+  if (input === undefined) {
+    return cloneLevels(DEFAULT_WORKBENCH_EPISODE_DURATION_LEVELS);
+  }
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((entry, index) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry))
+        return null;
+      const raw = entry as Record<string, unknown>;
+      const minSeconds = asNumber(raw.minSeconds);
+      const maxSeconds =
+        raw.maxSeconds === null || raw.maxSeconds === undefined
+          ? null
+          : asNumber(raw.maxSeconds);
+      const multiplier = asNumber(raw.multiplier);
+      if (
+        minSeconds === null ||
+        minSeconds < 0 ||
+        multiplier === null ||
+        multiplier <= 0 ||
+        (maxSeconds !== null && maxSeconds <= minSeconds)
+      )
+        return null;
+      return {
+        id: (cleanString(raw.id) ?? `duration-${index + 1}`).slice(
+          0,
+          MAX_LEVEL_ID_LENGTH,
+        ),
+        label: (cleanString(raw.label) ?? `Duration ${index + 1}`).slice(
+          0,
+          MAX_LEVEL_LABEL_LENGTH,
+        ),
+        minSeconds,
+        maxSeconds,
+        multiplier,
+      } satisfies WorkbenchEpisodeDurationLevel;
+    })
+    .filter((value): value is WorkbenchEpisodeDurationLevel => Boolean(value))
+    .sort((left, right) => left.minSeconds - right.minSeconds)
+    .slice(0, MAX_DURATION_LEVELS);
+}
+
 export function normalizeWorkbenchRewardRulesInput(
   input: unknown,
 ): Omit<WorkbenchRewardRules, "source" | "updatedAt"> {
@@ -186,6 +239,32 @@ export function normalizeWorkbenchRewardRulesInput(
   if (levels[0].minPercent !== 0) {
     throw new Error("The first reward level must start at 0%.");
   }
+  const episodeDurationLevels = normalizeWorkbenchEpisodeDurationLevels(
+    raw.episodeDurationLevels,
+  );
+  if (episodeDurationLevels.length === 0) {
+    throw new Error("At least one episode duration level is required.");
+  }
+  if (episodeDurationLevels[0].minSeconds !== 0) {
+    throw new Error(
+      "The first episode duration level must start at 0 seconds.",
+    );
+  }
+  for (let index = 1; index < episodeDurationLevels.length; index += 1) {
+    const previous = episodeDurationLevels[index - 1];
+    const current = episodeDurationLevels[index];
+    if (previous.maxSeconds === null) {
+      throw new Error(
+        "Only the last episode duration level may be open-ended.",
+      );
+    }
+    if (Math.abs(previous.maxSeconds - current.minSeconds) > 1e-9) {
+      throw new Error("Episode duration level ranges must be continuous.");
+    }
+  }
+  if (episodeDurationLevels.at(-1)?.maxSeconds !== null) {
+    throw new Error("The last episode duration level must be open-ended.");
+  }
   const qualityBonusByGrade = normalizeWorkbenchQualityBonusByGrade(
     raw.qualityBonusByGrade ?? raw.qualityBonus ?? raw.qualityBonuses,
   );
@@ -204,6 +283,7 @@ export function normalizeWorkbenchRewardRulesInput(
     enabled,
     dailyTargetHours,
     levels,
+    episodeDurationLevels,
     qualityBonusByGrade,
   };
 }
@@ -211,38 +291,13 @@ export function normalizeWorkbenchRewardRulesInput(
 export function evaluateWorkbenchRewardRules(
   hours: number,
   targetHours: number,
-  rules: Pick<WorkbenchRewardRules, "enabled" | "levels">,
-): {
-  percent: number | null;
-  level: WorkbenchRewardRuleLevel | null;
-  amount: number;
-  symbol: "✅" | "❌" | "…" | "—";
-} {
-  if (
-    !Number.isFinite(hours) ||
-    !Number.isFinite(targetHours) ||
-    targetHours <= 0
-  ) {
-    return { percent: null, level: null, amount: 0, symbol: "—" };
-  }
-  const percent = (hours / targetHours) * 100;
-  if (!rules.enabled) {
-    return { percent, level: null, amount: 0, symbol: "—" };
-  }
-  const level =
-    [...rules.levels]
-      .sort((left, right) => left.minPercent - right.minPercent)
-      .find((entry) => {
-        const upperBound = entry.maxPercent;
-        if (percent < entry.minPercent) return false;
-        if (upperBound === null) return true;
-        return percent < upperBound;
-      }) ??
-    rules.levels.at(-1) ??
-    null;
-  const amount = level?.amount ?? 0;
-  const symbol = amount > 0 ? "✅" : amount < 0 ? "❌" : "…";
-  return { percent, level, amount, symbol };
+  rules: Pick<
+    WorkbenchRewardRules,
+    "enabled" | "levels" | "episodeDurationLevels"
+  >,
+  totalEpisodes?: number | null,
+) {
+  return evaluateRewardRules(hours, targetHours, rules, totalEpisodes);
 }
 
 export async function readWorkbenchRewardRules(
@@ -304,6 +359,7 @@ export async function writeWorkbenchRewardRules(
       enabled: normalized.enabled,
       dailyTargetHours: normalized.dailyTargetHours,
       levels: normalized.levels,
+      episodeDurationLevels: normalized.episodeDurationLevels,
       qualityBonusByGrade: normalized.qualityBonusByGrade,
       updatedAt,
     },

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from concurrent.futures import ThreadPoolExecutor, wait
 import os
 import sys
 import tempfile
@@ -17,7 +16,7 @@ os.environ.setdefault("HF_ENDPOINT", "https://huggingface.co")
 os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "15")
 os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
 
-CATALOG_VERSION = 2
+CATALOG_VERSION = 3
 RESERVED_ROOT_DIRECTORIES = {"data", "videos", "meta"}
 
 
@@ -57,45 +56,6 @@ def is_missing_entry(exc: Exception) -> bool:
     return "404" in message and ("not found" in message or "entry" in message)
 
 
-def cached_snapshot(repo_id: str, revision: str | None) -> Path | None:
-    if not revision or "/" in revision or "\\" in revision or revision in {".", ".."}:
-        return None
-    parts = repo_id.split("/")
-    if len(parts) != 2 or any(not safe_segment(part) for part in parts):
-        return None
-    cache_root = Path(
-        os.environ.get("HF_HUB_CACHE")
-        or Path.home() / ".cache" / "huggingface" / "hub"
-    )
-    snapshot = (
-        cache_root
-        / f"datasets--{parts[0]}--{parts[1]}"
-        / "snapshots"
-        / revision
-    )
-    return snapshot if snapshot.is_dir() else None
-
-
-def cached_folder_child_names(
-    repo_id: str, revision: str | None
-) -> list[str] | None:
-    snapshot = cached_snapshot(repo_id, revision)
-    if snapshot is None:
-        return None
-    names = {
-        item.name
-        for item in snapshot.iterdir()
-        if item.is_dir()
-        and safe_segment(item.name)
-        and item.name not in RESERVED_ROOT_DIRECTORIES
-        and (item / "meta" / "info.json").is_file()
-    }
-    # A partial HF snapshot may contain payload files but no metadata. In that
-    # case the Hub must remain the source of truth rather than misclassifying a
-    # regular dataset as an empty Folder.
-    return sorted(names) if names else None
-
-
 def local_state(root: Path, repo_id: str) -> str:
     dataset_dir = root.joinpath(*repo_id.split("/"))
     if not dataset_dir.is_dir():
@@ -117,13 +77,23 @@ def read_cache(path: Path) -> dict[str, Any]:
 
 
 def reusable_cache_entries(cached: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    if cached.get("catalogVersion") != CATALOG_VERSION:
-        return {}
-    return {
+    entries = {
         str(entry.get("repoId")): entry
         for entry in cached.get("datasets", [])
         if isinstance(entry, dict) and entry.get("repoId")
     }
+    version = cached.get("catalogVersion")
+    if version == CATALOG_VERSION:
+        return entries
+    # Version 2 did not need a new probe for ordinary datasets. Folder rows
+    # must be omitted so their root tree is re-listed without child metadata.
+    if version == CATALOG_VERSION - 1:
+        return {
+            repo_id: entry
+            for repo_id, entry in entries.items()
+            if entry.get("layout") != "folder"
+        }
+    return {}
 
 
 def uploader_for(api: Any, repo_id: str, token: str | None) -> str | None:
@@ -237,9 +207,6 @@ def minimal_entry(
 def root_child_names(
     api: Any, repo_id: str, token: str | None, revision: str | None = None
 ) -> list[str]:
-    cached = cached_folder_child_names(repo_id, revision)
-    if cached is not None:
-        return cached
     list_tree = getattr(api, "list_repo_tree", None)
     if callable(list_tree):
         items = list(
@@ -248,6 +215,7 @@ def root_child_names(
                 path_in_repo="",
                 recursive=False,
                 repo_type="dataset",
+                revision=revision,
                 token=token,
             )
         )
@@ -267,15 +235,16 @@ def root_child_names(
         return sorted(output)
 
     files = api.list_repo_files(
-        repo_id=repo_id, repo_type="dataset", token=token
+        repo_id=repo_id,
+        repo_type="dataset",
+        revision=revision,
+        token=token,
     )
     output = set()
     for filename in files:
         parts = str(filename).split("/")
         if (
-            len(parts) == 3
-            and parts[1] == "meta"
-            and parts[2] == "info.json"
+            len(parts) >= 2
             and safe_segment(parts[0])
             and parts[0] not in RESERVED_ROOT_DIRECTORIES
         ):
@@ -289,26 +258,34 @@ def read_downloaded_info(
     token: str | None,
     revision: str | None = None,
 ) -> dict[str, Any]:
-    # A cached Folder snapshot proves the root metadata file is absent. Avoid
-    # a doomed Hub request before probing the cached child files.
-    if filename == "meta/info.json" and cached_folder_child_names(repo_id, revision):
-        raise FileNotFoundError(filename)
     from huggingface_hub import hf_hub_download
 
-    try:
+    if revision:
+        try:
+            downloaded = hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                repo_type="dataset",
+                token=token,
+                revision=revision,
+                local_files_only=True,
+            )
+        except Exception:
+            downloaded = hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                repo_type="dataset",
+                token=token,
+                revision=revision,
+            )
+    else:
+        # Without an immutable SHA, a local-only "main" snapshot may be stale.
         downloaded = hf_hub_download(
             repo_id=repo_id,
             filename=filename,
             repo_type="dataset",
             token=token,
-            local_files_only=True,
-        )
-    except Exception:
-        downloaded = hf_hub_download(
-            repo_id=repo_id,
-            filename=filename,
-            repo_type="dataset",
-            token=token,
+            revision=None,
         )
     parsed = json.loads(Path(downloaded).read_text(encoding="utf-8"))
     if not isinstance(parsed, dict):
@@ -324,60 +301,12 @@ def folder_children(
     revision: str | None = None,
 ) -> list[dict[str, Any]]:
     names = root_child_names(api, repo_id, token, revision)
-    if not names:
-        return []
-
-    def probe(child_name: str) -> dict[str, Any] | None:
-        filename = f"{child_name}/meta/info.json"
-        try:
-            info = read_downloaded_info(repo_id, filename, token, revision)
-            return {
-                "name": child_name,
-                "path": child_name,
-                **info_fields(info),
-                "metadataState": "ok",
-            }
-        except Exception as exc:
-            if is_missing_entry(exc):
-                return None
-            return {
-                "name": child_name,
-                "path": child_name,
-                "totalEpisodes": None,
-                "totalFrames": None,
-                "totalTasks": None,
-                "fps": None,
-                "durationHours": None,
-                "robotType": None,
-                "metadataState": "error",
-                "metadataError": safe_error(exc, token),
-            }
-
-    results: dict[str, dict[str, Any] | None] = {}
-    pending = set()
-    with ThreadPoolExecutor(max_workers=min(16, len(names))) as pool:
-        futures = {
-            pool.submit(probe, child_name): child_name for child_name in names
-        }
-        pending.update(futures)
-        completed = 0
-        while pending:
-            done, pending = wait(pending, timeout=5)
-            if not done:
-                if progress:
-                    progress(completed, len(names), None)
-                continue
-            for future in done:
-                child_name = futures[future]
-                results[child_name] = future.result()
-                completed += 1
-                if progress:
-                    progress(completed, len(names), child_name)
-    return [
-        results[name]
-        for name in names
-        if results.get(name) is not None
-    ]
+    children = []
+    for index, name in enumerate(names, start=1):
+        children.append({"name": name, "path": name})
+        if progress:
+            progress(index, len(names), name)
+    return children
 
 
 def build_entry(
@@ -394,6 +323,7 @@ def build_entry(
     sha = fields["sha"]
     if (
         old
+        and sha
         and not force
         and old.get("sha") == sha
     ):
@@ -415,27 +345,13 @@ def build_entry(
             return minimal_entry(item, root, safe_error(child_exc, token))
         if not children:
             return minimal_entry(item, root, safe_error(exc, token))
-        child_errors = [
-            child
-            for child in children
-            if child.get("metadataState") == "error"
-        ]
         return {
             **minimal_entry(item, root),
             "layout": "folder",
             "children": children,
             **fields,
             "uploader": uploader_for(api, repo_id, token),
-            "metadataState": "partial" if child_errors else "ok",
-            **(
-                {
-                    "metadataError": (
-                        f"{len(child_errors)} Folder child metadata file(s) could not be parsed"
-                    )
-                }
-                if child_errors
-                else {}
-            ),
+            "metadataState": "ok",
         }
 
     return {
@@ -466,8 +382,8 @@ def main() -> int:
     root = Path(args.root).resolve()
     cache_path = Path(args.cache).resolve()
     cached = read_cache(cache_path)
-    # Schema upgrades deliberately invalidate same-SHA entries so Folder layout
-    # is discovered on the next explicit Refresh statistics.
+    # Schema upgrades retain safe ordinary rows but deliberately invalidate
+    # same-SHA Folder rows so their root layout is re-discovered.
     old_by_repo = reusable_cache_entries(cached)
     token = os.environ.get("HF_TOKEN") or None
     api = HfApi()

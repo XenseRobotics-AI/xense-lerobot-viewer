@@ -62,6 +62,39 @@ describe("Workbench shared synchronization", () => {
     ]);
   });
 
+  test("migrates old shared reward rules with default duration tiers", () => {
+    const document = parseWorkbenchSharedConfig(
+      {
+        schema: "xense.workbench.config/1",
+        version: 1,
+        kind: "reward-rules",
+        org: "TacVerse",
+        updatedAt: "2026-09-05T08:00:00.000Z",
+        data: {
+          enabled: true,
+          dailyTargetHours: 6,
+          levels: [
+            {
+              id: "all",
+              label: "All",
+              minPercent: 0,
+              maxPercent: null,
+              amount: 10,
+            },
+          ],
+        },
+      },
+      "reward-rules",
+      "TacVerse",
+    );
+
+    expect(
+      (
+        document.data.episodeDurationLevels as Array<{ multiplier: number }>
+      ).map((level) => level.multiplier),
+    ).toEqual([1.2, 1.1, 1]);
+  });
+
   test("selects the newer config and resolves timestamp ties deterministically", () => {
     const older = parseWorkbenchSharedConfig(
       {

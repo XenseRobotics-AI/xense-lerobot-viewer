@@ -24,8 +24,10 @@ import {
 } from "@/components/sync-progress";
 import { runSync } from "@/utils/syncClient";
 import {
-  parseTacverseHubCategoryFilter,
-  type TacverseHubCategoryFilter,
+  parseTacverseHubCategorySelection,
+  serializeTacverseHubCategorySelection,
+  toggleTacverseHubCategorySelection,
+  type TacverseHubCategory,
 } from "@/utils/workbenchHubCategory";
 
 type QualityCheckResult = {
@@ -266,10 +268,11 @@ export default function DatasetReviewPanel({
   const [statisticsProgressError, setStatisticsProgressError] = useState<
     string | null
   >(null);
-  const [hubCategoryFilter, setHubCategoryFilter] =
-    useState<TacverseHubCategoryFilter>(() =>
-      parseTacverseHubCategoryFilter(searchParams.get("workbenchHubCategory")),
-    );
+  const [hubCategoryFilter, setHubCategoryFilter] = useState<
+    TacverseHubCategory[]
+  >(() =>
+    parseTacverseHubCategorySelection(searchParams.get("workbenchHubCategory")),
+  );
   const [workbenchView, setWorkbenchView] = useState<
     "dataset-statistics" | "checks" | "grouping"
   >("grouping");
@@ -278,11 +281,9 @@ export default function DatasetReviewPanel({
     workbenchView === "checks" ? organization : "TacVerse";
   useEffect(() => {
     const url = new URL(window.location.href);
-    if (hubCategoryFilter === "all") {
-      url.searchParams.delete("workbenchHubCategory");
-    } else {
-      url.searchParams.set("workbenchHubCategory", hubCategoryFilter);
-    }
+    const serialized = serializeTacverseHubCategorySelection(hubCategoryFilter);
+    if (serialized === "all") url.searchParams.delete("workbenchHubCategory");
+    else url.searchParams.set("workbenchHubCategory", serialized);
     window.history.replaceState(window.history.state, "", url);
   }, [hubCategoryFilter]);
   useEffect(() => {
@@ -814,12 +815,21 @@ export default function DatasetReviewPanel({
           </legend>
           <div
             className="flex flex-wrap items-center gap-x-5 gap-y-2"
-            role="radiogroup"
             aria-label="Dataset category"
           >
+            <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-slate-300">
+              <input
+                type="checkbox"
+                name="workbenchHubCategory"
+                value="all"
+                checked={hubCategoryFilter.length === 0}
+                onChange={() => setHubCategoryFilter([])}
+                className="accent-cyan-400"
+              />
+              <span>All datasets</span>
+            </label>
             {(
               [
-                ["all", "All datasets"],
                 ["taccap-g1", "TacVerse/taccap-g1 · Dated"],
                 ["xtac-umi-g1", "TacVerse/xtac-umi-g1"],
                 ["taccap-g1-merged", "TacVerse/taccap-g1 · Merged"],
@@ -832,11 +842,15 @@ export default function DatasetReviewPanel({
                 className="inline-flex cursor-pointer items-center gap-2 text-xs text-slate-300"
               >
                 <input
-                  type="radio"
+                  type="checkbox"
                   name="workbenchHubCategory"
                   value={value}
-                  checked={hubCategoryFilter === value}
-                  onChange={() => setHubCategoryFilter(value)}
+                  checked={hubCategoryFilter.includes(value)}
+                  onChange={() =>
+                    setHubCategoryFilter((current) =>
+                      toggleTacverseHubCategorySelection(current, value),
+                    )
+                  }
                   className="accent-cyan-400"
                 />
                 <span>{label}</span>

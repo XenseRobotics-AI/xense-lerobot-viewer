@@ -146,6 +146,8 @@ export type WorkbenchDisplayWorkstationRow = Readonly<{
   reward: number;
   rule?: string | null;
   ruleSymbol?: WorkbenchRewardPreview["symbol"];
+  averageEpisodeSeconds?: number | null;
+  durationMultiplier?: number;
 }>;
 
 /**

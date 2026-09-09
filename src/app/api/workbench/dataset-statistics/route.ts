@@ -1,10 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  readRawHfCatalog,
-  type HfCatalogEntry,
-  type HfCatalogFolderChild,
-} from "@/lib/hf-catalog-cache";
+import { readRawHfCatalog, type HfCatalogEntry } from "@/lib/hf-catalog-cache";
 import {
   discoverLocalDatasets,
   type LocalDatasetSummary,
@@ -20,9 +16,10 @@ import {
   countTacverseHubCategories,
   EMPTY_TACVERSE_HUB_CATEGORY_COUNTS,
   hubRepoIdForLocalDatasetPath,
-  isTacverseHubCategoryFilter,
+  isTacverseHubCategorySelection,
+  parseTacverseHubCategorySelection,
   matchesTacverseHubCategory,
-  type TacverseHubCategoryFilter,
+  type TacverseHubCategorySelection,
   type TacverseHubClassificationInput,
 } from "@/utils/workbenchHubCategory";
 import type {
@@ -54,7 +51,8 @@ function safeChildPath(value: unknown): string | null {
     !pathValue.startsWith(".") &&
     !pathValue.includes("/") &&
     !pathValue.includes("\\") &&
-    pathValue !== ".."
+    pathValue !== ".." &&
+    !["data", "videos", "meta"].includes(pathValue)
     ? pathValue
     : null;
 }
@@ -186,86 +184,6 @@ function issuesStatus(
   return "ok";
 }
 
-function childRow(
-  parent: HfCatalogEntry & { repoId: string },
-  child: HfCatalogFolderChild,
-  local: LocalDatasetSummary | undefined,
-): TacverseDatasetStatisticsRow | null {
-  const childPath = safeChildPath(child.path) ?? safeChildPath(child.name);
-  if (!childPath) return null;
-  const episodes = finiteNonNegative(child.totalEpisodes);
-  const frames = finiteNonNegative(child.totalFrames);
-  const fps = finiteNonNegative(child.fps);
-  const explicitHours = finiteNonNegative(child.durationHours);
-  const hours =
-    explicitHours ??
-    (frames !== null && fps !== null && fps > 0 ? frames / fps / 3600 : null);
-  const state =
-    child.metadataState === "error"
-      ? "unavailable"
-      : metricState([episodes, frames, hours]);
-  const status = localStatus(local, false);
-  return {
-    rowType: "child",
-    repoId: `${parent.repoId}/${childPath}`,
-    hubRepoId: parent.repoId,
-    hubPath: childPath,
-    hubUrl: hubUrl(parent.repoId, childPath),
-    name: stringOrNull(child.name) ?? childPath,
-    robotType: stringOrNull(child.robotType),
-    robotTypes: stringOrNull(child.robotType)
-      ? [stringOrNull(child.robotType)!]
-      : [],
-    episodes,
-    frames,
-    hours,
-    metricsState: state,
-    categoryWarning:
-      child.metadataState === "error"
-        ? (stringOrNull(child.metadataError) ??
-          "Child metadata is unavailable.")
-        : null,
-    localStatus: status,
-    issuesStatus:
-      status !== "downloaded" ? "fail" : state === "ok" ? "ok" : "warn",
-    createdAt: stringOrNull(parent.createdAt),
-    lastModified: stringOrNull(parent.lastModified),
-    downloads: null,
-    children: [],
-  };
-}
-
-function aggregate(
-  rows: readonly TacverseDatasetStatisticsRow[],
-  field: "episodes" | "frames" | "hours",
-): number | null {
-  const values = rows
-    .map((row) => row[field])
-    .filter((value): value is number => value !== null);
-  return values.length > 0
-    ? values.reduce((sum, value) => sum + value, 0)
-    : null;
-}
-
-function folderStatus(
-  children: readonly TacverseDatasetStatisticsRow[],
-  directCopyExists: boolean,
-): TacverseLocalStatus {
-  if (
-    children.length > 0 &&
-    children.every((child) => child.localStatus === "downloaded")
-  ) {
-    return "downloaded";
-  }
-  if (
-    directCopyExists ||
-    children.some((child) => child.localStatus !== "missing")
-  ) {
-    return "incomplete";
-  }
-  return "missing";
-}
-
 function rowFromCatalog(
   entry: HfCatalogEntry & { repoId: string },
   localByRepo: ReadonlyMap<string, LocalDatasetSummary>,
@@ -284,54 +202,54 @@ function rowFromCatalog(
   };
 
   if (classification.category === "folder") {
-    const children = (Array.isArray(entry.children) ? entry.children : [])
-      .map((child) => {
-        const childPath =
-          safeChildPath(child.path) ?? safeChildPath(child.name);
-        return childRow(
-          entry,
-          child,
-          childPath
-            ? localByPath.get(`${entry.repoId}/${childPath}`)
-            : undefined,
-        );
-      })
-      .filter((row): row is TacverseDatasetStatisticsRow => row !== null);
-    const episodes = aggregate(children, "episodes");
-    const frames = aggregate(children, "frames");
-    const hours = aggregate(children, "hours");
-    const robotTypes = Array.from(
-      new Set(
-        children
-          .map((child) => child.robotType)
-          .filter((value): value is string => value !== null),
-      ),
-    ).sort();
-    const status = folderStatus(children, directCopyExists);
-    const hasPartialChild = children.some(
-      (child) => child.metricsState !== "ok",
-    );
-    const state: TacverseMetricsState =
-      children.length === 0 ||
-      [episodes, frames, hours].every((v) => v === null)
-        ? "unavailable"
-        : hasPartialChild
-          ? "partial"
-          : "ok";
+    const children = (
+      Array.isArray(entry.children) ? entry.children : []
+    ).flatMap((child) => {
+      const childPath = safeChildPath(child.path) ?? safeChildPath(child.name);
+      if (!childPath) return [];
+      const status = localStatus(
+        localByPath.get(`${entry.repoId}/${childPath}`),
+        false,
+      );
+      return [
+        {
+          rowType: "child" as const,
+          repoId: `${entry.repoId}/${childPath}`,
+          hubRepoId: entry.repoId,
+          hubPath: childPath,
+          hubUrl: hubUrl(entry.repoId, childPath),
+          name: childPath,
+          robotType: null,
+          robotTypes: [],
+          episodes: null,
+          frames: null,
+          hours: null,
+          metricsState: "unavailable" as const,
+          categoryWarning: null,
+          localStatus: status,
+          issuesStatus:
+            status === "downloaded" ? ("warn" as const) : ("fail" as const),
+          createdAt: stringOrNull(entry.createdAt),
+          lastModified: stringOrNull(entry.lastModified),
+          downloads: null,
+          children: [],
+        },
+      ];
+    });
+    const status = localStatus(localByRepo.get(entry.repoId), directCopyExists);
     return {
       rowType: "folder",
       repoId: entry.repoId,
       ...base,
-      robotType: robotTypes.length === 1 ? robotTypes[0] : null,
-      robotTypes,
-      episodes,
-      frames,
-      hours,
-      metricsState: state,
+      robotType: null,
+      robotTypes: [],
+      episodes: null,
+      frames: null,
+      hours: null,
+      metricsState: "unavailable",
       categoryWarning: null,
       localStatus: status,
-      issuesStatus:
-        status !== "downloaded" ? "fail" : state === "ok" ? "ok" : "warn",
+      issuesStatus: status === "downloaded" ? "warn" : "fail",
       children,
     };
   }
@@ -376,11 +294,10 @@ function rowFromCatalog(
 
 function categoryFromRequest(
   request: Request,
-): { ok: true; value: TacverseHubCategoryFilter } | { ok: false } {
+): { ok: true; value: TacverseHubCategorySelection } | { ok: false } {
   const value = new URL(request.url).searchParams.get("category");
-  if (value === null) return { ok: true, value: "all" };
-  return isTacverseHubCategoryFilter(value)
-    ? { ok: true, value }
+  return isTacverseHubCategorySelection(value)
+    ? { ok: true, value: parseTacverseHubCategorySelection(value) }
     : { ok: false };
 }
 

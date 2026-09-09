@@ -205,6 +205,7 @@ export async function readLocalWorkbenchSharedConfigs(
         enabled: rewards.enabled,
         dailyTargetHours: rewards.dailyTargetHours,
         levels: rewards.levels,
+        episodeDurationLevels: rewards.episodeDurationLevels,
         qualityBonusByGrade: rewards.qualityBonusByGrade,
       },
     },
@@ -260,6 +261,7 @@ export function parseWorkbenchSharedConfig(
       enabled: normalized.enabled,
       dailyTargetHours: normalized.dailyTargetHours,
       levels: normalized.levels,
+      episodeDurationLevels: normalized.episodeDurationLevels,
       qualityBonusByGrade: normalized.qualityBonusByGrade,
     };
   }

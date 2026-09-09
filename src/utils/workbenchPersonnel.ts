@@ -96,6 +96,7 @@ export function computeWorkbenchPersonnelRollup(
   datasetScores: ReadonlyMap<string, WorkbenchDatasetScore> = new Map(),
 ): WorkbenchPersonnelRollup {
   const workstationHours = new Map<string, number>();
+  const workstationEpisodes = new Map<string, number>();
   const datasetAdditions = new Map<string, WorkbenchDailyAddition[]>();
   for (const dataset of datasets) {
     const workstationKey =
@@ -113,8 +114,15 @@ export function computeWorkbenchPersonnelRollup(
       datasetAdditions.set(dataset.relativePath, additions);
     for (const addition of additions) {
       const hours = Number(addition.hours);
+      const episodes = Number(addition.episodes);
       const key = [addition.day, workstation || "—"].join("\u0000");
       workstationHours.set(key, (workstationHours.get(key) ?? 0) + hours);
+      if (Number.isFinite(episodes) && episodes > 0) {
+        workstationEpisodes.set(
+          key,
+          (workstationEpisodes.get(key) ?? 0) + Math.trunc(episodes),
+        );
+      }
     }
   }
 
@@ -135,6 +143,7 @@ export function computeWorkbenchPersonnelRollup(
   const unattributed = new Map<string, number>();
   type MutableWorkstation = {
     hours: number;
+    episodes: number;
     targetHours: number;
     assignmentDays: number;
     memberShareSums: Map<string, number>;
@@ -166,12 +175,15 @@ export function computeWorkbenchPersonnelRollup(
       const workstationKey = assignment.workstation.trim();
       const workstationRollup = workstationRollups.get(workstationKey) ?? {
         hours: 0,
+        episodes: 0,
         targetHours: 0,
         assignmentDays: 0,
         memberShareSums: new Map<string, number>(),
       };
-      workstationRollup.hours +=
-        workstationHours.get([day, assignment.workstation].join("\u0000")) ?? 0;
+      const workstationDayKey = [day, assignment.workstation].join("\u0000");
+      workstationRollup.hours += workstationHours.get(workstationDayKey) ?? 0;
+      workstationRollup.episodes +=
+        workstationEpisodes.get(workstationDayKey) ?? 0;
       workstationRollup.targetHours += rewardRules.dailyTargetHours;
       workstationRollup.assignmentDays += 1;
 
@@ -217,6 +229,7 @@ export function computeWorkbenchPersonnelRollup(
       workstation.hours,
       workstation.targetHours,
       rewardRules,
+      workstation.episodes,
     );
     if (workstation.assignmentDays <= 0) continue;
     for (const [personId, shareSum] of workstation.memberShareSums) {

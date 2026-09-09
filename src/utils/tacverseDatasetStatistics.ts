@@ -1,6 +1,6 @@
 import type {
   TacverseHubCategoryCounts,
-  TacverseHubCategoryFilter,
+  TacverseHubCategorySelection,
 } from "@/utils/workbenchHubCategory";
 
 export type TacverseLocalStatus = "downloaded" | "incomplete" | "missing";
@@ -34,7 +34,7 @@ export type TacverseDatasetStatisticsRow = {
 export type TacverseDatasetStatisticsResponse = {
   organization: "TacVerse";
   refreshedAt: string | null;
-  categoryFilter: TacverseHubCategoryFilter;
+  categoryFilter: TacverseHubCategorySelection;
   hubTotal: number;
   categoryTotal: number;
   categoryCounts: TacverseHubCategoryCounts;

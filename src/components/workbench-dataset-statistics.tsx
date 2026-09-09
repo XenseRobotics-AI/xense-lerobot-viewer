@@ -2,7 +2,11 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { formatCompact, formatEpisodeLength } from "@/utils/corpusStats";
-import type { TacverseHubCategoryFilter } from "@/utils/workbenchHubCategory";
+import {
+  EMPTY_TACVERSE_HUB_CATEGORY_SELECTION,
+  serializeTacverseHubCategorySelection,
+  type TacverseHubCategorySelection,
+} from "@/utils/workbenchHubCategory";
 import {
   filterTacverseDatasetStatistics,
   formatRelativeUpdatedAt,
@@ -84,10 +88,10 @@ function localBadge(status: TacverseLocalStatus) {
 }
 
 export default function WorkbenchDatasetStatistics({
-  categoryFilter = "all",
+  categoryFilter = EMPTY_TACVERSE_HUB_CATEGORY_SELECTION,
   refreshToken = 0,
 }: {
-  categoryFilter?: TacverseHubCategoryFilter;
+  categoryFilter?: TacverseHubCategorySelection;
   refreshToken?: number;
 }) {
   const [payload, setPayload] =
@@ -115,7 +119,9 @@ export default function WorkbenchDatasetStatistics({
 
     fetch(
       "/api/workbench/dataset-statistics?category=" +
-        encodeURIComponent(categoryFilter),
+        encodeURIComponent(
+          serializeTacverseHubCategorySelection(categoryFilter),
+        ),
       {
         cache: "no-store",
         signal: controller.signal,

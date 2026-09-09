@@ -732,7 +732,7 @@ describe("Workbench statistics route", () => {
     );
     const firstParty = await firstPartyResponse.json();
     expect(firstParty).toMatchObject({
-      categoryFilter: "taccap-g1",
+      categoryFilter: ["taccap-g1"],
       refreshedAt: "2026-09-05T08:00:00Z",
       hubTotal: 3,
       categoryTotal: 2,
@@ -764,6 +764,27 @@ describe("Workbench statistics route", () => {
       ),
     ).toEqual(["TacVerse/released/xtac-umi-g1-other-0905"]);
 
+    const unionResponse = await GET(
+      new Request(
+        "http://localhost/api/workbench/statistics?org=TacVerse&category=taccap-g1,xtac-umi-g1",
+      ),
+    );
+    const union = await unionResponse.json();
+    expect(union).toMatchObject({
+      categoryFilter: ["taccap-g1", "xtac-umi-g1"],
+      hubTotal: 3,
+      categoryTotal: 3,
+      localMatchedTotal: 2,
+    });
+    expect(
+      union.datasets.map(
+        (dataset: { relativePath: string }) => dataset.relativePath,
+      ),
+    ).toEqual([
+      "TacVerse/taccap-g1-first-party-0905",
+      "TacVerse/released/xtac-umi-g1-other-0905",
+    ]);
+
     const invalid = await GET(
       new Request(
         "http://localhost/api/workbench/statistics?org=TacVerse&category=invalid",
@@ -786,7 +807,7 @@ describe("Workbench statistics route", () => {
       datasets: [],
     });
   });
-  test("maps Folder children to one Hub parent while retaining child statistics", async () => {
+  test("excludes Folder repositories and children from Workbench aggregation", async () => {
     await writeDataset("TacVerse/sampledata/child-a");
     await writeDataset("TacVerse/sampledata/child-b");
     await writeDataset("TacVerse/sampledata/merged");
@@ -845,10 +866,10 @@ describe("Workbench statistics route", () => {
     );
     const payload = await response.json();
     expect(payload).toMatchObject({
-      categoryFilter: "folder",
+      categoryFilter: ["folder"],
       hubTotal: 1,
       categoryTotal: 1,
-      localMatchedTotal: 1,
+      localMatchedTotal: 0,
       categoryCounts: {
         "taccap-g1": 0,
         "xtac-umi-g1": 0,
@@ -857,24 +878,6 @@ describe("Workbench statistics route", () => {
         other: 0,
       },
     });
-    expect(
-      payload.datasets.map(
-        (dataset: { relativePath: string }) => dataset.relativePath,
-      ),
-    ).toEqual([
-      "TacVerse/sampledata/child-a",
-      "TacVerse/sampledata/child-b",
-      "TacVerse/sampledata/merged",
-    ]);
-    expect(payload.datasets[0]).toMatchObject({
-      total_episodes: 4,
-      total_frames: 7200,
-      durationHours: 0.2,
-    });
-    expect(payload.datasets[1]).toMatchObject({
-      total_episodes: 6,
-      total_frames: 10800,
-      durationHours: 0.3,
-    });
+    expect(payload.datasets).toEqual([]);
   });
 });

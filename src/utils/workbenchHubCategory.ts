@@ -7,6 +7,7 @@ export type TacverseHubCategory =
   | "folder"
   | "other";
 export type TacverseHubCategoryFilter = "all" | TacverseHubCategory;
+export type TacverseHubCategorySelection = readonly TacverseHubCategory[];
 
 export type TacverseHubCategoryCounts = Readonly<
   Record<TacverseHubCategory, number>
@@ -33,6 +34,14 @@ export const TACVERSE_HUB_CATEGORY_FILTERS: readonly TacverseHubCategoryFilter[]
     "folder",
     "other",
   ]);
+
+export const TACVERSE_HUB_CATEGORIES: readonly TacverseHubCategory[] =
+  TACVERSE_HUB_CATEGORY_FILTERS.filter(
+    (value): value is TacverseHubCategory => value !== "all",
+  );
+
+export const EMPTY_TACVERSE_HUB_CATEGORY_SELECTION: TacverseHubCategorySelection =
+  Object.freeze([]);
 
 export const EMPTY_TACVERSE_HUB_CATEGORY_COUNTS: TacverseHubCategoryCounts =
   Object.freeze({
@@ -153,16 +162,72 @@ export function parseTacverseHubCategoryFilter(
   return isTacverseHubCategoryFilter(value) ? value : "all";
 }
 
+/** Parse a comma-separated category selection. An absent value means All. */
+export function parseTacverseHubCategorySelection(
+  value: string | null | undefined,
+): TacverseHubCategory[] {
+  if (!value || value === "all") return [];
+  const requested = new Set(value.split(",").map((part) => part.trim()));
+  if (requested.has("all")) return [];
+  return TACVERSE_HUB_CATEGORIES.filter((category) => requested.has(category));
+}
+
+/** True when every comma-separated value is known (or the value is `all`). */
+export function isTacverseHubCategorySelection(
+  value: string | null | undefined,
+): boolean {
+  if (
+    value === null ||
+    value === undefined ||
+    value === "" ||
+    value === "all"
+  ) {
+    return true;
+  }
+  const parts = value.split(",");
+  return (
+    parts.length > 0 &&
+    parts.every(
+      (part) =>
+        part.trim() !== "all" &&
+        (TACVERSE_HUB_CATEGORIES as readonly string[]).includes(part.trim()),
+    )
+  );
+}
+
+/** Serialize in canonical order; All is represented by `all`. */
+export function serializeTacverseHubCategorySelection(
+  selection: TacverseHubCategorySelection,
+): string {
+  const selected = new Set(selection);
+  const values = TACVERSE_HUB_CATEGORIES.filter((value) => selected.has(value));
+  return values.length > 0 ? values.join(",") : "all";
+}
+
+export function toggleTacverseHubCategorySelection(
+  selection: TacverseHubCategorySelection,
+  category: TacverseHubCategory,
+): TacverseHubCategory[] {
+  const selected = new Set(selection);
+  if (selected.has(category)) selected.delete(category);
+  else selected.add(category);
+  return TACVERSE_HUB_CATEGORIES.filter((value) => selected.has(value));
+}
+
 export function matchesTacverseHubCategory(
   input: string | TacverseHubClassificationInput,
-  filter: TacverseHubCategoryFilter,
+  filter: TacverseHubCategoryFilter | TacverseHubCategorySelection,
 ): boolean {
-  if (filter === "all") return true;
+  if (filter === "all" || (Array.isArray(filter) && filter.length === 0)) {
+    return true;
+  }
   const classification =
     typeof input === "string"
       ? classifyTacverseHubRepository({ repoId: input })
       : classifyTacverseHubRepository(input);
-  return classification.category === filter;
+  return Array.isArray(filter)
+    ? filter.includes(classification.category)
+    : classification.category === filter;
 }
 
 export function countTacverseHubCategories(

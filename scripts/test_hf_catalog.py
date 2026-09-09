@@ -1,4 +1,3 @@
-import json
 import sys
 import tempfile
 import types
@@ -77,62 +76,53 @@ class CatalogEntryTest(unittest.TestCase):
         self.assertIsNone(entry["lastModified"])
         self.assertIsNone(entry["downloads"])
 
-    def test_detects_folder_children_and_keeps_corrupt_children_partial(self) -> None:
+    def test_folder_lists_only_safe_direct_child_names_without_metadata_downloads(self) -> None:
         item = types.SimpleNamespace(
-            id="TacVerse/sampledata",
-            sha="folder-sha",
-            createdAt=None,
-            lastModified=None,
-            downloads=5,
+            id="TacVerse/sampledata", sha="folder-sha", createdAt=None,
+            lastModified=None, downloads=5,
         )
+        calls = []
 
         class Api:
-            def list_repo_tree(self, **_kwargs):
+            def list_repo_tree(self, **kwargs):
+                calls.append({"tree": kwargs})
                 return [
                     types.SimpleNamespace(path="child-a", type="directory"),
                     types.SimpleNamespace(path="child-b", type="directory"),
                     types.SimpleNamespace(path="data", type="directory"),
+                    types.SimpleNamespace(path="nested/child", type="directory"),
                     types.SimpleNamespace(path="../escape", type="directory"),
                 ]
 
             def list_repo_commits(self, **_kwargs):
                 return []
 
-        with tempfile.TemporaryDirectory() as temporary:
-            temp = Path(temporary)
+        def download(*, filename: str, revision=None, **_kwargs):
+            calls.append({"download": filename, "revision": revision})
+            raise FileNotFoundError(filename)
 
-            def download(*, filename: str, **_kwargs):
-                if filename == "meta/info.json":
-                    raise FileNotFoundError("root info missing")
-                target = temp / filename.replace("/", "-")
-                if filename == "child-a/meta/info.json":
-                    target.write_text(
-                        '{"codebase_version":"v3.0","robot_type":"robot-a",'
-                        '"total_episodes":2,"total_frames":7200,"fps":10}'
-                    )
-                    return str(target)
-                if filename == "child-b/meta/info.json":
-                    target.write_text("{broken")
-                    return str(target)
-                raise FileNotFoundError(filename)
-
-            module = types.SimpleNamespace(hf_hub_download=download)
-            with patch.dict(sys.modules, {"huggingface_hub": module}):
-                entry = hf_catalog.build_entry(
-                    Api(), item, temp, None, None, False
-                )
+        module = types.SimpleNamespace(hf_hub_download=download)
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+            sys.modules, {"huggingface_hub": module}
+        ):
+            entry = hf_catalog.build_entry(
+                Api(), item, Path(root), None, None, False
+            )
 
         self.assertEqual(entry["layout"], "folder")
-        self.assertEqual(entry["metadataState"], "partial")
-        self.assertEqual([child["name"] for child in entry["children"]], [
-            "child-a",
-            "child-b",
+        self.assertEqual(entry["metadataState"], "ok")
+        self.assertEqual(entry["children"], [
+            {"name": "child-a", "path": "child-a"},
+            {"name": "child-b", "path": "child-b"},
         ])
-        self.assertEqual(entry["children"][0]["totalEpisodes"], 2)
-        self.assertEqual(entry["children"][0]["durationHours"], 0.2)
-        self.assertEqual(entry["children"][1]["metadataState"], "error")
+        self.assertEqual(
+            [call["download"] for call in calls if "download" in call],
+            ["meta/info.json", "meta/info.json"],
+        )
+        self.assertEqual(calls[-1]["tree"]["revision"], "folder-sha")
 
-    def test_local_snapshot_folder_probe_skips_remote_tree_and_reports_progress(self) -> None:
+
+    def test_folder_tree_listing_uses_exact_revision_and_reports_progress(self) -> None:
         item = types.SimpleNamespace(
             id="TacVerse/sampledata",
             sha="folder-sha",
@@ -140,63 +130,123 @@ class CatalogEntryTest(unittest.TestCase):
             lastModified=None,
             downloads=5,
         )
+        tree_calls = []
 
         class Api:
-            def list_repo_tree(self, **_kwargs):
-                raise AssertionError("cached Folder should not list the remote tree")
+            def list_repo_tree(self, **kwargs):
+                tree_calls.append(kwargs)
+                return [
+                    types.SimpleNamespace(path="child-a", type="directory"),
+                    types.SimpleNamespace(path="child-b", type="directory"),
+                ]
 
             def list_repo_commits(self, **_kwargs):
                 return []
 
-        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as cache:
-            snapshot = (
-                Path(cache)
-                / "datasets--TacVerse--sampledata"
-                / "snapshots"
-                / "folder-sha"
+        def download(*, filename: str, **_kwargs):
+            raise FileNotFoundError(filename)
+
+        module = types.SimpleNamespace(hf_hub_download=download)
+        progress = []
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+            sys.modules, {"huggingface_hub": module}
+        ):
+            entry = hf_catalog.build_entry(
+                Api(), item, Path(root), None, None, False,
+                lambda *event: progress.append(event),
             )
-            for name, episodes in (("child-a", 2), ("child-b", 3)):
-                info = snapshot / name / "meta" / "info.json"
-                info.parent.mkdir(parents=True)
-                info.write_text(
-                    json.dumps({"total_episodes": episodes, "total_frames": 20, "fps": 10})
-                )
-
-            def download(*, filename: str, local_files_only: bool = False, **_kwargs):
-                if not local_files_only:
-                    raise AssertionError("cached metadata should not use the Hub")
-                return str(snapshot / filename)
-
-            module = types.SimpleNamespace(hf_hub_download=download)
-            progress = []
-            with patch.dict(
-                sys.modules, {"huggingface_hub": module}
-            ), patch.dict("os.environ", {"HF_HUB_CACHE": cache}):
-                entry = hf_catalog.build_entry(
-                    Api(), item, Path(root), None, None, False,
-                    lambda *event: progress.append(event),
-                )
 
         self.assertEqual(entry["layout"], "folder")
         self.assertEqual(len(entry["children"]), 2)
+        self.assertEqual(tree_calls[0]["revision"], "folder-sha")
         self.assertEqual(progress[-1][0:2], (2, 2))
 
-    def test_old_catalog_versions_force_same_sha_layout_reprobe(self) -> None:
+    def test_new_sha_reads_new_info_instead_of_stale_main_cache(self) -> None:
+        item = types.SimpleNamespace(
+            id="TacVerse/example", sha="new-sha", createdAt=None,
+            lastModified=None, downloads=0,
+        )
+        calls = []
+        with tempfile.TemporaryDirectory() as temporary:
+            temp = Path(temporary)
+            old = temp / "old.json"
+            new = temp / "new.json"
+            old.write_text('{"total_frames":36000,"fps":10}')
+            new.write_text('{"total_frames":72000,"fps":10}')
+
+            def download(*, revision=None, **kwargs):
+                calls.append({"revision": revision, **kwargs})
+                return str(new if revision == "new-sha" else old)
+
+            module = types.SimpleNamespace(hf_hub_download=download)
+            with patch.dict(sys.modules, {"huggingface_hub": module}):
+                entry = hf_catalog.build_entry(
+                    object(), item, temp, None,
+                    {"repoId": "TacVerse/example", "sha": "old-sha", "durationHours": 1},
+                    False,
+                )
+
+        self.assertEqual(entry["durationHours"], 2)
+        self.assertTrue(calls)
+        self.assertTrue(all(call["revision"] == "new-sha" for call in calls))
+
+    def test_missing_sha_skips_unverifiable_local_only_cache(self) -> None:
+        item = types.SimpleNamespace(
+            id="TacVerse/example", sha=None, createdAt=None,
+            lastModified=None, downloads=0,
+        )
+        calls = []
+        with tempfile.TemporaryDirectory() as temporary:
+            info = Path(temporary) / "current.json"
+            info.write_text(
+                "{\"total_frames\":72000,\"fps\":10}", encoding="utf-8"
+            )
+
+            def download(**kwargs):
+                calls.append(kwargs)
+                return str(info)
+
+            module = types.SimpleNamespace(hf_hub_download=download)
+            with patch.dict(sys.modules, {"huggingface_hub": module}):
+                entry = hf_catalog.build_entry(
+                    object(), item, Path(temporary), None,
+                    {"repoId": "TacVerse/example", "sha": None, "durationHours": 1},
+                    False,
+                )
+
+        self.assertEqual(entry["durationHours"], 2)
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("local_files_only", calls[0])
+
+    def test_old_catalog_versions_reprobe_only_folder_rows(self) -> None:
         old = {
+            "catalogVersion": hf_catalog.CATALOG_VERSION - 1,
             "org": "TacVerse",
-            "datasets": [{"repoId": "TacVerse/sampledata", "sha": "same"}],
+            "datasets": [
+                {"repoId": "TacVerse/ordinary", "sha": "same"},
+                {
+                    "repoId": "TacVerse/sampledata",
+                    "sha": "same-folder",
+                    "layout": "folder",
+                },
+            ],
         }
         current = {
             "catalogVersion": hf_catalog.CATALOG_VERSION,
             "datasets": [{"repoId": "TacVerse/sampledata", "sha": "same"}],
         }
-        self.assertEqual(hf_catalog.reusable_cache_entries(old), {})
+        self.assertEqual(
+            list(hf_catalog.reusable_cache_entries(old)),
+            ["TacVerse/ordinary"],
+        )
         self.assertEqual(
             hf_catalog.reusable_cache_entries(current)["TacVerse/sampledata"][
                 "sha"
             ],
             "same",
         )
+        self.assertEqual(hf_catalog.reusable_cache_entries({"datasets": []}), {})
+
 
 
 if __name__ == "__main__":

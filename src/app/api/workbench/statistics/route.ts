@@ -22,10 +22,11 @@ import {
   countTacverseHubCategories,
   EMPTY_TACVERSE_HUB_CATEGORY_COUNTS,
   hubRepoIdForLocalDatasetPath,
-  isTacverseHubCategoryFilter,
+  isTacverseHubCategorySelection,
+  parseTacverseHubCategorySelection,
   matchesTacverseHubCategory,
   type TacverseHubCategoryCounts,
-  type TacverseHubCategoryFilter,
+  type TacverseHubCategorySelection,
   type TacverseHubClassificationInput,
 } from "@/utils/workbenchHubCategory";
 import { computeCorpusStats } from "@/utils/corpusStats";
@@ -324,7 +325,7 @@ function hubCategoryInput(
 async function readCatalogByRepo(
   root: string,
   organization: string,
-  category: TacverseHubCategoryFilter,
+  category: TacverseHubCategorySelection,
 ): Promise<WorkbenchHubScope> {
   try {
     const catalog = await readRawHfCatalog(root, organization);
@@ -390,29 +391,8 @@ function catalogEntryForLocalDataset(
   );
   if (!repoId) return undefined;
   const matched = catalog.get(repoId);
-  if (!matched || matched.entry.layout !== "folder") return matched;
-  const segments = relativePath.split(/[\\/]+/u).filter(Boolean);
-  if (segments.length !== 3) return matched;
-  const childName = segments[2];
-  const child = matched.entry.children?.find(
-    (candidate) => candidate.path === childName || candidate.name === childName,
-  );
-  if (!child) return undefined;
-  return {
-    rank: matched.rank,
-    entry: {
-      ...matched.entry,
-      ...child,
-      repoId: `${repoId}/${childName}`,
-      layout: "dataset",
-      children: [],
-      uploader: matched.entry.uploader,
-      uploaderDisplayName: matched.entry.uploaderDisplayName,
-      createdAt: matched.entry.createdAt,
-      lastModified: matched.entry.lastModified,
-      downloads: null,
-    },
-  };
+  // Folder repositories are structural entries for Dataset statistics only.
+  return matched?.entry.layout === "folder" ? undefined : matched;
 }
 
 /**
@@ -431,20 +411,16 @@ export async function GET(request: Request): Promise<Response> {
       );
     }
     const requestedCategory = searchParams.get("category");
-    if (
-      requestedCategory !== null &&
-      !isTacverseHubCategoryFilter(requestedCategory)
-    ) {
+    if (!isTacverseHubCategorySelection(requestedCategory)) {
       return Response.json(
         {
           error:
-            "category must be one of: all, taccap-g1, xtac-umi-g1, taccap-g1-merged, folder, other.",
+            "category must be a comma-separated selection of: taccap-g1, xtac-umi-g1, taccap-g1-merged, folder, other; or all.",
         },
         { status: 400 },
       );
     }
-    const categoryFilter: TacverseHubCategoryFilter =
-      requestedCategory ?? "all";
+    const categoryFilter = parseTacverseHubCategorySelection(requestedCategory);
 
     const discovery = await discoverLocalDatasets();
     const hubScope = await readCatalogByRepo(
@@ -465,30 +441,9 @@ export async function GET(request: Request): Promise<Response> {
         ),
       ),
     );
-    const isFolderChild = (relativePath: string): boolean => {
-      const segments = relativePath.split(/[\\/]+/u).filter(Boolean);
-      return (
-        segments.length === 3 &&
-        hubScope.folderRepoIds.has(`${organization}/${segments[1]}`)
-      );
-    };
-    const filteredOrdinaryDatasets = filterWorkbenchStatisticsDatasets(
-      hubScopedDatasets.filter(
-        (dataset) => !isFolderChild(dataset.relativePath),
-      ),
-    );
-    const ordinaryIncludedPaths = new Set(
-      filteredOrdinaryDatasets.included.map((dataset) => dataset.relativePath),
-    );
-    const datasets = hubScopedDatasets.filter(
-      (dataset) =>
-        isFolderChild(dataset.relativePath) ||
-        ordinaryIncludedPaths.has(dataset.relativePath),
-    );
-    const filteredDatasets = {
-      included: datasets,
-      summary: filteredOrdinaryDatasets.summary,
-    };
+    const filteredDatasets =
+      filterWorkbenchStatisticsDatasets(hubScopedDatasets);
+    const datasets = filteredDatasets.included;
     const workstationMappings = await readWorkbenchWorkstationMappings(
       organization,
       discovery.root,

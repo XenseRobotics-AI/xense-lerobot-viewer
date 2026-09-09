@@ -134,6 +134,21 @@ describe("personnel workload rollup", () => {
     expect(result.totalBonus).toBe(20);
   });
 
+  test("allocates the duration-multiplied workstation reward to personnel", () => {
+    const short = dataset("robot-1", [{ day: "2026-09-03", hours: 6 }]);
+    short.dailyAdditions![0].episodes = 1200;
+    const result = computeWorkbenchPersonnelRollup(
+      [short],
+      { "robot-1": "A1" },
+      personnelConfig(),
+      { startDate: "2026-09-03", endDate: "2026-09-04" },
+      rules,
+    );
+
+    expect(result.rows.every((row) => row.durationBonus === 12)).toBeTrue();
+    expect(result.durationBonusTotal).toBe(24);
+  });
+
   test("divides workstation hours by the original collector count", () => {
     const config = personnelConfig();
     config.schedules["2026-09-03"][0].collectorCount = 4;

@@ -177,12 +177,9 @@ class MetadataSyncTest(unittest.TestCase):
                     revision=revision,
                 )
 
-            self.assertEqual(files, ["child-a/meta/info.json"])
+            self.assertEqual(files, [])
             self.assertEqual(listed[0]["revision"], revision)
-            self.assertEqual(
-                (target / "child-a" / "meta" / "info.json").read_bytes(),
-                source.read_bytes(),
-            )
+            self.assertFalse((target / "child-a" / "meta" / "info.json").exists())
 
     def test_folder_sync_selects_only_direct_child_meta_trees(self) -> None:
         FakeApi.files = [
@@ -215,12 +212,9 @@ class MetadataSyncTest(unittest.TestCase):
                 None,
             )
 
-            self.assertEqual(files, sorted(contents))
-            for filename, expected in contents.items():
-                self.assertEqual((target / filename).read_bytes(), expected)
-            self.assertFalse((target / "child-a" / "data").exists())
-            self.assertFalse((target / "child-a" / "videos").exists())
-            self.assertFalse((target / "child-b" / "grandchild").exists())
+            self.assertEqual(files, [])
+            self.assertFalse((target / "child-a").exists())
+            self.assertFalse((target / "child-b").exists())
 
     def test_file_listing_uses_a_bounded_request_and_filters_payload_data(self) -> None:
         calls: list[dict[str, object]] = []
@@ -332,6 +326,38 @@ class MetadataSyncTest(unittest.TestCase):
 
             self.assertFalse(stats.stats_is_current(str(target), "same-sha"))
 
+    def test_previous_marker_version_reuses_root_meta_but_not_folder_child_meta(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            ordinary = Path(root) / "TacVerse" / "ordinary"
+            info = ordinary / "meta" / "info.json"
+            info.parent.mkdir(parents=True)
+            info.write_text("{}")
+            marker = Path(stats.marker_path(str(ordinary)))
+            marker.parent.mkdir(parents=True)
+            marker.write_text(
+                json.dumps({
+                    "version": stats.STATS_MARKER_VERSION - 1,
+                    "sha": "ordinary-sha",
+                    "files": {"meta/info.json": 2},
+                })
+            )
+            self.assertTrue(stats.stats_is_current(str(ordinary), "ordinary-sha"))
+
+            folder = Path(root) / "TacVerse" / "folder"
+            child = folder / "child-a" / "meta" / "info.json"
+            child.parent.mkdir(parents=True)
+            child.write_text("{}")
+            folder_marker = Path(stats.marker_path(str(folder)))
+            folder_marker.parent.mkdir(parents=True)
+            folder_marker.write_text(
+                json.dumps({
+                    "version": stats.STATS_MARKER_VERSION - 1,
+                    "sha": "folder-sha",
+                    "files": {"child-a/meta/info.json": 2},
+                })
+            )
+            self.assertFalse(stats.stats_is_current(str(folder), "folder-sha"))
+
     def test_dynamic_marker_accepts_an_empty_meta_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             target = Path(root) / "TacVerse" / "empty"
@@ -390,6 +416,27 @@ class MetadataSyncTest(unittest.TestCase):
             self.assertEqual(len(archived), 1)
             self.assertEqual(archived[0].read_bytes(), b"old")
 
+    def test_new_marker_archives_child_metadata_from_old_folder_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            target = Path(root) / "TacVerse" / "folder"
+            child = target / "child-a" / "meta" / "info.json"
+            child.parent.mkdir(parents=True)
+            child.write_text("old child metadata")
+            marker = Path(stats.marker_path(str(target)))
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(json.dumps({
+                "version": stats.STATS_MARKER_VERSION - 1,
+                "sha": "same-sha",
+                "files": {"child-a/meta/info.json": child.stat().st_size},
+            }))
+
+            self.assertFalse(stats.stats_is_current(str(target), "same-sha"))
+            result = stats.archive_deleted_metadata(
+                root, "TacVerse", "TacVerse/folder", str(target), []
+            )
+            self.assertEqual(result["files"], 1)
+            self.assertFalse(child.exists())
+
     def test_archives_removed_top_level_repos_with_timestamp_conflicts(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             org = Path(root) / "TacVerse"
@@ -435,7 +482,8 @@ class MetadataSyncTest(unittest.TestCase):
 
     def test_rejects_paths_outside_meta(self) -> None:
         self.assertTrue(stats.is_metadata_path("meta/info.json"))
-        self.assertTrue(stats.is_metadata_path("child/meta/info.json"))
+        self.assertFalse(stats.is_metadata_path("child/meta/info.json"))
+        self.assertTrue(stats.is_legacy_metadata_path("child/meta/info.json"))
         self.assertFalse(stats.is_metadata_path("data/file.parquet"))
         self.assertFalse(stats.is_metadata_path("videos/file.mp4"))
         self.assertFalse(stats.is_metadata_path("meta/../data/file.parquet"))

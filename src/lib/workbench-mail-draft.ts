@@ -51,6 +51,8 @@ export type WorkbenchDashboardMailRow = {
   targetHours: number | null;
   ratePercent: number | null;
   rule: string;
+  averageEpisodeSeconds?: number | null;
+  durationMultiplier?: number;
   reward: number;
 };
 
@@ -199,6 +201,15 @@ function formatPercent(value: number | null | undefined): string {
   return `${Number(value).toFixed(1)}%`;
 }
 
+function formatAverageEpisode(
+  seconds: number | null | undefined,
+  multiplier: number | undefined,
+): string {
+  if (!Number.isFinite(seconds)) return "-";
+  const factor = Number.isFinite(multiplier) ? Number(multiplier) : 1;
+  return `${Number(seconds).toFixed(1)}s · ×${factor.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+}
+
 function formatGeneratedAt(value?: Date | string): string {
   const date =
     value instanceof Date ? value : value ? new Date(value) : new Date();
@@ -274,6 +285,7 @@ function htmlMobileDetailRow(
       ${htmlMetricRow("Avg target", formatDecimal(row.targetHours))}
       ${htmlMetricRow("Rate", formatPercent(row.ratePercent))}
       ${htmlMetricRow("Rule", cleanInlineText(row.rule) || "-")}
+      ${htmlMetricRow("Avg / ep", formatAverageEpisode(row.averageEpisodeSeconds, row.durationMultiplier))}
       ${htmlMetricRow("Reward", formatSignedNumber(row.reward))}
     </table>
   </div>`;
@@ -298,6 +310,7 @@ function htmlDesktopDetailRow(row: WorkbenchDashboardMailRow): string {
     ${htmlDesktopCell(formatDecimal(row.targetHours), "right")}
     ${htmlDesktopCell(formatPercent(row.ratePercent), "right")}
     ${htmlDesktopCell(cleanInlineText(row.rule) || "-")}
+    ${htmlDesktopCell(formatAverageEpisode(row.averageEpisodeSeconds, row.durationMultiplier), "right")}
     ${htmlDesktopCell(formatSignedNumber(row.reward), "right")}
   </tr>`;
 }
@@ -395,6 +408,7 @@ function createWorkbenchDashboardText(
         `Avg target: ${formatDecimal(row.targetHours)}`,
         `Rate: ${formatPercent(row.ratePercent)}`,
         `Rule: ${cleanInlineText(row.rule) || "-"}`,
+        `Avg / ep: ${formatAverageEpisode(row.averageEpisodeSeconds, row.durationMultiplier)}`,
         `Reward: ${formatSignedNumber(row.reward)}`,
       );
     });
@@ -458,7 +472,7 @@ function createWorkbenchDashboardHtml(
     : emptyDetail;
   const desktopRows = rows.length
     ? rows.map(htmlDesktopDetailRow).join("")
-    : `<tr><td colspan="10" style="padding:12px;color:#475569;font-size:12px;line-height:18px;">No workstation detail rows in the current range.</td></tr>`;
+    : `<tr><td colspan="11" style="padding:12px;color:#475569;font-size:12px;line-height:18px;">No workstation detail rows in the current range.</td></tr>`;
   const emptyPersonnel = `<div style="padding:12px;border:1px solid #cbd5e1;border-radius:8px;background:#ffffff;color:#475569;font-size:13px;line-height:19px;">No personnel workload rows in the current range.</div>`;
   const mobilePersonnelRows = input.personnelRows.length
     ? input.personnelRows.map(htmlMobilePersonnelRow).join("")
@@ -529,6 +543,7 @@ function createWorkbenchDashboardHtml(
                       ${htmlHeaderCell("Avg target", "right")}
                       ${htmlHeaderCell("Rate", "right")}
                       ${htmlHeaderCell("Rule")}
+                      ${htmlHeaderCell("Avg / ep", "right")}
                       ${htmlHeaderCell("Reward", "right")}
                     </tr>
                   </thead>
