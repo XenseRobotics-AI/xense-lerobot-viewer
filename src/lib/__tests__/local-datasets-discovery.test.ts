@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   directorySizeBytes,
   discoverLocalDatasets,
+  readDatasetCollectorSerialNumber,
   readDatasetHardwareRobotId,
   readDatasetHardwareValue,
 } from "@/lib/local-datasets-discovery";
@@ -86,6 +87,38 @@ describe("readDatasetHardwareRobotId", () => {
         ],
       }),
     ).toBe("TacVerse-epoch-2");
+  });
+});
+
+describe("readDatasetCollectorSerialNumber", () => {
+  test("reads one unique collector serial across all episodes", () => {
+    expect(
+      readDatasetCollectorSerialNumber({
+        episodes: [
+          { devices: { collector: { serial_number: "collector-1" } } },
+          { devices: { collector: { serial_number: " collector-1 " } } },
+        ],
+      }),
+    ).toBe("collector-1");
+  });
+
+  test("does not select a collector when episodes report mixed serials", () => {
+    expect(
+      readDatasetCollectorSerialNumber({
+        episodes: [
+          { devices: { collector: { serial_number: "collector-1" } } },
+          { devices: { collector: { serial_number: "collector-2" } } },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  test("does not infer a collector from missing episode metadata", () => {
+    expect(
+      readDatasetCollectorSerialNumber({
+        episodes: [{ devices: { collector: { serial_number: null } } }],
+      }),
+    ).toBeNull();
   });
 });
 describe("directorySizeBytes", () => {

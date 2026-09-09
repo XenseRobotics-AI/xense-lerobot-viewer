@@ -69,11 +69,18 @@ type LocalDatasetHardwareJson = {
   [key: string]: unknown;
 };
 
+type LocalDatasetXumiCollectionDevicesJson = {
+  episodes?: unknown[];
+  [key: string]: unknown;
+};
+
 export type LocalDatasetSummary = {
   relativePath: string;
   encodedPath: string;
   codebase_version: string;
   robot_type: string | null;
+  /** Unique collector serial from `meta/xumi_collection_devices.json`. */
+  collectorSerialNumber?: string | null;
   robotId: string | null;
   leftGripperSn: string | null;
   total_episodes: number;
@@ -198,20 +205,79 @@ export function readDatasetHardwareRobotId(input: unknown): string | null {
   return extractRobotId(input);
 }
 
+function extractCollectorSerialNumbers(input: unknown): Set<string> {
+  const values = new Set<string>();
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return values;
+  }
+  const parsed = input as LocalDatasetXumiCollectionDevicesJson;
+  if (!Array.isArray(parsed.episodes)) return values;
+
+  for (const episode of parsed.episodes) {
+    if (!episode || typeof episode !== "object" || Array.isArray(episode)) {
+      continue;
+    }
+    const devices = (episode as { devices?: unknown }).devices;
+    if (!devices || typeof devices !== "object" || Array.isArray(devices)) {
+      continue;
+    }
+    const collector = (devices as { collector?: unknown }).collector;
+    if (
+      !collector ||
+      typeof collector !== "object" ||
+      Array.isArray(collector)
+    ) {
+      continue;
+    }
+    const serialNumber = cleanString(
+      (collector as { serial_number?: unknown }).serial_number,
+    );
+    if (serialNumber) values.add(serialNumber);
+  }
+  return values;
+}
+
+/**
+ * A collector is a dataset-level identity only when every recorded episode
+ * reports the same non-empty collector serial. Mixed collectors are left
+ * unresolved so one dataset cannot be silently assigned to the wrong device.
+ */
+export function readDatasetCollectorSerialNumber(
+  input: unknown,
+): string | null {
+  const values = extractCollectorSerialNumbers(input);
+  return values.size === 1 ? (values.values().next().value ?? null) : null;
+}
+
 async function readDatasetHardware(datasetDir: string): Promise<{
+  collectorSerialNumber: string | null;
   robotId: string | null;
   leftGripperSn: string | null;
 }> {
   const hardwarePath = path.join(datasetDir, "meta", "hardware.json");
+  const collectionDevicesPath = path.join(
+    datasetDir,
+    "meta",
+    "xumi_collection_devices.json",
+  );
+  let collectorSerialNumber: string | null = null;
+  try {
+    const raw = await fs.readFile(collectionDevicesPath, "utf-8");
+    collectorSerialNumber = readDatasetCollectorSerialNumber(JSON.parse(raw));
+  } catch {
+    // Older datasets do not have XUMI device metadata.
+  }
   try {
     const raw = await fs.readFile(hardwarePath, "utf-8");
     const parsed = JSON.parse(raw);
     return {
+      collectorSerialNumber,
       robotId: extractRobotId(parsed),
       leftGripperSn: readDatasetHardwareValue(parsed),
     };
   } catch {
     return {
+      collectorSerialNumber,
       robotId: null,
       leftGripperSn: null,
     };
@@ -367,6 +433,7 @@ async function walkForDatasets(
         encodedPath,
         codebase_version: info.codebase_version,
         robot_type: info.robot_type ?? null,
+        collectorSerialNumber: hardware.collectorSerialNumber,
         robotId: hardware.robotId,
         leftGripperSn: hardware.leftGripperSn,
         total_episodes: info.total_episodes ?? 0,

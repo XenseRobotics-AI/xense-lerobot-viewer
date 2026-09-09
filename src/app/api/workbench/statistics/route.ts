@@ -43,6 +43,7 @@ import {
   workbenchDatasetSuffixDay,
   workbenchDatasetSourceKey,
   workbenchDatasetSourceLabel,
+  getWorkbenchDatasetIdentity,
   type WorkbenchDailyAddition,
   type WorkbenchDatasetSourceKey,
 } from "@/utils/workbenchRollup";
@@ -207,7 +208,7 @@ function dailyAdditionsForDataset(
     remote?.lastModified,
   );
   if (!suffixDay) return [];
-  if (!dataset.robotId && !dataset.leftGripperSn) return [];
+  if (!getWorkbenchDatasetIdentity(dataset)) return [];
   return [
     {
       day: suffixDay,
@@ -267,29 +268,37 @@ function normalizeWorkbenchMappingsForResponse(
   rawMappings: Record<string, string>,
   datasets: readonly WorkbenchDatasetSummary[],
 ): NormalizedWorkbenchMappings {
+  const collectorSerials = new Set(
+    datasets
+      .map((dataset) => dataset.collectorSerialNumber?.trim())
+      .filter(Boolean) as string[],
+  );
   const robotIds = new Set(
     datasets
       .map((dataset) => dataset.robotId?.trim())
       .filter(Boolean) as string[],
   );
-  const leftSnToRobotId = new Map<string, string>();
+  const leftSnToIdentity = new Map<string, string>();
   for (const dataset of datasets) {
     const leftSn = dataset.leftGripperSn?.trim();
-    const robotId = dataset.robotId?.trim();
-    if (leftSn && robotId) {
-      leftSnToRobotId.set(leftSn, robotId);
+    const identity = getWorkbenchDatasetIdentity(dataset);
+    if (leftSn && identity) {
+      leftSnToIdentity.set(leftSn, identity);
     }
   }
 
   const normalized = new Map<string, string>();
   const legacy = new Map<string, string>();
   for (const [key, value] of Object.entries(rawMappings)) {
-    const robotId = robotIds.has(key)
-      ? key
-      : (leftSnToRobotId.get(key) ?? null);
-    if (robotId) {
-      normalized.set(robotId, value);
-      if (robotId !== key) legacy.set(key, value);
+    const identity =
+      collectorSerials.has(key) || robotIds.has(key)
+        ? key
+        : (leftSnToIdentity.get(key) ?? null);
+    if (identity) {
+      normalized.set(identity, value);
+      if (identity !== key || !collectorSerials.has(key)) {
+        legacy.set(key, value);
+      }
       continue;
     }
     normalized.set(key, value);

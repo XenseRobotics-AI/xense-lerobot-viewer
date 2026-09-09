@@ -83,4 +83,25 @@ describe("Workbench Hub category UI contract", () => {
       displayAvg,
     );
   });
+
+  test("calculates workstation rewards only after source rows are aggregated", async () => {
+    const grouping = await source("workbench-grouping-panel.tsx");
+    const sourceRowsStart = grouping.indexOf(
+      "const sourceWorkstationDashboardRows",
+    );
+    const workstationRowsStart = grouping.indexOf(
+      "const workstationDashboardRows",
+    );
+    expect(sourceRowsStart).toBeGreaterThanOrEqual(0);
+    expect(workstationRowsStart).toBeGreaterThan(sourceRowsStart);
+    expect(grouping.slice(sourceRowsStart, workstationRowsStart)).not.toContain(
+      "evaluateWorkbenchRewardRules",
+    );
+    expect(grouping).toContain(
+      "const projectedRewardAmount = workstationDashboardRows.reduce(",
+    );
+    expect(grouping).toContain(
+      "reward: evaluateWorkbenchRewardRules(\n            row.hours,",
+    );
+  });
 });

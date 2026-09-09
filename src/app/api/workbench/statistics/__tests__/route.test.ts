@@ -187,6 +187,78 @@ describe("Workbench statistics route", () => {
     });
   });
 
+  test("uses the unique XUMI collector serial when hardware.json is absent", async () => {
+    const repoId = "TacVerse/xtac-umi-g1-operate-tape-measure-0909";
+    await writeDataset(
+      repoId,
+      { total_episodes: 370, total_frames: 386_227, fps: 30 },
+      null,
+    );
+    const datasetDir = path.join(root, ...repoId.split("/"));
+    await fs.writeFile(
+      path.join(datasetDir, "meta", "xumi_collection_devices.json"),
+      JSON.stringify({
+        version: 1,
+        episodes: [
+          {
+            devices: {
+              collector: { serial_number: "TCGU01A31Z0004B" },
+              grippers: {
+                left: { serial_number: "TCGU01A28Z0095m" },
+              },
+            },
+          },
+          {
+            devices: {
+              collector: { serial_number: "TCGU01A31Z0004B" },
+            },
+          },
+        ],
+      }),
+    );
+    const cacheDir = path.join(root, ".xense-viewer", "hf-catalog");
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(
+      path.join(cacheDir, "TacVerse.json"),
+      JSON.stringify({
+        org: "TacVerse",
+        datasets: [
+          {
+            repoId,
+            lastModified: "2026-09-09T12:00:00Z",
+          },
+        ],
+      }),
+    );
+
+    const response = await GET(
+      new Request("http://localhost/api/workbench/statistics?org=TacVerse"),
+    );
+    const payload = (await response.json()) as {
+      datasets: Array<{
+        collectorSerialNumber: string | null;
+        robotId: string | null;
+        leftGripperSn: string | null;
+        dailyAdditions: Array<{ day: string }>;
+      }>;
+      workstationMappings: {
+        defaults: Record<string, string>;
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.datasets).toHaveLength(1);
+    expect(payload.datasets[0]).toMatchObject({
+      collectorSerialNumber: "TCGU01A31Z0004B",
+      robotId: null,
+      leftGripperSn: null,
+      dailyAdditions: [{ day: "2026-09-09" }],
+    });
+    expect(payload.workstationMappings.defaults).toMatchObject({
+      TCGU01A31Z0004B: "A5",
+    });
+  });
+
   test("returns HF metadata fields and stable lastModified order", async () => {
     await writeDataset("TacVerse/older-0817", {
       total_episodes: 1,
