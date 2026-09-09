@@ -55,7 +55,7 @@ export default function WorkbenchPersonnelWorkload({
           </p>
         </div>
         <span className="text-[10px] text-slate-500">
-          {rollup.rows.length} personnel
+          {t("workbench.personnelCount", { count: rollup.rows.length })}
         </span>
       </div>
       {rollup.unattributedHours > 0 && (

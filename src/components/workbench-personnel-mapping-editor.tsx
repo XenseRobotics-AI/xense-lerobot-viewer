@@ -542,7 +542,9 @@ export default function WorkbenchPersonnelMappingEditor({
               <tr key={index} className="border-t border-white/5">
                 <td className="px-3 py-2.5">
                   <input
-                    aria-label={`Mapping ${index + 1} workstation`}
+                    aria-label={t("workbench.mappingWorkstationAria", {
+                      index: index + 1,
+                    })}
                     list="workbench-personnel-workstations"
                     value={row.workstation}
                     placeholder={t("workbench.mappingWorkstationPlaceholder")}
@@ -560,7 +562,9 @@ export default function WorkbenchPersonnelMappingEditor({
                 </td>
                 <td className="px-3 py-2.5">
                   <input
-                    aria-label={`Mapping ${index + 1} personnel`}
+                    aria-label={t("workbench.mappingPersonnelAria", {
+                      index: index + 1,
+                    })}
                     value={row.personnel}
                     placeholder={ANONYMOUS_PERSONNEL_NAME}
                     onChange={(event) => {
@@ -577,7 +581,9 @@ export default function WorkbenchPersonnelMappingEditor({
                 </td>
                 <td className="px-3 py-2.5">
                   <input
-                    aria-label={`Mapping ${index + 1} email`}
+                    aria-label={t("workbench.mappingEmailAria", {
+                      index: index + 1,
+                    })}
                     type="email"
                     value={row.email}
                     placeholder={DEFAULT_WORKBENCH_PERSONNEL_EMAIL}
@@ -595,7 +601,9 @@ export default function WorkbenchPersonnelMappingEditor({
                 </td>
                 <td className="px-3 py-2.5">
                   <input
-                    aria-label={"Mapping " + (index + 1) + " collector count"}
+                    aria-label={t("workbench.mappingCollectorCountAria", {
+                      index: index + 1,
+                    })}
                     type="number"
                     min={1}
                     step={1}

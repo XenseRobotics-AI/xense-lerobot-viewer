@@ -8,7 +8,9 @@ import {
   getDatasetPrefix,
   groupDatasetsByPrefix,
 } from "@/utils/datasetGrouping";
+import LanguageSwitcher from "@/components/language-switcher";
 import WorkbenchGroupingPanel from "@/components/workbench-grouping-panel";
+import { useT } from "@/context/locale-context";
 import CategoryLanding from "./category-landing";
 import DatasetCardGrid from "./dataset-card-grid";
 
@@ -49,6 +51,7 @@ export default function LocalDatasetGrid({
   errors,
   delta,
 }: LocalDatasetGridProps) {
+  const t = useT();
   const searchParams = useSearchParams();
   const [selectedPrefix, setSelectedPrefix] = useState<string | null>(() =>
     searchParams.get("org"),
@@ -136,24 +139,25 @@ export default function LocalDatasetGrid({
                 onClick={clearCategory}
                 className="rounded-md border border-white/10 bg-[var(--surface-1)]/60 px-3 py-1.5 text-sm text-slate-300 transition-colors hover:border-cyan-400/40 hover:text-cyan-100"
               >
-                Back
+                {t("workbench.backToCategories")}
               </button>
               <button
                 type="button"
                 onClick={() => selectOrganizationView("datasets")}
                 className="rounded-md border border-white/10 bg-[var(--surface-1)]/60 px-3 py-1.5 text-sm text-slate-300 transition-colors hover:border-cyan-400/40 hover:text-cyan-100"
               >
-                Datasets
+                {t("workbench.datasetsView")}
               </button>
             </div>
             <div className="text-right">
               <p className="text-[10px] uppercase tracking-[0.18em] text-cyan-300">
-                Workbench
+                {t("workbench.panelTitle")}
               </p>
               <h1 className="mt-1 text-xl font-semibold text-slate-100">
                 {selectedPrefix}
               </h1>
             </div>
+            <LanguageSwitcher />
           </div>
           <WorkbenchGroupingPanel organization={selectedPrefix} />
         </main>

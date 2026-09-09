@@ -426,7 +426,9 @@ export default function WorkbenchDatasetStatistics({
                                     : t("workbench.unavailableMetadata")
                                 }
                               >
-                                {item.metricsState}
+                                {item.metricsState === "partial"
+                                  ? t("workbench.metricsPartial")
+                                  : t("workbench.metricsUnavailable")}
                               </span>
                             )}
                             {item.categoryWarning && (

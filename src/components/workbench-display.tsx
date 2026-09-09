@@ -761,7 +761,7 @@ const DailyTrendSlide = memo(function DailyTrendSlide({
       />
       {chartRows.length === 0 ? (
         <EmptySlide range={formatRange(snapshot, t)}>
-          No daily trend data in this range
+          {t("workbench.noDailyTrendData")}
         </EmptySlide>
       ) : (
         <div className={styles.trendLayout}>
@@ -914,8 +914,12 @@ function TacCapReplaySlide({
   );
   const episodeTimeSeconds = replay.randomStartSeconds + localTimeSeconds;
   const issues = [
-    ...replay.missingVideoStreams.map((side) => `${side} video streams`),
-    ...replay.missingTrajectories.map((side) => `${side} TCP trajectory`),
+    ...replay.missingVideoStreams.map(
+      (side) => `${side} ${t("workbench.videoStreams")}`,
+    ),
+    ...replay.missingTrajectories.map(
+      (side) => `${side} ${t("workbench.tcpTrajectory")}`,
+    ),
   ];
 
   return (
@@ -993,8 +997,10 @@ function TacCapReplaySlide({
         />
         <div className={styles.replayStatus}>
           <span>
-            {replay.recognizedVideoCount} / 6 video streams · t+
-            {localTimeSeconds.toFixed(1)}s
+            {t("workbench.replayStatus", {
+              count: replay.recognizedVideoCount,
+              seconds: localTimeSeconds.toFixed(1),
+            })}
           </span>
           {issues.length > 0 && (
             <strong>

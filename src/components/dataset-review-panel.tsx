@@ -111,7 +111,13 @@ function Card({ label, value }: { label: string; value: string | number }) {
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({
+  status,
+  t,
+}: {
+  status: string;
+  t: ReturnType<typeof useT>;
+}) {
   const tone =
     status === "fail"
       ? "border-red-400/30 bg-red-400/10 text-red-300"
@@ -122,12 +128,12 @@ function StatusBadge({ status }: { status: string }) {
           : "border-emerald-400/30 bg-emerald-400/10 text-emerald-300";
   const label =
     status === "fail"
-      ? "FAIL"
+      ? t("workbench.statusFail")
       : status === "warn"
-        ? "WARN"
+        ? t("workbench.statusWarn")
         : status === "skip"
-          ? "SKIP"
-          : "PASS";
+          ? t("workbench.statusSkip")
+          : t("workbench.statusPass");
   return (
     <span
       className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide ${tone}`}
@@ -406,11 +412,14 @@ export default function DatasetReviewPanel({
           error?: string;
         };
         throw new Error(
-          payload.error || `Statistics refresh failed (${response.status}).`,
+          payload.error ||
+            t("workbench.statisticsRefreshFailedStatus", {
+              status: response.status,
+            }),
         );
       }
       if (!response.body) {
-        throw new Error("Statistics refresh returned no stream.");
+        throw new Error(t("workbench.statisticsStreamMissing"));
       }
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -454,7 +463,8 @@ export default function DatasetReviewPanel({
             });
           }
           if (event.type === "error" && !refreshError) {
-            refreshError = event.error || "Statistics refresh failed.";
+            refreshError =
+              event.error || t("workbench.statisticsRefreshFailedFallback");
           }
           if (
             event.type === "result" &&
@@ -1044,9 +1054,7 @@ export default function DatasetReviewPanel({
             </div>
 
             {qualityLoading ? (
-              <LoadingLine>
-                Loading task metadata and custom checks…
-              </LoadingLine>
+              <LoadingLine>{t("workbench.loadingChecks")}</LoadingLine>
             ) : qualityError ? (
               <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 p-4 text-sm text-amber-200">
                 {qualityError}
@@ -1090,7 +1098,7 @@ export default function DatasetReviewPanel({
                           {check.message}
                         </p>
                       </div>
-                      <StatusBadge status={check.status} />
+                      <StatusBadge status={check.status} t={t} />
                     </div>
                     {check.details && check.details.length > 0 && (
                       <details className="mt-2 text-xs text-slate-500">

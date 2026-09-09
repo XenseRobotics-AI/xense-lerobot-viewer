@@ -45,7 +45,6 @@ import {
   computeWorkbenchAdditionTimeline,
   computeWorkbenchAdditionRollup,
   WORKBENCH_DATASET_SOURCE_KEYS,
-  WORKBENCH_DATASET_SOURCE_LABELS,
   countHalfOpenDays,
   getWorkbenchDatasetWorkstation,
   getWorkbenchDatasetIdentity,
@@ -1183,7 +1182,7 @@ export default function WorkbenchGroupingPanel({
             workstationLegacyMappings,
             workstationLegacyDefaults,
           ],
-        ) ?? "未分配";
+        ) ?? t("workbench.unassigned");
       const row: HeatmapRow = rows.get(workstation) ?? {
         workstation,
         hoursByDay: {},
@@ -1219,6 +1218,7 @@ export default function WorkbenchGroupingPanel({
     workstationLegacyDraft,
     workstationLegacyMappings,
     workstationMappings,
+    t,
   ]);
   const dailyTrendTimeline = useMemo(
     () =>
@@ -1346,7 +1346,7 @@ export default function WorkbenchGroupingPanel({
             workstationLegacyMappings,
             workstationLegacyDefaults,
           ],
-        ) ?? "未分配";
+        ) ?? t("workbench.unassigned");
       const key = [sourceKey, workstation].join("\u0000");
       const current = grouped.get(key) ?? {
         group: `${sourceLabel} · ${workstation}`,
@@ -1409,6 +1409,7 @@ export default function WorkbenchGroupingPanel({
     workstationLegacyMappings,
     workstationMappings,
     workstationRollupDatasets,
+    t,
   ]);
 
   const workstationDashboardRows = useMemo<WorkbenchDashboardRow[]>(() => {
@@ -1514,7 +1515,7 @@ export default function WorkbenchGroupingPanel({
               workstationLegacyMappings,
               workstationLegacyDefaults,
             ],
-          ) ?? "未分配";
+          ) ?? t("workbench.unassigned");
         return mappedWorkstation === workstation;
       }),
     [
@@ -1525,6 +1526,7 @@ export default function WorkbenchGroupingPanel({
       workstationLegacyDraft,
       workstationLegacyMappings,
       workstationMappings,
+      t,
     ],
   );
 
@@ -1582,7 +1584,7 @@ export default function WorkbenchGroupingPanel({
     setActionMessage(
       task ? t("workbench.reviewTaskCreated") : t("workbench.reviewTaskFailed"),
     );
-  }, [drilldown, organization]);
+  }, [drilldown, organization, t]);
   const copyWorkbenchShareLink = useCallback(async () => {
     const url = new URL(window.location.href);
     url.searchParams.set("workbenchStart", startDateTime);
@@ -1594,7 +1596,7 @@ export default function WorkbenchGroupingPanel({
     setActionMessage(
       copied ? t("workbench.shareLinkCopied") : t("workbench.shareLinkFailed"),
     );
-  }, [endDateTime, selectedSources, startDateTime]);
+  }, [endDateTime, selectedSources, startDateTime, t]);
   const personnelWorkstationMappings = useMemo(() => {
     const mappings: Record<string, string> = {};
     for (const dataset of workstationRollupDatasets) {
@@ -1741,6 +1743,7 @@ export default function WorkbenchGroupingPanel({
     range.startDate,
     dailyTrendTimeline,
     visibleRobotDashboardRows,
+    t,
   ]);
 
   const totalHours = totalTimeline.total.hours;
@@ -1929,27 +1932,27 @@ export default function WorkbenchGroupingPanel({
     const groups: WorkbenchMailRecipientGroup[] = [
       {
         id: "xr-workstation",
-        label: "XR 工位",
+        label: t("workbench.xrWorkstation"),
         emails: dedupeWorkbenchEmails(xrPeople),
       },
       {
         id: "team-managers",
-        label: "Dylan 等团队管理人员",
+        label: t("workbench.teamManagers"),
         emails: dedupeWorkbenchEmails(teamManagers),
       },
       {
         id: "reward-non-negative",
-        label: "Reward >=0（筛选范围内）",
+        label: t("workbench.rewardNonNegative"),
         emails: dedupeWorkbenchEmails(rewardNonNegative),
       },
       {
         id: "all-personnel",
-        label: "人员列表全员",
+        label: t("workbench.allPersonnel"),
         emails: dedupeWorkbenchEmails(personnelConfig.people),
       },
     ];
     return groups.filter((group) => group.emails.length > 0);
-  }, [personnelConfig, personnelRollup.rows]);
+  }, [personnelConfig, personnelRollup.rows, t]);
 
   const mailDashboardInput = useMemo<WorkbenchDashboardMailInput>(
     () => ({
@@ -2388,7 +2391,6 @@ export default function WorkbenchGroupingPanel({
     rangeDays,
     heatmapDays,
     episodeData,
-    t,
   ]);
 
   return (
@@ -3056,7 +3058,7 @@ export default function WorkbenchGroupingPanel({
                                           workstationLegacyMappings,
                                           workstationLegacyDefaults,
                                         ],
-                                      ) ?? "未分配";
+                                      ) ?? t("workbench.unassigned");
                                     return (
                                       mappedWorkstation === row.workstation &&
                                       workbenchDatasetRangeContributions(
