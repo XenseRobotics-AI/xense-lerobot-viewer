@@ -114,11 +114,10 @@ import {
   type WorkbenchDisplaySnapshot,
 } from "@/components/workbench-display-utils";
 import { workbenchReplayDatasetRank } from "@/utils/workbenchReplayDatasets";
+import { useT } from "@/context/locale-context";
+import type { InterpolationVars } from "@/i18n/format";
+import type { MessageKey } from "@/i18n/messages";
 
-const SOURCE_OPTIONS = WORKBENCH_DATASET_SOURCE_KEYS.map((value) => ({
-  value,
-  label: WORKBENCH_DATASET_SOURCE_LABELS[value],
-}));
 const ALL_WORKBENCH_SOURCES = [...WORKBENCH_DATASET_SOURCE_KEYS];
 
 function parseWorkbenchSources(
@@ -140,16 +139,17 @@ function parseWorkbenchSources(
 const WORKBENCH_TEAM_MANAGER_NAMES = new Set(["dylan", "frank", "jay"]);
 
 const DATE_SHORTCUTS = [
-  { value: "today", label: "Today" },
-  { value: "yesterday", label: "Yesterday" },
-  { value: "last7Days", label: "Last 7 days" },
-  { value: "thisWeek", label: "This week" },
-  { value: "lastWeek", label: "Last week" },
+  { value: "today", key: "workbench.today" },
+  { value: "yesterday", key: "workbench.yesterday" },
+  { value: "last7Days", key: "workbench.last7Days" },
+  { value: "thisWeek", key: "workbench.thisWeek" },
+  { value: "lastWeek", key: "workbench.lastWeek" },
 ] as const;
 
 const WORKBENCH_WORKSTATION_CONCEPT_START_DATE = "2026-08-22";
 const WORKBENCH_DAILY_TREND_START_DATE = "2026-07-01";
 const WORKBENCH_HEATMAP_DAY_LIMIT = 10;
+type Translator = (key: MessageKey, vars?: InterpolationVars) => string;
 
 type WorkbenchDataset = LocalDatasetSummary & {
   source?: WorkbenchDatasetSourceKey;
@@ -444,33 +444,54 @@ function emptyRewardDraft(org: string): RewardRulesDraft {
   };
 }
 
-function validateRewardDraft(draft: RewardRulesDraft): string | null {
+function validateRewardDraft(
+  draft: RewardRulesDraft,
+  t?: Translator,
+): string | null {
   if (!draft.enabled) return null;
   if (!Number.isFinite(draft.dailyTargetHours) || draft.dailyTargetHours <= 0) {
-    return "Daily target hours must be greater than 0.";
+    return (
+      t?.("workbench.dailyTargetPositive") ??
+      "Daily target hours must be greater than 0."
+    );
   }
-  if (draft.levels.length === 0) return "Add at least one reward level.";
+  if (draft.levels.length === 0)
+    return t?.("workbench.addRewardLevel") ?? "Add at least one reward level.";
   const sorted = [...draft.levels].sort(
     (left, right) => left.minPercent - right.minPercent,
   );
   if (Math.abs(sorted[0]?.minPercent ?? 0) > 1e-9) {
-    return "The first level must start at 0%.";
+    return (
+      t?.("workbench.firstLevelZero") ?? "The first level must start at 0%."
+    );
   }
   for (let index = 0; index < sorted.length; index += 1) {
     const level = sorted[index];
     if (!Number.isFinite(level.minPercent) || level.minPercent < 0) {
-      return "Level thresholds must be valid numbers.";
+      return (
+        t?.("workbench.thresholdsInvalid") ??
+        "Level thresholds must be valid numbers."
+      );
     }
     if (!Number.isFinite(level.amount)) {
-      return "Level amounts must be valid numbers.";
+      return (
+        t?.("workbench.amountsInvalid") ??
+        "Level amounts must be valid numbers."
+      );
     }
     if (index > 0) {
       const previous = sorted[index - 1];
       if (previous.maxPercent === null) {
-        return "Only the last level can be open-ended.";
+        return (
+          t?.("workbench.onlyLastOpen") ??
+          "Only the last level can be open-ended."
+        );
       }
       if (Math.abs(previous.maxPercent - level.minPercent) > 1e-9) {
-        return "Level ranges must be continuous.";
+        return (
+          t?.("workbench.levelRangesContinuous") ??
+          "Level ranges must be continuous."
+        );
       }
     }
   }
@@ -478,12 +499,18 @@ function validateRewardDraft(draft: RewardRulesDraft): string | null {
     (left, right) => left.minSeconds - right.minSeconds,
   );
   if (durationLevels.length === 0 || durationLevels[0].minSeconds !== 0) {
-    return "Episode duration levels must start at 0 seconds.";
+    return (
+      t?.("workbench.durationStartZero") ??
+      "Episode duration levels must start at 0 seconds."
+    );
   }
   for (let index = 0; index < durationLevels.length; index += 1) {
     const level = durationLevels[index];
     if (!Number.isFinite(level.multiplier) || level.multiplier <= 0) {
-      return "Episode duration multipliers must be positive numbers.";
+      return (
+        t?.("workbench.durationMultipliersPositive") ??
+        "Episode duration multipliers must be positive numbers."
+      );
     }
     if (index > 0) {
       const previous = durationLevels[index - 1];
@@ -491,12 +518,18 @@ function validateRewardDraft(draft: RewardRulesDraft): string | null {
         previous.maxSeconds === null ||
         Math.abs(previous.maxSeconds - level.minSeconds) > 1e-9
       ) {
-        return "Episode duration ranges must be continuous.";
+        return (
+          t?.("workbench.durationRangesContinuous") ??
+          "Episode duration ranges must be continuous."
+        );
       }
     }
   }
   if (durationLevels.at(-1)?.maxSeconds !== null) {
-    return "The last episode duration level must be open-ended.";
+    return (
+      t?.("workbench.durationLastOpen") ??
+      "The last episode duration level must be open-ended."
+    );
   }
   return null;
 }
@@ -527,6 +560,7 @@ function dayKeyFromDateTimeInput(value: string): string | null {
 }
 
 function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [copyState, setCopyState] = useState<{
     repoId: string;
@@ -568,8 +602,8 @@ function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
           ? "block max-w-full break-all text-left font-mono text-[11px] leading-5 text-cyan-200/80 transition-colors hover:text-cyan-100 hover:underline"
           : "block max-w-[22rem] break-all text-left font-mono text-[11px] leading-5 text-cyan-200/90 transition-colors hover:text-cyan-100 hover:underline"
       }
-      title={"Click to copy " + repoId}
-      aria-label={"Copy source repo " + repoId}
+      title={t("workbench.copyRepoTitle", { repo: repoId })}
+      aria-label={t("workbench.copyRepoAria", { repo: repoId })}
     >
       {repoId}
     </button>
@@ -591,7 +625,7 @@ function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
               (copyState.ok ? "text-emerald-300" : "text-amber-300")
             }
           >
-            {copyState.ok ? "Copied" : "Copy failed"}
+            {copyState.ok ? t("workbench.copied") : t("workbench.copyFailed")}
           </span>
         )}
       </div>
@@ -615,7 +649,7 @@ function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
     >
       <div className="flex min-w-0 items-start gap-2">
         <span className="shrink-0 pt-0.5 text-slate-100 tabular-nums">
-          {repos.length} repos
+          {t("workbench.repos", { count: repos.length })}
         </span>
         <div className="min-w-0 flex-1">
           {repoButton(repos[0], true)}
@@ -627,28 +661,28 @@ function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
                 (copyState.ok ? "text-emerald-300" : "text-amber-300")
               }
             >
-              {copyState.ok ? "Copied" : "Copy failed"}
+              {copyState.ok ? t("workbench.copied") : t("workbench.copyFailed")}
             </span>
           )}
         </div>
         <button
           type="button"
           aria-expanded={open}
-          aria-label={"View " + repos.length + " source repos"}
+          aria-label={t("workbench.viewRepos", { count: repos.length })}
           onClick={() => setOpen((value) => !value)}
           className="shrink-0 rounded border border-white/10 px-2 py-0.5 text-[10px] text-cyan-200 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/10"
         >
-          View
+          {t("workbench.view")}
         </button>
       </div>
       {open && (
         <div
           className="absolute left-0 top-full z-30 mt-1 max-h-64 w-[min(32rem,calc(100vw-2rem))] overflow-y-auto rounded-md border border-white/10 bg-[var(--surface-2)] p-2 shadow-xl shadow-black/50"
           role="dialog"
-          aria-label="Source repos"
+          aria-label={t("workbench.sourceRepos")}
         >
           <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-            Click a dataset name to copy its full repository id
+            {t("workbench.copyRepoHint")}
           </div>
           <ul className="space-y-1">
             {repos.map((repoId) => (
@@ -662,7 +696,9 @@ function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
                       (copyState.ok ? "text-emerald-300" : "text-amber-300")
                     }
                   >
-                    {copyState.ok ? "Copied" : "Copy failed"}
+                    {copyState.ok
+                      ? t("workbench.copied")
+                      : t("workbench.copyFailed")}
                   </span>
                 )}
               </li>
@@ -685,6 +721,22 @@ export default function WorkbenchGroupingPanel({
   refreshToken?: number;
   episodeData?: EpisodeData;
 }) {
+  const t = useT();
+  const sourceOptions = useMemo(
+    () =>
+      WORKBENCH_DATASET_SOURCE_KEYS.map((value) => ({
+        value,
+        label:
+          value === "taccap-g1"
+            ? t("workbench.sourceTaccap")
+            : value === "xtac-umi-g1"
+              ? t("workbench.sourceXtac")
+              : value === "tacflow"
+                ? t("workbench.sourceTacflow")
+                : t("workbench.sourceUnclassified"),
+      })),
+    [t],
+  );
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [selectedSources, setSelectedSources] = useState<
@@ -852,7 +904,7 @@ export default function WorkbenchGroupingPanel({
           );
         }
         if (!payload.datasets) {
-          throw new Error("Workbench statistics response is incomplete.");
+          throw new Error(t("workbench.statisticsResponseIncomplete"));
         }
         return payload;
       })
@@ -923,7 +975,9 @@ export default function WorkbenchGroupingPanel({
         setRewardMessage(null);
         if ((payload.errors?.length ?? 0) > 0) {
           setError(
-            `${payload.errors?.length} dataset path(s) could not be scanned. The visible rows are still grouped.`,
+            t("workbench.scanErrors", {
+              count: payload.errors?.length ?? 0,
+            }),
           );
         }
       })
@@ -942,6 +996,7 @@ export default function WorkbenchGroupingPanel({
     organization,
     refreshToken,
     localRefreshToken,
+    t,
   ]);
 
   const rollupDatasets = useMemo<WorkbenchRollupDataset[]>(
@@ -1525,9 +1580,7 @@ export default function WorkbenchGroupingPanel({
       frame: drilldown.frame ?? null,
     });
     setActionMessage(
-      task
-        ? "Review task created in this browser."
-        : "Unable to create review task.",
+      task ? t("workbench.reviewTaskCreated") : t("workbench.reviewTaskFailed"),
     );
   }, [drilldown, organization]);
   const copyWorkbenchShareLink = useCallback(async () => {
@@ -1539,7 +1592,7 @@ export default function WorkbenchGroupingPanel({
     url.searchParams.delete("workbenchDimension");
     const copied = await copyTextToClipboard(url.toString());
     setActionMessage(
-      copied ? "Share link copied." : "Unable to copy share link.",
+      copied ? t("workbench.shareLinkCopied") : t("workbench.shareLinkFailed"),
     );
   }, [endDateTime, selectedSources, startDateTime]);
   const personnelWorkstationMappings = useMemo(() => {
@@ -1681,7 +1734,7 @@ export default function WorkbenchGroupingPanel({
     link.download = `workbench-${organization.replace(/[^a-z0-9_-]+/gi, "-")}-${range.startDate ?? "start"}.csv`;
     link.click();
     URL.revokeObjectURL(url);
-    setActionMessage("CSV exported.");
+    setActionMessage(t("workbench.csvExported"));
   }, [
     organization,
     personnelRollup.rows,
@@ -1697,7 +1750,7 @@ export default function WorkbenchGroupingPanel({
     (sum, row) => sum + row.reward.amount,
     0,
   );
-  const rewardValidationError = validateRewardDraft(rewardDraft);
+  const rewardValidationError = validateRewardDraft(rewardDraft, t);
   const workstationDraftDirty = !recordsEqual(
     mergeMappings(workstationDraft, workstationLegacyDraft),
     mergeMappings(workstationMappings, workstationLegacyMappings),
@@ -1998,7 +2051,7 @@ export default function WorkbenchGroupingPanel({
       if (Object.keys(defaults).length > 0) setWorkstationDefaults(defaults);
       if (Object.keys(legacyDefaults).length > 0)
         setWorkstationLegacyDefaults(legacyDefaults);
-      setMappingsMessage("Workstation mappings saved.");
+      setMappingsMessage(t("workbench.mappingsSaved"));
     } catch (reason: unknown) {
       setMappingsError(
         reason instanceof Error ? reason.message : String(reason),
@@ -2006,7 +2059,7 @@ export default function WorkbenchGroupingPanel({
     } finally {
       setMappingsSaving(false);
     }
-  }, [organization, workstationDraft, workstationLegacyDraft]);
+  }, [organization, t, workstationDraft, workstationLegacyDraft]);
 
   const saveRewardRules = useCallback(async () => {
     setRewardSaving(true);
@@ -2051,13 +2104,13 @@ export default function WorkbenchGroupingPanel({
           organization,
         ),
       );
-      setRewardMessage("Reward rules saved.");
+      setRewardMessage(t("workbench.rewardRulesSaved"));
     } catch (reason: unknown) {
       setRewardError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setRewardSaving(false);
     }
-  }, [organization, rewardDraft]);
+  }, [organization, rewardDraft, t]);
 
   const resetDateRange = useCallback(() => {
     const next = getWorkbenchLatestAvailableDateTimeRange(availableDays);
@@ -2152,6 +2205,8 @@ export default function WorkbenchGroupingPanel({
       heatmapDays.map((day) => row.hoursByDay[day] ?? 0),
     ),
   );
+  const heatmapEndDateLabel =
+    workstationHeatmapRange.endDate ?? t("workbench.latest");
 
   const replayDataset = useMemo(
     () =>
@@ -2333,6 +2388,7 @@ export default function WorkbenchGroupingPanel({
     rangeDays,
     heatmapDays,
     episodeData,
+    t,
   ]);
 
   return (
@@ -2341,14 +2397,13 @@ export default function WorkbenchGroupingPanel({
         <div className="flex flex-col gap-4 rounded-xl border border-cyan-400/20 bg-gradient-to-br from-cyan-400/[0.08] via-[var(--surface-1)]/50 to-emerald-400/[0.05] p-5 shadow-[0_18px_45px_rgba(8,15,30,0.22)] sm:flex-row sm:items-center sm:justify-between sm:p-6">
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-cyan-300/80">
-              Operations workspace
+              {t("workbench.operationsWorkspace")}
             </div>
             <h3 className="mt-2 text-xl font-semibold tracking-tight text-slate-100">
-              Workbench dashboard
+              {t("workbench.dashboard")}
             </h3>
             <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-400">
-              Organization-level daily additions, workstation mapping, and
-              reward rules.
+              {t("workbench.description")}
             </p>
           </div>
           {isWorkbenchOrganizationDisplayPath(pathname) && (
@@ -2357,7 +2412,7 @@ export default function WorkbenchGroupingPanel({
               type="button"
               onClick={openDisplay}
               disabled={loading || displayOpening}
-              aria-label="Open Workbench display"
+              aria-label={t("workbench.openDisplay")}
               className="group inline-flex min-h-[4.25rem] items-center justify-center gap-3 rounded-xl border border-cyan-200/70 bg-gradient-to-br from-cyan-200 via-cyan-300 to-emerald-300 px-5 py-3 text-left text-slate-950 shadow-[0_12px_30px_rgba(34,211,238,0.28)] ring-1 ring-cyan-100/30 transition-all hover:-translate-y-0.5 hover:from-cyan-100 hover:to-emerald-200 hover:shadow-[0_16px_36px_rgba(34,211,238,0.38)] focus:outline-none focus:ring-2 focus:ring-cyan-100/80 disabled:cursor-not-allowed disabled:opacity-50 sm:min-w-[12rem]"
             >
               <FiMonitor
@@ -2366,14 +2421,14 @@ export default function WorkbenchGroupingPanel({
               />
               <span>
                 <span className="block text-sm font-bold tracking-wide">
-                  Display
+                  {t("workbench.display")}
                 </span>
                 <span className="mt-0.5 block text-[10px] font-medium text-slate-800/70">
                   {displayOpening
-                    ? "Loading 3D Replay..."
+                    ? t("workbench.loadingReplay")
                     : currentEpisodeIsReplaySource || replayDataset
-                      ? "Fullscreen view · 3D Replay enabled"
-                      : "Fullscreen operations view"}
+                      ? t("workbench.fullscreenReplay")
+                      : t("workbench.fullscreenOperations")}
                 </span>
               </span>
             </button>
@@ -2383,7 +2438,7 @@ export default function WorkbenchGroupingPanel({
               className="max-w-[18rem] text-right text-[10px] leading-4 text-amber-300"
               role="status"
             >
-              3D Replay could not be loaded; Display opened without it.
+              {t("workbench.replayLoadError")}
             </p>
           )}
         </div>
@@ -2400,36 +2455,39 @@ export default function WorkbenchGroupingPanel({
           <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                Control center
+                {t("workbench.controlCenter")}
               </div>
               <h4
                 id="workbench-controls-title"
                 className="mt-1 text-sm font-semibold text-slate-200"
               >
-                Dashboard controls
+                {t("workbench.dashboardControls")}
               </h4>
               <p className="mt-1 text-[11px] text-slate-500">
-                Adjust the reporting window, refresh local data, or manage
-                Workbench rules.
+                {t("workbench.controlHint")}
               </p>
             </div>
             <span className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[10px] tabular-nums text-slate-500">
-              {availableDays.length.toLocaleString()} reporting days
+              {t("workbench.reportingDays", {
+                count: availableDays.length.toLocaleString(),
+              })}
             </span>
             <span className="rounded-full border border-cyan-400/15 bg-cyan-400/[0.04] px-2.5 py-1 text-[10px] tabular-nums text-cyan-200/75">
-              Data updated through {formatDataUpdatedAt(dataUpdatedAt)}
+              {t("workbench.dataUpdatedThrough", {
+                date: formatDataUpdatedAt(dataUpdatedAt),
+              })}
             </span>
           </div>
 
           <div className="grid gap-3 lg:grid-cols-[0.8fr_1.25fr_1.25fr]">
             <div className="flex min-w-0 flex-col gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-slate-500">
-              <span>Sources</span>
+              <span>{t("workbench.sources")}</span>
               <div
                 className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-white/10 bg-[var(--surface-0)]/70 px-3 py-2 normal-case tracking-normal"
                 role="group"
-                aria-label="Workbench data sources"
+                aria-label={t("workbench.dataSourcesAria")}
               >
-                {SOURCE_OPTIONS.map((item) => (
+                {sourceOptions.map((item) => (
                   <label
                     key={item.value}
                     className="flex items-center gap-1.5 text-xs font-normal text-slate-200"
@@ -2446,7 +2504,7 @@ export default function WorkbenchGroupingPanel({
               </div>
             </div>
             <label className="flex min-w-0 flex-col gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-slate-500">
-              <span>Start date</span>
+              <span>{t("workbench.startDate")}</span>
               <input
                 type="datetime-local"
                 value={startDateTime}
@@ -2458,7 +2516,7 @@ export default function WorkbenchGroupingPanel({
               />
             </label>
             <label className="flex min-w-0 flex-col gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-slate-500">
-              <span>End date</span>
+              <span>{t("workbench.endDate")}</span>
               <input
                 type="datetime-local"
                 value={endDateTime}
@@ -2473,7 +2531,7 @@ export default function WorkbenchGroupingPanel({
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <span className="mr-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-              Quick range
+              {t("workbench.quickRange")}
             </span>
             {DATE_SHORTCUTS.map((shortcut) => (
               <button
@@ -2482,14 +2540,14 @@ export default function WorkbenchGroupingPanel({
                 onClick={() => applyDateShortcut(shortcut.value)}
                 className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-[11px] text-slate-300 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100"
               >
-                {shortcut.label}
+                {t(shortcut.key)}
               </button>
             ))}
           </div>
 
           <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/10 pt-4">
             <span className="mr-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              Actions
+              {t("workbench.actions")}
             </span>
             <button
               type="button"
@@ -2497,7 +2555,7 @@ export default function WorkbenchGroupingPanel({
               className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100"
             >
               <FiRotateCcw aria-hidden="true" className="h-3.5 w-3.5" />
-              Reset range
+              {t("workbench.resetRange")}
             </button>
             <button
               type="button"
@@ -2506,7 +2564,7 @@ export default function WorkbenchGroupingPanel({
               className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <FiRefreshCw aria-hidden="true" className="h-3.5 w-3.5" />
-              Reload local data
+              {t("workbench.reloadLocalData")}
             </button>
             <span
               className="mx-1 hidden h-5 w-px bg-white/10 sm:block"
@@ -2518,7 +2576,7 @@ export default function WorkbenchGroupingPanel({
               className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100"
             >
               <FiSettings aria-hidden="true" className="h-3.5 w-3.5" />
-              Workstation mappings
+              {t("workbench.workstationMappings")}
             </button>
             <button
               type="button"
@@ -2526,7 +2584,7 @@ export default function WorkbenchGroupingPanel({
               className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100"
             >
               <FiUsers aria-hidden="true" className="h-3.5 w-3.5" />
-              Personnel mapping
+              {t("workbench.personnelMapping")}
             </button>
             <button
               type="button"
@@ -2534,7 +2592,7 @@ export default function WorkbenchGroupingPanel({
               className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100"
             >
               <FiAward aria-hidden="true" className="h-3.5 w-3.5" />
-              Reward rules
+              {t("workbench.rewardRules")}
             </button>
             {isWorkbenchOrganizationDisplayPath(pathname) && (
               <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-violet-300/25 bg-violet-300/[0.06] px-3 py-2 text-xs font-medium text-violet-200">
@@ -2544,7 +2602,7 @@ export default function WorkbenchGroupingPanel({
                   onChange={(event) => setReplayEnabled(event.target.checked)}
                   className="accent-violet-300"
                 />
-                Include 3D Replay
+                {t("workbench.includeReplay")}
               </label>
             )}
           </div>
@@ -2558,17 +2616,20 @@ export default function WorkbenchGroupingPanel({
 
       {undatedDatasetCount > 0 && (
         <section
-          aria-label="Workbench datasets awaiting date confirmation"
+          aria-label={t("workbench.datasetsAwaitingDate")}
           className="rounded-md border border-sky-400/20 bg-sky-400/[0.05] px-3 py-2.5 text-xs text-sky-100"
         >
-          <span className="font-medium text-sky-200">日期待确认</span>
+          <span className="font-medium text-sky-200">
+            {t("workbench.datePending")}
+          </span>
           <span className="ml-2 text-sky-100/75">
-            {undatedDatasetCount.toLocaleString()}{" "}
-            个数据集没有采集日期证据，仍计入来源总量，但不计入具体日期范围。
+            {t("workbench.datePendingDetail", {
+              count: undatedDatasetCount.toLocaleString(),
+            })}
           </span>
           <details className="mt-2">
             <summary className="cursor-pointer text-[11px] text-sky-200/90">
-              查看待确认数据集路径
+              {t("workbench.viewPendingPaths")}
             </summary>
             <ul className="mt-2 max-h-40 space-y-1 overflow-auto rounded border border-sky-300/10 bg-black/10 p-2 font-mono text-[11px] text-sky-100/75">
               {undatedDatasetPaths.map((datasetPath) => (
@@ -2580,25 +2641,27 @@ export default function WorkbenchGroupingPanel({
       )}
       {!loading && hubScope.refreshedAt === null && hubScope.hubTotal === 0 && (
         <div className="rounded-md border border-amber-400/25 bg-amber-400/5 p-3 text-xs text-amber-200">
-          Hub catalog is empty. Please Refresh statistics first.
+          {t("workbench.hubCatalogEmpty")}{" "}
+          {t("workbench.refreshStatisticsFirst")}
         </div>
       )}
       {!loading && hubScope.hubTotal > 0 && (
         <div className="rounded-md border border-cyan-400/15 bg-cyan-400/[0.04] p-3 text-xs text-cyan-100/80">
-          Hub scope: {hubScope.categoryTotal.toLocaleString()} repositories in
-          this category, {hubScope.hubTotal.toLocaleString()} total · Dated{" "}
-          {hubScope.categoryCounts["taccap-g1"].toLocaleString()} · XTac{" "}
-          {hubScope.categoryCounts["xtac-umi-g1"].toLocaleString()} · Merged{" "}
-          {hubScope.categoryCounts["taccap-g1-merged"].toLocaleString()} ·
-          Folder {hubScope.categoryCounts.folder.toLocaleString()} · Other{" "}
-          {hubScope.categoryCounts.other.toLocaleString()}. Local statistics
-          matched {hubScope.localMatchedTotal.toLocaleString()} repositories;{" "}
-          {Math.max(
-            0,
-            hubScope.categoryTotal - hubScope.localMatchedTotal,
-          ).toLocaleString()}{" "}
-          Hub repositories without eligible local data do not participate in
-          Grouped calculations.
+          {t("workbench.hubScope", {
+            category: hubScope.categoryTotal.toLocaleString(),
+            total: hubScope.hubTotal.toLocaleString(),
+            dated: hubScope.categoryCounts["taccap-g1"].toLocaleString(),
+            xtac: hubScope.categoryCounts["xtac-umi-g1"].toLocaleString(),
+            merged:
+              hubScope.categoryCounts["taccap-g1-merged"].toLocaleString(),
+            folder: hubScope.categoryCounts.folder.toLocaleString(),
+            other: hubScope.categoryCounts.other.toLocaleString(),
+            matched: hubScope.localMatchedTotal.toLocaleString(),
+            without: Math.max(
+              0,
+              hubScope.categoryTotal - hubScope.localMatchedTotal,
+            ).toLocaleString(),
+          })}
         </div>
       )}
       <WorkbenchStatisticsFilterNotice filter={statisticsFilter} />
@@ -2611,7 +2674,7 @@ export default function WorkbenchGroupingPanel({
 
       {loading ? (
         <div className="rounded-md border border-white/10 bg-white/[0.03] p-4 text-xs text-slate-500">
-          Loading Workbench dashboard…
+          {t("workbench.loadingDashboard")}
         </div>
       ) : (
         <>
@@ -2622,49 +2685,51 @@ export default function WorkbenchGroupingPanel({
             <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
               <div>
                 <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-300/70">
-                  Live snapshot
+                  {t("workbench.liveSnapshot")}
                 </div>
                 <h4
                   id="workbench-overview-title"
                   className="mt-1 text-sm font-semibold text-slate-200"
                 >
-                  Operations overview
+                  {t("workbench.operationsOverview")}
                 </h4>
                 <p className="mt-1 text-[11px] text-slate-500">
-                  Organization totals and selected-range performance at a
-                  glance.
+                  {t("workbench.overviewHint")}
                 </p>
               </div>
               <span className="rounded-full border border-cyan-400/15 bg-cyan-400/[0.05] px-2.5 py-1 text-[10px] text-cyan-200/75">
                 {range.startDate && range.endDate
                   ? range.startDate + " → " + range.endDate
-                  : "Auto range"}
+                  : t("workbench.autoRange")}
               </span>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {[
                 [
-                  organization + " total hours",
+                  t("workbench.organizationTotalHours"),
                   organizationTotalHours.toLocaleString("en-US", {
                     minimumFractionDigits: 1,
                     maximumFractionDigits: 1,
                   }) + " h",
                 ],
-                ["Selected range hours", formatHours(totalHours) + " h"],
-                ["Episodes", formatCount(totalEpisodes)],
-                ["Tasks", formatCount(selectedDatasetPaths.length)],
-                ["Storage", formatBytes(selectedStorageBytes)],
                 [
-                  "Daily target hours",
+                  t("workbench.selectedRangeHours"),
+                  formatHours(totalHours) + " h",
+                ],
+                [t("common.episodes"), formatCount(totalEpisodes)],
+                [t("common.tasks"), formatCount(selectedDatasetPaths.length)],
+                [t("common.storage"), formatBytes(selectedStorageBytes)],
+                [
+                  t("workbench.dailyTargetHours"),
                   formatHours(rewardDraft.dailyTargetHours) + " h/day",
                 ],
                 [
-                  "Total bonus",
+                  t("workbench.totalBonus"),
                   formatWorkbenchRewardAmount(projectedRewardAmount),
                 ],
-                ["Sources", formatCount(robotIds)],
+                [t("workbench.sourcesCount"), formatCount(robotIds)],
                 [
-                  "Days in range",
+                  t("workbench.daysInRange"),
                   rangeDays === null ? "—" : formatCount(rangeDays),
                 ],
               ].map(([label, value], index) => (
@@ -2697,32 +2762,31 @@ export default function WorkbenchGroupingPanel({
             <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
               <div>
                 <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
-                  Workstation detail
+                  {t("workbench.workstationDetail")}
                 </h4>
                 <p className="mt-1 text-[11px] text-slate-500">
-                  Rows follow the selected statistics scope and workstation
-                  mappings.
+                  {t("workbench.workstationDetailHint")}
                 </p>
               </div>
               <span className="text-[10px] text-slate-500">
                 {workstationDashboardRows.length === 0
-                  ? "No grouped rows"
-                  : `${workstationDashboardRows.length} workstation(s)`}
+                  ? t("workbench.noGroupedRows")
+                  : `${workstationDashboardRows.length} ${t("workbench.workstation")}`}
               </span>
             </div>
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <label className="flex min-w-[14rem] flex-1 items-center gap-2 rounded-md border border-white/10 bg-black/10 px-2.5 py-1.5 text-[11px] text-slate-500">
-                <span className="shrink-0">Filter</span>
+                <span className="shrink-0">{t("workbench.filter")}</span>
                 <input
                   value={workstationQuery}
                   onChange={(event) => setWorkstationQuery(event.target.value)}
-                  placeholder="robot, workstation, dataset…"
+                  placeholder={t("workbench.rowFilterPlaceholder")}
                   className="min-w-0 flex-1 bg-transparent text-slate-200 outline-none placeholder:text-slate-600"
-                  aria-label="Filter workstation rows"
+                  aria-label={t("workbench.filterWorkstationRows")}
                 />
               </label>
               <label className="flex items-center gap-2 text-[11px] text-slate-500">
-                Sort
+                {t("workbench.sort")}
                 <select
                   value={workstationSort}
                   onChange={(event) =>
@@ -2735,12 +2799,12 @@ export default function WorkbenchGroupingPanel({
                     )
                   }
                   className="rounded-md border border-white/10 bg-[var(--surface-0)] px-2 py-1.5 text-slate-200 outline-none"
-                  aria-label="Sort workstation rows"
+                  aria-label={t("workbench.sortWorkstationRows")}
                 >
-                  <option value="reward">Reward</option>
-                  <option value="hours">Hours</option>
-                  <option value="datasets">Datasets</option>
-                  <option value="robot">Workstation</option>
+                  <option value="reward">{t("workbench.reward")}</option>
+                  <option value="hours">{t("common.hours")}</option>
+                  <option value="datasets">{t("workbench.datasets")}</option>
+                  <option value="robot">{t("workbench.workstation")}</option>
                 </select>
               </label>
               <button
@@ -2748,40 +2812,56 @@ export default function WorkbenchGroupingPanel({
                 onClick={exportWorkbenchCsv}
                 className="rounded-md border border-cyan-400/25 bg-cyan-400/[0.06] px-2.5 py-1.5 text-[11px] font-medium text-cyan-200 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/[0.12]"
               >
-                Export CSV
+                {t("workbench.exportCsv")}
               </button>
               <button
                 type="button"
                 onClick={() => void copyWorkbenchShareLink()}
                 className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-[11px] font-medium text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-100"
               >
-                Copy share link
+                {t("workbench.copyShareLink")}
               </button>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[980px] border-collapse text-left text-xs">
                 <thead className="bg-[var(--surface-2)] text-slate-400">
                   <tr>
-                    <th className="px-3 py-2.5 font-medium">Workstation</th>
-                    <th className="px-3 py-2.5 font-medium">Personnel</th>
-                    <th className="px-3 py-2.5 font-medium">Source repos</th>
-                    <th className="px-3 py-2.5 font-medium">Datasets</th>
-                    <th
-                      className="px-3 py-2.5 font-medium"
-                      title="Workstation Hours"
-                    >
-                      WS hours
+                    <th className="px-3 py-2.5 font-medium">
+                      {t("workbench.workstation")}
+                    </th>
+                    <th className="px-3 py-2.5 font-medium">
+                      {t("workbench.personnel")}
+                    </th>
+                    <th className="px-3 py-2.5 font-medium">
+                      {t("workbench.sourceRepos")}
+                    </th>
+                    <th className="px-3 py-2.5 font-medium">
+                      {t("workbench.datasets")}
                     </th>
                     <th
                       className="px-3 py-2.5 font-medium"
-                      title="Per-person target hours"
+                      title={t("workbench.workstationHours")}
                     >
-                      Avg target
+                      {t("workbench.workstationHours")}
                     </th>
-                    <th className="px-3 py-2.5 font-medium">Rate</th>
-                    <th className="px-3 py-2.5 font-medium">Rule</th>
-                    <th className="px-3 py-2.5 font-medium">Avg / ep</th>
-                    <th className="px-3 py-2.5 font-medium">Reward</th>
+                    <th
+                      className="px-3 py-2.5 font-medium"
+                      title={t("workbench.perPersonTargetHours")}
+                    >
+                      {t("workbench.perPersonTargetHours")}
+                    </th>
+                    <th className="px-3 py-2.5 font-medium">
+                      {t("workbench.rate")}
+                    </th>
+                    <th className="px-3 py-2.5 font-medium">
+                      {t("workbench.rule")}
+                    </th>
+                    <th className="px-3 py-2.5 font-medium">
+                      {t("workbench.avgPerEpisode")}
+                    </th>
+                    <th className="px-3 py-2.5 font-medium">
+                      {t("workbench.reward")}
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2799,8 +2879,8 @@ export default function WorkbenchGroupingPanel({
                           return;
                         }
                         openWorkbenchDrilldown({
-                          title: `${row.workstation} detail`,
-                          detail: `${row.workstation} · ${formatHours(row.hours)} hours · ${formatCount(row.count)} datasets`,
+                          title: `${row.workstation} ${t("workbench.workstationDetail")}`,
+                          detail: `${row.workstation} · ${formatHours(row.hours)} ${t("common.hours")} · ${formatCount(row.count)} ${t("workbench.datasets")}`,
                           datasets: datasetsForWorkstation(row.workstation),
                           episodeId: 0,
                         });
@@ -2809,8 +2889,8 @@ export default function WorkbenchGroupingPanel({
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
                           openWorkbenchDrilldown({
-                            title: `${row.workstation} detail`,
-                            detail: `${row.workstation} · ${formatHours(row.hours)} hours · ${formatCount(row.count)} datasets`,
+                            title: `${row.workstation} ${t("workbench.workstationDetail")}`,
+                            detail: `${row.workstation} · ${formatHours(row.hours)} ${t("common.hours")} · ${formatCount(row.count)} ${t("workbench.datasets")}`,
                             datasets: datasetsForWorkstation(row.workstation),
                             episodeId: 0,
                           });
@@ -2819,7 +2899,7 @@ export default function WorkbenchGroupingPanel({
                     >
                       <td
                         className="cursor-help px-3 py-2.5 text-slate-100"
-                        title={`Workstation: ${row.workstation}`}
+                        title={`${t("workbench.workstation")}: ${row.workstation}`}
                       >
                         {row.workstation}
                       </td>
@@ -2828,7 +2908,8 @@ export default function WorkbenchGroupingPanel({
                         title={
                           personnelByWorkstation
                             .get(row.workstation)
-                            ?.join(", ") || "No personnel mapping"
+                            ?.join(", ") ||
+                          t("workbench.noPersonnelMappingShort")
                         }
                       >
                         {personnelByWorkstation
@@ -2874,7 +2955,7 @@ export default function WorkbenchGroupingPanel({
             </div>
             {visibleRobotDashboardRows.length === 0 && (
               <p className="mt-3 text-xs text-slate-500">
-                No workstation rows match the filter.
+                {t("workbench.noWorkstationFilterMatch")}
               </p>
             )}
           </section>
@@ -2884,22 +2965,24 @@ export default function WorkbenchGroupingPanel({
           <section className="rounded-md border border-white/10 bg-[var(--surface-1)]/35 p-4">
             <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
               <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
-                Workstation day heatmap
+                {t("workbench.workstationDayHeatmap")}
               </h4>
               <span className="text-[10px] text-slate-500">
                 {heatmapDays.length === 0
-                  ? "No data days since 2026-08-22"
+                  ? t("workbench.noDataSince", { date: "2026-08-22" })
                   : "2026-08-22 → " +
-                    (workstationHeatmapRange.endDate ?? "Latest") +
+                    (workstationHeatmapRange.endDate ?? t("workbench.latest")) +
                     " · " +
                     heatmapDays.length +
-                    " latest data days"}
+                    ` ${t("workbench.latestDataDays")}`}
               </span>
             </div>
             {heatmapDays.length === 0 ? (
               <div className="rounded-md border border-white/10 bg-white/[0.02] p-4 text-xs text-slate-500">
-                No workstation day data is available from 2026-08-22 through the
-                selected end date.
+                {t("workbench.noWorkstationDayDataFrom", {
+                  date: "2026-08-22",
+                  end: heatmapEndDateLabel,
+                })}
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -2914,7 +2997,7 @@ export default function WorkbenchGroupingPanel({
                   }}
                 >
                   <div className="border-b border-white/10 px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-                    Workstation
+                    {t("workbench.workstation")}
                   </div>
                   {heatmapDays.map((day) => (
                     <div
@@ -3009,11 +3092,11 @@ export default function WorkbenchGroupingPanel({
           <section className="rounded-md border border-white/10 bg-[var(--surface-1)]/35 p-4">
             <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
               <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
-                Daily trend
+                {t("workbench.dailyTrend")}
               </h4>
               <span className="text-[10px] text-slate-500">
-                {dailyTrendTimeline.range.startDate ?? "Beginning"} →{" "}
-                {dailyTrendTimeline.range.endDate ?? "Latest"}
+                {dailyTrendTimeline.range.startDate ?? t("workbench.beginning")}{" "}
+                → {dailyTrendTimeline.range.endDate ?? t("workbench.latest")}
               </span>
             </div>
             <div className="h-64 w-full">
@@ -3064,13 +3147,15 @@ export default function WorkbenchGroupingPanel({
                           strokeWidth={1}
                           role="button"
                           tabIndex={0}
-                          aria-label={`Open daily trend for ${props.payload.date}`}
+                          aria-label={t("workbench.openDailyTrend", {
+                            date: props.payload.date,
+                          })}
                           onClick={() => {
                             const day = props.payload?.date;
                             if (!day) return;
                             openWorkbenchDrilldown({
-                              title: `Daily trend · ${day}`,
-                              detail: `${formatHours(props.payload?.hours ?? 0)} hours`,
+                              title: `${t("workbench.dailyTrend")} · ${day}`,
+                              detail: `${formatHours(props.payload?.hours ?? 0)} ${t("common.hours")}`,
                               day,
                               datasets: sourceFilteredLocalDatasets.filter(
                                 (dataset) =>
@@ -3110,11 +3195,12 @@ export default function WorkbenchGroupingPanel({
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
-                  Top groups
+                  {t("workbench.topGroups")}
                 </h4>
                 <p className="mt-1 text-[11px] text-slate-500">
-                  Workstation · {range.startDate ?? "Beginning"} →{" "}
-                  {range.endDate ?? "Latest"}
+                  {t("workbench.workstation")} ·{" "}
+                  {range.startDate ?? t("workbench.beginning")} →{" "}
+                  {range.endDate ?? t("workbench.latest")}
                 </p>
               </div>
             </div>
@@ -3157,7 +3243,7 @@ export default function WorkbenchGroupingPanel({
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-300/70">
-                    Drilldown
+                    {t("workbench.drilldown")}
                   </div>
                   <h4
                     id="workbench-drilldown-title"
@@ -3175,14 +3261,14 @@ export default function WorkbenchGroupingPanel({
                     onClick={createReviewTaskFromDrilldown}
                     className="rounded-md border border-amber-300/30 bg-amber-300/[0.08] px-2.5 py-1.5 text-[11px] font-medium text-amber-200 transition-colors hover:border-amber-200/60 hover:bg-amber-300/[0.14]"
                   >
-                    Create review task
+                    {t("workbench.createReviewTask")}
                   </button>
                   <button
                     type="button"
                     onClick={() => setDrilldown(null)}
                     className="rounded-md border border-white/10 px-2.5 py-1.5 text-[11px] text-slate-300 transition-colors hover:border-white/25 hover:text-white"
                   >
-                    Close
+                    {t("workbench.close")}
                   </button>
                 </div>
               </div>
@@ -3206,17 +3292,21 @@ export default function WorkbenchGroupingPanel({
                       {dataset.relativePath}
                     </span>
                     <span className="mt-1 block text-[10px] text-slate-500">
-                      Open episode {drilldown.episodeId ?? 0}
+                      {t("workbench.openEpisode", {
+                        episode: drilldown.episodeId ?? 0,
+                      })}
                       {drilldown.frame === undefined
                         ? ""
-                        : ` · frame ${drilldown.frame}`}
+                        : ` · ${t("workbench.frame", {
+                            frame: drilldown.frame,
+                          })}`}
                     </span>
                   </a>
                 ))}
               </div>
               {drilldown.datasets.length === 0 && (
                 <p className="mt-3 text-xs text-slate-500">
-                  No dataset additions match this selection.
+                  {t("workbench.noDatasetAdditions")}
                 </p>
               )}
             </section>
@@ -3227,12 +3317,10 @@ export default function WorkbenchGroupingPanel({
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
-                    Workstation mappings
+                    {t("workbench.workstationMappings")}
                   </h4>
                   <p className="mt-1 text-[11px] text-slate-500">
-                    Workstation rows are aggregated above; edits here remain
-                    device-level and use collector serial or robot_id. Existing
-                    legacy mappings are preserved for compatibility.
+                    {t("workbench.mappingEditorHint")}
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -3242,7 +3330,7 @@ export default function WorkbenchGroupingPanel({
                     disabled={mappingsSaving}
                     className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-200 disabled:opacity-50"
                   >
-                    Import defaults
+                    {t("workbench.importDefaults")}
                   </button>
                   <button
                     type="button"
@@ -3250,7 +3338,7 @@ export default function WorkbenchGroupingPanel({
                     disabled={mappingsSaving || !workstationDraftDirty}
                     className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-200 disabled:opacity-50"
                   >
-                    Reset
+                    {t("workbench.reset")}
                   </button>
                   <button
                     type="button"
@@ -3258,7 +3346,9 @@ export default function WorkbenchGroupingPanel({
                     disabled={mappingsSaving || !workstationDraftDirty}
                     className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-3 py-1.5 text-xs text-cyan-100 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/15 disabled:opacity-50"
                   >
-                    {mappingsSaving ? "Saving…" : "Save"}
+                    {mappingsSaving
+                      ? t("workbench.saving")
+                      : t("workbench.save")}
                   </button>
                 </div>
               </div>
@@ -3277,9 +3367,15 @@ export default function WorkbenchGroupingPanel({
                 <table className="w-full min-w-[760px] border-collapse text-left text-xs">
                   <thead className="bg-[var(--surface-2)] text-slate-400">
                     <tr>
-                      <th className="px-3 py-2.5 font-medium">Device ID</th>
-                      <th className="px-3 py-2.5 font-medium">Workstation</th>
-                      <th className="px-3 py-2.5 font-medium">Source</th>
+                      <th className="px-3 py-2.5 font-medium">
+                        {t("workbench.deviceId")}
+                      </th>
+                      <th className="px-3 py-2.5 font-medium">
+                        {t("workbench.workstation")}
+                      </th>
+                      <th className="px-3 py-2.5 font-medium">
+                        {t("workbench.source")}
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -3306,20 +3402,24 @@ export default function WorkbenchGroupingPanel({
                                   [row.robotId as string]: event.target.value,
                                 }))
                               }
-                              placeholder="Workstation"
+                              placeholder={t(
+                                "workbench.workstationPlaceholder",
+                              )}
                               className="w-full rounded-md border border-white/10 bg-[var(--surface-0)] px-3 py-2 text-slate-100 focus:border-cyan-400 focus:outline-none"
                             />
                           ) : (
-                            <span className="text-slate-500">Legacy only</span>
+                            <span className="text-slate-500">
+                              {t("workbench.legacyOnly")}
+                            </span>
                           )}
                         </td>
                         <td className="px-3 py-2.5 text-slate-300">
                           {row.robotId
                             ? row.collectorSerialNumber
-                              ? "collector SN"
-                              : "robot_id"
+                              ? t("workbench.collectorSn")
+                              : t("workbench.robotIdSource")
                             : row.leftGripperSn
-                              ? "left SN"
+                              ? t("workbench.leftSn")
                               : "—"}
                         </td>
                       </tr>
@@ -3330,8 +3430,7 @@ export default function WorkbenchGroupingPanel({
               {(Object.keys(workstationLegacyMappings).length > 0 ||
                 Object.keys(workstationLegacyDefaults).length > 0) && (
                 <div className="mt-3 rounded-md border border-amber-400/20 bg-amber-400/5 p-3 text-xs text-amber-100">
-                  Existing legacy left SN mappings are still loaded for
-                  compatibility; new workstation edits should use robot_id.
+                  {t("workbench.legacyMappingWarning")}
                 </div>
               )}
             </section>
@@ -3342,16 +3441,15 @@ export default function WorkbenchGroupingPanel({
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
-                    Reward rules
+                    {t("workbench.rewardRules")}
                   </h4>
                   <p className="mt-1 text-[11px] text-slate-500">
-                    Thresholds are expressed as completion percentage against
-                    the selected range target.
+                    {t("workbench.rewardRulesHint")}
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <label className="flex items-center gap-2 text-xs text-slate-400">
-                    <span>Daily target</span>
+                    <span>{t("workbench.dailyTargetLabel")}</span>
                     <input
                       type="number"
                       min="0"
@@ -3369,7 +3467,7 @@ export default function WorkbenchGroupingPanel({
                     />
                   </label>
                   <label className="flex items-center gap-2 text-xs text-slate-400">
-                    <span>Enabled</span>
+                    <span>{t("workbench.enabled")}</span>
                     <input
                       type="checkbox"
                       checked={rewardDraft.enabled}
@@ -3388,7 +3486,7 @@ export default function WorkbenchGroupingPanel({
                     disabled={rewardSaving}
                     className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-200 disabled:opacity-50"
                   >
-                    Restore defaults
+                    {t("workbench.restoreDefaults")}
                   </button>
                   <button
                     type="button"
@@ -3396,7 +3494,7 @@ export default function WorkbenchGroupingPanel({
                     disabled={rewardSaving}
                     className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-200 disabled:opacity-50"
                   >
-                    Add level
+                    {t("workbench.addLevel")}
                   </button>
                   <button
                     type="button"
@@ -3408,7 +3506,7 @@ export default function WorkbenchGroupingPanel({
                     }
                     className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-3 py-1.5 text-xs text-cyan-100 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/15 disabled:opacity-50"
                   >
-                    {rewardSaving ? "Saving…" : "Save"}
+                    {rewardSaving ? t("workbench.saving") : t("workbench.save")}
                   </button>
                 </div>
               </div>
@@ -3427,11 +3525,21 @@ export default function WorkbenchGroupingPanel({
                 <table className="w-full min-w-[860px] border-collapse text-left text-xs">
                   <thead className="bg-[var(--surface-2)] text-slate-400">
                     <tr>
-                      <th className="px-3 py-2.5 font-medium">Label</th>
-                      <th className="px-3 py-2.5 font-medium">Min %</th>
-                      <th className="px-3 py-2.5 font-medium">Max %</th>
-                      <th className="px-3 py-2.5 font-medium">Amount</th>
-                      <th className="px-3 py-2.5 font-medium">Actions</th>
+                      <th className="px-3 py-2.5 font-medium">
+                        {t("workbench.label")}
+                      </th>
+                      <th className="px-3 py-2.5 font-medium">
+                        {t("workbench.minPercent")}
+                      </th>
+                      <th className="px-3 py-2.5 font-medium">
+                        {t("workbench.maxPercent")}
+                      </th>
+                      <th className="px-3 py-2.5 font-medium">
+                        {t("workbench.amount")}
+                      </th>
+                      <th className="px-3 py-2.5 font-medium">
+                        {t("workbench.actions")}
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -3481,7 +3589,7 @@ export default function WorkbenchGroupingPanel({
                                         ),
                                 })
                               }
-                              placeholder="Open"
+                              placeholder={t("workbench.openEnded")}
                               className="w-24 rounded-md border border-white/10 bg-[var(--surface-0)] px-3 py-2 text-right tabular-nums text-slate-100 focus:border-cyan-400 focus:outline-none"
                             />
                           </td>
@@ -3505,7 +3613,7 @@ export default function WorkbenchGroupingPanel({
                               disabled={rewardDraft.levels.length <= 1}
                               className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-amber-300/50 hover:text-amber-200 disabled:opacity-50"
                             >
-                              Remove
+                              {t("workbench.remove")}
                             </button>
                           </td>
                         </tr>
@@ -3516,16 +3624,24 @@ export default function WorkbenchGroupingPanel({
               </div>
               <div className="mt-4">
                 <h5 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                  Episode duration multiplier
+                  {t("workbench.episodeDurationMultiplier")}
                 </h5>
                 <div className="overflow-x-auto rounded-md border border-white/10">
                   <table className="w-full min-w-[650px] border-collapse text-left text-xs">
                     <thead className="bg-[var(--surface-2)] text-slate-400">
                       <tr>
-                        <th className="px-3 py-2.5 font-medium">Label</th>
-                        <th className="px-3 py-2.5 font-medium">Min seconds</th>
-                        <th className="px-3 py-2.5 font-medium">Max seconds</th>
-                        <th className="px-3 py-2.5 font-medium">Multiplier</th>
+                        <th className="px-3 py-2.5 font-medium">
+                          {t("workbench.label")}
+                        </th>
+                        <th className="px-3 py-2.5 font-medium">
+                          {t("workbench.minSeconds")}
+                        </th>
+                        <th className="px-3 py-2.5 font-medium">
+                          {t("workbench.maxSeconds")}
+                        </th>
+                        <th className="px-3 py-2.5 font-medium">
+                          {t("workbench.multiplier")}
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -3564,7 +3680,7 @@ export default function WorkbenchGroupingPanel({
                               min="0"
                               step="1"
                               value={level.maxSeconds ?? ""}
-                              placeholder="Open"
+                              placeholder={t("workbench.openEnded")}
                               onChange={(event) =>
                                 updateEpisodeDurationLevel(index, {
                                   maxSeconds:

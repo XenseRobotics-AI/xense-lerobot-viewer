@@ -1,6 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useT } from "@/context/locale-context";
+import type { InterpolationVars } from "@/i18n/format";
+import type { MessageKey } from "@/i18n/messages";
 import type {
   WorkbenchPersonnelConfig,
   WorkbenchPersonnelScheduleAssignment,
@@ -11,6 +14,7 @@ export const WORKBENCH_PERSONNEL_BASELINE_DAY = "1970-01-01";
 export const DEFAULT_WORKBENCH_PERSONNEL_EMAIL = "jay@xenserobotics.com";
 const ANONYMOUS_PERSONNEL_NAME = "匿名";
 const IGNORED_PERSONNEL_WORKSTATIONS = new Set(["ERROR", "N0", "NO"]);
+type Translator = (key: MessageKey, vars?: InterpolationVars) => string;
 
 export type WorkbenchPersonnelMappingRow = {
   workstation: string;
@@ -147,6 +151,7 @@ export function buildWorkbenchPersonnelConfigFromMapping(
   rows: readonly WorkbenchPersonnelMappingRow[],
   workstationSuggestions: readonly string[] = [],
   selectedDay = WORKBENCH_PERSONNEL_BASELINE_DAY,
+  t?: Translator,
 ): WorkbenchPersonnelConfig {
   const peopleByName = new Map(
     config.people.map((person) => [person.displayName.trim(), { ...person }]),
@@ -172,19 +177,26 @@ export function buildWorkbenchPersonnelConfigFromMapping(
 
   for (const row of normalizedMappingRows(rows, workstationSuggestions)) {
     if (!row.workstation) {
-      throw new Error("Workstation is required for every personnel mapping.");
+      throw new Error(
+        t?.("workbench.workstationRequired") ??
+          "Workstation is required for every personnel mapping.",
+      );
     }
     if (!Number.isInteger(row.collectorCount) || row.collectorCount <= 0) {
       throw new Error(
-        "Original collector count for " +
-          row.workstation +
-          " must be a positive integer.",
+        t?.("workbench.collectorCountPositive", {
+          workstation: row.workstation,
+        }) ??
+          "Original collector count for " +
+            row.workstation +
+            " must be a positive integer.",
       );
     }
     const mappedEmail = mappedEmailsByName.get(row.personnel);
     if (mappedEmail && mappedEmail.toLowerCase() !== row.email.toLowerCase()) {
       throw new Error(
-        `Email for ${row.personnel} must be consistent across mappings.`,
+        t?.("workbench.emailConsistent", { personnel: row.personnel }) ??
+          `Email for ${row.personnel} must be consistent across mappings.`,
       );
     }
     mappedEmailsByName.set(row.personnel, row.email);
@@ -212,9 +224,12 @@ export function buildWorkbenchPersonnelConfigFromMapping(
       existingAssignment.collectorCount !== row.collectorCount
     ) {
       throw new Error(
-        "Original collector count for " +
-          row.workstation +
-          " must be consistent across personnel mappings.",
+        t?.("workbench.collectorCountConsistent", {
+          workstation: row.workstation,
+        }) ??
+          "Original collector count for " +
+            row.workstation +
+            " must be consistent across personnel mappings.",
       );
     }
     const assignment = existingAssignment ?? {
@@ -269,6 +284,7 @@ export default function WorkbenchPersonnelMappingEditor({
   onSaved,
   defaultDay,
 }: WorkbenchPersonnelMappingEditorProps) {
+  const t = useT();
   const [selectedDay, setSelectedDay] = useState(
     () => defaultDay ?? todayDay(),
   );
@@ -327,7 +343,8 @@ export default function WorkbenchPersonnelMappingEditor({
           .catch(() => ({}))) as WorkbenchPersonnelConfig & { error?: string };
         if (!response.ok) {
           throw new Error(
-            payload.error ?? `Unable to save (${response.status}).`,
+            payload.error ??
+              t("workbench.saveFailed", { status: response.status }),
           );
         }
         onSaved(payload);
@@ -341,7 +358,7 @@ export default function WorkbenchPersonnelMappingEditor({
         setSaving(false);
       }
     },
-    [onSaved, organization],
+    [onSaved, organization, t],
   );
 
   const save = () => {
@@ -351,8 +368,12 @@ export default function WorkbenchPersonnelMappingEditor({
         rows,
         workstationSuggestions,
         selectedDay,
+        t,
       );
-      void persist(nextConfig, `Personnel mapping saved for ${selectedDay}.`);
+      void persist(
+        nextConfig,
+        t("workbench.mappingSaved", { date: selectedDay }),
+      );
     } catch (reason: unknown) {
       setStatus({
         kind: "error",
@@ -366,7 +387,7 @@ export default function WorkbenchPersonnelMappingEditor({
     delete schedules[selectedDay];
     void persist(
       { ...config, schedules },
-      `Personnel mapping for ${selectedDay} now follows the previous date.`,
+      t("workbench.mappingInherited", { date: selectedDay }),
     );
   };
 
@@ -399,12 +420,12 @@ export default function WorkbenchPersonnelMappingEditor({
         <div>
           <div className="flex flex-wrap items-center gap-3">
             <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
-              Personnel mapping
+              {t("workbench.personnelMapping")}
             </h4>
             <label className="flex items-center gap-2 text-xs text-slate-400">
-              <span>Date</span>
+              <span>{t("workbench.startDate")}</span>
               <input
-                aria-label="Personnel mapping date"
+                aria-label={t("workbench.personnelMappingDate")}
                 type="date"
                 value={selectedDay}
                 disabled={saving}
@@ -413,9 +434,7 @@ export default function WorkbenchPersonnelMappingEditor({
                   if (!nextDay) return;
                   if (
                     dirty &&
-                    !window.confirm(
-                      "Discard unsaved personnel mapping changes?",
-                    )
+                    !window.confirm(t("workbench.discardMappingChanges"))
                   ) {
                     return;
                   }
@@ -427,18 +446,18 @@ export default function WorkbenchPersonnelMappingEditor({
             </label>
             <span className="rounded-full border border-white/10 px-2 py-1 text-[10px] text-slate-500">
               {effective.isExplicit
-                ? `Saved for ${selectedDay}`
+                ? t("workbench.savedFor", { date: selectedDay })
                 : effective.sourceDate
                   ? effective.sourceDate === WORKBENCH_PERSONNEL_BASELINE_DAY
-                    ? "Inherited from previous date"
-                    : `Inherited from ${effective.sourceDate}`
-                  : "No previous mapping"}
+                    ? t("workbench.inheritedPrevious")
+                    : t("workbench.inheritedFrom", {
+                        date: effective.sourceDate,
+                      })
+                  : t("workbench.noPreviousMapping")}
             </span>
           </div>
           <p className="mt-1 max-w-3xl text-[11px] leading-5 text-slate-500">
-            Each row binds one workstation to one person. Set the original
-            collector count once per workstation; unconfigured dates copy the
-            latest earlier mapping automatically.
+            {t("workbench.mappingHint")}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -451,7 +470,7 @@ export default function WorkbenchPersonnelMappingEditor({
             disabled={!dirty || saving}
             className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-50"
           >
-            Reset
+            {t("workbench.reset")}
           </button>
           <button
             type="button"
@@ -463,7 +482,7 @@ export default function WorkbenchPersonnelMappingEditor({
             }
             className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-slate-300 disabled:opacity-50"
           >
-            Follow previous date
+            {t("workbench.followPreviousDate")}
           </button>
           <button
             type="button"
@@ -471,7 +490,9 @@ export default function WorkbenchPersonnelMappingEditor({
             disabled={!dirty || saving}
             className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-3 py-1.5 text-xs text-cyan-100 disabled:opacity-50"
           >
-            {saving ? "Saving…" : `Save ${selectedDay}`}
+            {saving
+              ? t("workbench.saving")
+              : t("workbench.saveDate", { date: selectedDay })}
           </button>
         </div>
       </div>
@@ -499,13 +520,21 @@ export default function WorkbenchPersonnelMappingEditor({
         <table className="w-full min-w-[860px] border-collapse text-left text-xs">
           <thead className="bg-[var(--surface-2)] text-slate-400">
             <tr>
-              <th className="w-40 px-3 py-2.5 font-medium">Workstation</th>
-              <th className="px-3 py-2.5 font-medium">Personnel</th>
-              <th className="px-3 py-2.5 font-medium">Email</th>
-              <th className="w-36 px-3 py-2.5 font-medium">
-                Original collectors
+              <th className="w-40 px-3 py-2.5 font-medium">
+                {t("workbench.workstation")}
               </th>
-              <th className="w-24 px-3 py-2.5 font-medium">Action</th>
+              <th className="px-3 py-2.5 font-medium">
+                {t("workbench.personnel")}
+              </th>
+              <th className="px-3 py-2.5 font-medium">
+                {t("workbench.email")}
+              </th>
+              <th className="w-36 px-3 py-2.5 font-medium">
+                {t("workbench.originalCollectors")}
+              </th>
+              <th className="w-24 px-3 py-2.5 font-medium">
+                {t("workbench.action")}
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -516,7 +545,7 @@ export default function WorkbenchPersonnelMappingEditor({
                     aria-label={`Mapping ${index + 1} workstation`}
                     list="workbench-personnel-workstations"
                     value={row.workstation}
-                    placeholder="A2"
+                    placeholder={t("workbench.mappingWorkstationPlaceholder")}
                     onChange={(event) => {
                       const workstation = event.target.value;
                       setRows((current) =>
@@ -593,7 +622,7 @@ export default function WorkbenchPersonnelMappingEditor({
                     onClick={() => removeRow(index)}
                     className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-amber-200"
                   >
-                    Remove
+                    {t("workbench.remove")}
                   </button>
                 </td>
               </tr>
@@ -617,7 +646,7 @@ export default function WorkbenchPersonnelMappingEditor({
         }}
         className="mt-3 rounded-md border border-white/10 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-100"
       >
-        Add mapping
+        {t("workbench.addMapping")}
       </button>
     </section>
   );

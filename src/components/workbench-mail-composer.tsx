@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useT } from "@/context/locale-context";
 import {
   createDefaultWorkbenchMailDraft,
   createWorkbenchDashboardMail,
@@ -48,6 +49,7 @@ export default function WorkbenchMailComposer({
   recipientSuggestions = [],
   recipientGroups = [],
 }: WorkbenchMailComposerProps) {
+  const t = useT();
   const [draft, setDraft] = useState<WorkbenchMailDraft>(() =>
     createDefaultWorkbenchMailDraft({
       organization,
@@ -208,7 +210,10 @@ export default function WorkbenchMailComposer({
   const handleSaveSmtpPassword = useCallback(async () => {
     const password = smtpPassword.trim();
     if (!password) {
-      setPasswordStatus({ kind: "error", message: "SMTP 密码不能为空。" });
+      setPasswordStatus({
+        kind: "error",
+        message: t("workbench.smtpPasswordRequired"),
+      });
       return;
     }
 
@@ -226,12 +231,15 @@ export default function WorkbenchMailComposer({
         .json()
         .catch(() => ({}))) as WorkbenchSmtpPasswordResponse;
       if (!response.ok) {
-        throw new Error(payload.error ?? `保存失败 (${response.status})`);
+        throw new Error(
+          payload.error ??
+            t("workbench.saveFailed", { status: response.status }),
+        );
       }
       setSmtpPassword("");
       setPasswordStatus({
         kind: "info",
-        message: payload.message ?? "SMTP 密码已保存。",
+        message: payload.message ?? t("workbench.smtpPasswordSaved"),
       });
     } catch (reason: unknown) {
       setPasswordStatus({
@@ -241,7 +249,7 @@ export default function WorkbenchMailComposer({
     } finally {
       setPasswordSaving(false);
     }
-  }, [smtpPassword]);
+  }, [smtpPassword, t]);
 
   const handleSend = useCallback(async () => {
     const error = validateWorkbenchMailDraft(draft);
@@ -250,7 +258,7 @@ export default function WorkbenchMailComposer({
       return;
     }
     if (!message) {
-      setStatus({ kind: "error", message: "请先生成邮件预览。" });
+      setStatus({ kind: "error", message: t("workbench.noPreview") });
       return;
     }
     const messageError = validateWorkbenchMailMessage(message);
@@ -285,11 +293,14 @@ export default function WorkbenchMailComposer({
         .json()
         .catch(() => ({}))) as WorkbenchMailSmokeTestResponse;
       if (!response.ok) {
-        throw new Error(payload.error ?? `发送失败 (${response.status})`);
+        throw new Error(
+          payload.error ??
+            t("workbench.sendFailed", { status: response.status }),
+        );
       }
       setStatus({
         kind: "info",
-        message: payload.message ?? "发送完成。",
+        message: payload.message ?? t("workbench.sent"),
       });
     } catch (reason: unknown) {
       setStatus({
@@ -297,7 +308,7 @@ export default function WorkbenchMailComposer({
         message: reason instanceof Error ? reason.message : String(reason),
       });
     }
-  }, [draft, message, organization]);
+  }, [draft, message, organization, t]);
 
   const statusTone =
     status?.kind === "error"
@@ -312,7 +323,7 @@ export default function WorkbenchMailComposer({
     <section className="rounded-md border border-white/10 bg-[var(--surface-1)]/35 p-4">
       <div className="mb-3 flex items-baseline justify-between gap-2">
         <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
-          邮件发送
+          {t("workbench.mail")}
         </h4>
         <button
           type="button"
@@ -322,14 +333,14 @@ export default function WorkbenchMailComposer({
           }}
           className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-slate-200 transition-colors hover:border-cyan-300/50 hover:text-cyan-100"
         >
-          SMTP 密码
+          {t("workbench.smtpPassword")}
         </button>
       </div>
       {passwordEditorOpen && (
         <div className="mb-3 rounded-md border border-white/10 bg-[var(--surface-0)]/60 p-3">
           <label className="block">
             <span className="mb-1 block text-[10px] uppercase tracking-[0.14em] text-slate-500">
-              SMTP 密码
+              {t("workbench.smtpPassword")}
             </span>
             <div className="flex flex-col gap-2 sm:flex-row">
               <input
@@ -340,7 +351,7 @@ export default function WorkbenchMailComposer({
                   setSmtpPassword(event.target.value);
                   setPasswordStatus(null);
                 }}
-                placeholder="QQ 邮箱授权码"
+                placeholder={t("workbench.smtpPasswordPlaceholder")}
                 className="min-w-0 flex-1 rounded-md border border-white/10 bg-[var(--surface-0)] px-3 py-2 text-slate-100 focus:border-cyan-400 focus:outline-none"
               />
               <button
@@ -349,7 +360,7 @@ export default function WorkbenchMailComposer({
                 disabled={passwordSaving}
                 className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-3 py-2 text-xs text-cyan-100 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/15 disabled:opacity-50"
               >
-                {passwordSaving ? "保存中…" : "保存"}
+                {passwordSaving ? t("workbench.saving") : t("workbench.save")}
               </button>
             </div>
           </label>
@@ -366,7 +377,7 @@ export default function WorkbenchMailComposer({
       <div className="grid gap-3 md:grid-cols-2">
         <div className="md:col-span-2">
           <label className="mb-1 block text-[10px] uppercase tracking-[0.14em] text-slate-500">
-            发件人
+            {t("workbench.sender")}
           </label>
           <div className="rounded-md border border-white/10 bg-[var(--surface-0)] px-3 py-2 text-sm text-slate-300 break-all">
             {draft.sender}
@@ -374,19 +385,19 @@ export default function WorkbenchMailComposer({
         </div>
         <label className="block">
           <span className="mb-1 block text-[10px] uppercase tracking-[0.14em] text-slate-500">
-            收件人
+            {t("workbench.recipient")}
           </span>
           <input
             type="text"
             value={draft.recipient}
             onChange={(event) => updateDraft({ recipient: event.target.value })}
-            placeholder="多个邮箱使用逗号分隔"
+            placeholder={t("workbench.recipientPlaceholder")}
             className="w-full rounded-md border border-white/10 bg-[var(--surface-0)] px-3 py-2 text-slate-100 focus:border-cyan-400 focus:outline-none"
           />
         </label>
         <label className="block">
           <span className="mb-1 block text-[10px] uppercase tracking-[0.14em] text-slate-500">
-            主题
+            {t("workbench.subject")}
           </span>
           <input
             type="text"
@@ -400,25 +411,25 @@ export default function WorkbenchMailComposer({
         </label>
         <label className="block md:col-span-2">
           <span className="mb-1 block text-[10px] uppercase tracking-[0.14em] text-slate-500">
-            邮件备注
+            {t("workbench.note")}
           </span>
           <textarea
             value={draft.note}
             onChange={(event) => updateDraft({ note: event.target.value })}
             rows={4}
-            placeholder="可选；备注会同时出现在 HTML 邮件和纯文本兜底中。"
+            placeholder={t("workbench.notePlaceholder")}
             className="min-h-24 w-full resize-y rounded-md border border-white/10 bg-[var(--surface-0)] px-3 py-2 text-slate-100 focus:border-cyan-400 focus:outline-none"
           />
         </label>
       </div>
       <div className="mt-3">
         <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-          邮件预览
+          {t("workbench.preview")}
         </div>
         {message ? (
           <div className="w-full overflow-hidden rounded-md border border-white/10 bg-slate-200">
             <iframe
-              title="Workbench HTML 邮件预览"
+              title={t("workbench.previewTitle")}
               sandbox=""
               srcDoc={message.htmlBody}
               className="h-[720px] w-full border-0 bg-slate-200"
@@ -426,7 +437,7 @@ export default function WorkbenchMailComposer({
           </div>
         ) : (
           <div className="flex min-h-40 items-center justify-center rounded-md border border-dashed border-white/10 bg-[var(--surface-0)]/60 px-4 text-center text-xs text-slate-500">
-            尚未生成邮件。生成预览后才能发送。
+            {t("workbench.noPreview")}
           </div>
         )}
       </div>
@@ -448,7 +459,7 @@ export default function WorkbenchMailComposer({
             disabled={!dashboardInput}
             className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-slate-200 transition-colors hover:border-cyan-300/50 hover:text-cyan-100 disabled:opacity-50"
           >
-            生成/刷新预览
+            {t("workbench.generatePreview")}
           </button>
           <button
             type="button"
@@ -456,14 +467,14 @@ export default function WorkbenchMailComposer({
             disabled={!message}
             className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-3 py-1.5 text-xs text-cyan-100 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            发送
+            {t("workbench.send")}
           </button>
         </div>
       </div>
       {(recipientOptions.length > 0 || recipientGroups.length > 0) && (
         <fieldset className="mt-3 rounded-md border border-white/10 bg-[var(--surface-0)]/40 p-3">
           <legend className="px-1 text-[10px] uppercase tracking-[0.14em] text-slate-500">
-            收件人邮箱（可多选）
+            {t("workbench.recipientSelection")}
           </legend>
           {recipientGroups.length > 0 && (
             <div className="mb-3 flex flex-col gap-2 rounded-md border border-cyan-400/15 bg-cyan-400/[0.04] p-2.5 sm:flex-row sm:items-center">
@@ -471,7 +482,7 @@ export default function WorkbenchMailComposer({
                 htmlFor="workbench-recipient-group"
                 className="shrink-0 text-xs font-medium text-cyan-100"
               >
-                快捷分组
+                {t("workbench.shortcutGroup")}
               </label>
               <select
                 id="workbench-recipient-group"
@@ -483,7 +494,7 @@ export default function WorkbenchMailComposer({
                 }}
                 className="min-w-0 flex-1 rounded-md border border-cyan-400/20 bg-[var(--surface-0)] px-3 py-2 text-xs text-slate-100 focus:border-cyan-300 focus:outline-none"
               >
-                <option value="">选择分组，自动填充邮箱</option>
+                <option value="">{t("workbench.chooseGroup")}</option>
                 {recipientGroups.map((group) => (
                   <option key={group.id} value={group.id}>
                     {group.label}
@@ -491,12 +502,12 @@ export default function WorkbenchMailComposer({
                 ))}
               </select>
               <span className="text-[11px] text-slate-500">
-                选择后会合并到收件人，可重复选择
+                {t("workbench.mergeRecipients")}
               </span>
             </div>
           )}
           <div className="mb-2 text-[11px] text-slate-500">
-            也可以直接勾选人员
+            {t("workbench.selectPersonnel")}
           </div>
           <div className="flex flex-wrap gap-x-5 gap-y-2">
             {recipientOptions.map((item) => (
