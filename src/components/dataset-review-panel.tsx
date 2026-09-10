@@ -9,6 +9,7 @@ import type {
   EpisodeLengthStats,
 } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import { EpisodeLengthHistogram } from "@/components/stats-panel";
+import HfDownloadPanel from "@/components/hf-download-panel";
 import WorkbenchDatasetStatistics from "@/components/workbench-dataset-statistics";
 import WorkbenchGroupingPanel from "@/components/workbench-grouping-panel";
 import { HF_MIRROR_ENDPOINT, HF_OFFICIAL_ENDPOINT } from "@/lib/hf-endpoints";
@@ -294,7 +295,7 @@ export default function DatasetReviewPanel({
     parseTacverseHubCategorySelection(searchParams.get("workbenchHubCategory")),
   );
   const [workbenchView, setWorkbenchView] = useState<
-    "dataset-statistics" | "checks" | "grouping"
+    "dataset-statistics" | "checks" | "grouping" | "hf-download"
   >("grouping");
   const qualityRequestIdRef = useRef(0);
   const statisticsOrganization =
@@ -651,20 +652,22 @@ export default function DatasetReviewPanel({
               {t("workbench.refreshChecks")}
             </button>
           )}
-          <button
-            type="button"
-            onClick={refreshStatistics}
-            disabled={
-              statisticsAction !== null ||
-              accountBusy ||
-              !statisticsOrganization
-            }
-            className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-3 py-1.5 text-xs text-cyan-100 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {statisticsAction === "refresh"
-              ? t("workbench.refreshingStatistics")
-              : t("workbench.refreshStatistics")}
-          </button>
+          {workbenchView !== "hf-download" && (
+            <button
+              type="button"
+              onClick={refreshStatistics}
+              disabled={
+                statisticsAction !== null ||
+                accountBusy ||
+                !statisticsOrganization
+              }
+              className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-3 py-1.5 text-xs text-cyan-100 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {statisticsAction === "refresh"
+                ? t("workbench.refreshingStatistics")
+                : t("workbench.refreshStatistics")}
+            </button>
+          )}
           <label className="flex items-center gap-1.5 text-[11px] text-slate-400">
             <span>{t("workbench.hub")}</span>
             <select
@@ -762,7 +765,7 @@ export default function DatasetReviewPanel({
         </div>
       )}
 
-      {progressLabel && (
+      {workbenchView !== "hf-download" && progressLabel && (
         <div
           role="status"
           aria-live="polite"
@@ -817,17 +820,18 @@ export default function DatasetReviewPanel({
         </div>
       )}
 
-      {(statisticsRefreshError || statisticsRefreshMessage) && (
-        <div
-          className={`rounded-lg border p-3 text-xs ${
-            statisticsRefreshError
-              ? "border-amber-400/25 bg-amber-400/5 text-amber-200"
-              : "border-emerald-400/25 bg-emerald-400/5 text-emerald-200"
-          }`}
-        >
-          {statisticsRefreshError || statisticsRefreshMessage}
-        </div>
-      )}
+      {workbenchView !== "hf-download" &&
+        (statisticsRefreshError || statisticsRefreshMessage) && (
+          <div
+            className={`rounded-lg border p-3 text-xs ${
+              statisticsRefreshError
+                ? "border-amber-400/25 bg-amber-400/5 text-amber-200"
+                : "border-emerald-400/25 bg-emerald-400/5 text-emerald-200"
+            }`}
+          >
+            {statisticsRefreshError || statisticsRefreshMessage}
+          </div>
+        )}
 
       <div className="flex flex-wrap gap-1 border-b border-white/10 pb-1">
         {(
@@ -835,6 +839,7 @@ export default function DatasetReviewPanel({
             ["grouping", t("workbench.groupedStatistics")],
             ["dataset-statistics", t("workbench.datasetStatistics")],
             ["checks", t("workbench.currentDatasetChecks")],
+            ["hf-download", t("workbench.hfDownloadTools")],
           ] as const
         ).map(([value, label]) => (
           <button
@@ -852,7 +857,8 @@ export default function DatasetReviewPanel({
         ))}
       </div>
 
-      {workbenchView !== "checks" && (
+      {(workbenchView === "grouping" ||
+        workbenchView === "dataset-statistics") && (
         <fieldset className="rounded-lg border border-white/10 bg-[var(--surface-1)]/35 px-3 py-2.5">
           <legend className="px-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
             {t("workbench.datasetCategory")}
@@ -904,7 +910,13 @@ export default function DatasetReviewPanel({
         </fieldset>
       )}
 
-      {workbenchView === "dataset-statistics" ? (
+      {workbenchView === "hf-download" ? (
+        <HfDownloadPanel
+          endpoint={statisticsEndpoint}
+          token={statisticsToken}
+          initialSource={datasetInfo.repoId || datasetName}
+        />
+      ) : workbenchView === "dataset-statistics" ? (
         <WorkbenchDatasetStatistics
           categoryFilter={hubCategoryFilter}
           refreshToken={statisticsRefreshToken}

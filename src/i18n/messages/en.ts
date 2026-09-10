@@ -1234,6 +1234,56 @@ export const en = {
   "workbench.waitingNetworkBytes": "waiting for network bytes…",
   "workbench.groupedStatistics": "Grouped statistics",
   "workbench.currentDatasetChecks": "Current dataset checks",
+  "workbench.hfDownloadTools": "HF download tools",
+  "workbench.hfDownloadDescription":
+    "Download one exact Hugging Face dataset revision into the local LeRobot library.",
+  "workbench.hfDownloadRepoPath": "Repository path",
+  "workbench.hfDownloadRepoHint":
+    "Use owner/repo, or owner/repo/folder for a single folder dataset.",
+  "workbench.hfDownloadRoot": "Download root",
+  "workbench.hfDownloadBrowse": "Browse…",
+  "workbench.hfDownloadChooseRoot": "Choose the LeRobot download root",
+  "workbench.hfDownloadBrowseUnavailable":
+    "The server folder picker is unavailable; type the path instead.",
+  "workbench.hfDownloadScope": "Download scope",
+  "workbench.hfDownloadAllFiles": "All files",
+  "workbench.hfDownloadMetaOnly": "Meta only",
+  "workbench.hfDownloadFinalPath": "Final path",
+  "workbench.hfDownloadInvalidPreview":
+    "Enter a valid repository path and download root.",
+  "workbench.hfDownloadCheck": "Check download",
+  "workbench.hfDownloadChecking": "Checking…",
+  "workbench.hfDownloadCancel": "Cancel",
+  "workbench.hfDownloadIncomplete":
+    "The download stream ended without a result.",
+  "workbench.hfDownloadCancelled":
+    "Download cancelled. The existing dataset was not changed.",
+  "workbench.hfDownloadUnknownSizes": "files of unknown size",
+  "workbench.hfDownloadRevision": "Remote revision",
+  "workbench.hfDownloadFilesAndSize": "Files · known size",
+  "workbench.hfDownloadLocalState": "Local state",
+  "workbench.hfDownloadAlreadyCurrent":
+    "This scope is already at the checked revision.",
+  "workbench.hfDownloadWillReplace":
+    "Existing content will be backed up and replaced.",
+  "workbench.hfDownloadMissing": "No existing content in this scope.",
+  "workbench.hfDownloadConfirmReplace":
+    "I confirm that the existing dataset will be backed up and replaced.",
+  "workbench.hfDownloadConfirmReplaceMeta":
+    "I confirm that the existing meta folder will be backed up and replaced.",
+  "workbench.hfDownloadConfirmNew":
+    "I checked the revision, file count, size, and final path.",
+  "workbench.hfDownloadReplace": "Back up and replace",
+  "workbench.hfDownloadReplaceMeta": "Back up and replace meta",
+  "workbench.hfDownloadStart": "Start download",
+  "workbench.hfDownloadDownloading": "Downloading…",
+  "workbench.hfDownloadPromoting": "Verifying and installing snapshot…",
+  "workbench.hfDownloadPreparing": "Preparing files…",
+  "workbench.hfDownloadComplete": "Download complete",
+  "workbench.hfDownloadSavedTo": "Saved to:",
+  "workbench.hfDownloadBackupAt": "Previous version backup:",
+  "workbench.hfDownloadMetaPreservedData":
+    "Only meta was replaced. Data, videos, and other files were not changed.",
   "workbench.datasetCategory": "Dataset category",
   "workbench.allDatasetsCategory": "All datasets",
   "workbench.datedCategory": "TacVerse/taccap-g1 · Dated",

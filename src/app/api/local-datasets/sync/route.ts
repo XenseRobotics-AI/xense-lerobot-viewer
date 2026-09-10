@@ -8,6 +8,12 @@ import {
   resolveHfSyncEndpoint,
 } from "@/lib/hf-endpoints";
 import { resolveHfToken } from "@/lib/hf-token-store";
+import {
+  activeDatasetWrite,
+  beginDatasetWrite,
+  finishDatasetWrite,
+  type DatasetWriteLease,
+} from "@/lib/dataset-write-lock";
 import { addHfMirrorProxyBypass } from "@/lib/proxy-bypass";
 import { normalizeHfToken } from "@/utils/hfValidation";
 import {
@@ -256,12 +262,31 @@ function streamDownload(
   pythonBin: string,
   endpoint: string,
   token: string | null,
+  writeLease: DatasetWriteLease,
 ): Response {
   const encoder = new TextEncoder();
+  let streamCancelled = false;
+  let stopChild = () => {
+    streamCancelled = true;
+  };
   return new Response(
     new ReadableStream<Uint8Array>({
       start(controller) {
         let closed = false;
+        let child: ChildProcessWithoutNullStreams | null = null;
+        const terminateChild = () => {
+          streamCancelled = true;
+          if (!child || child.exitCode !== null || child.signalCode !== null)
+            return;
+          child.kill("SIGTERM");
+          const forceKill = setTimeout(() => {
+            if (child && child.exitCode === null && child.signalCode === null) {
+              child.kill("SIGKILL");
+            }
+          }, 2_000);
+          forceKill.unref();
+        };
+        stopChild = terminateChild;
         const send = (obj: unknown) => {
           if (closed) return;
           try {
@@ -271,6 +296,8 @@ function streamDownload(
           }
         };
         const close = () => {
+          finishDatasetWrite(writeLease);
+          activeSync = null;
           if (closed) return;
           closed = true;
           try {
@@ -279,13 +306,14 @@ function streamDownload(
             /* already torn down */
           }
         };
-
-        let child: ChildProcessWithoutNullStreams;
+        if (streamCancelled) {
+          close();
+          return;
+        }
         try {
           child = spawnScript(scriptFile, pythonBin, args, endpoint, token);
         } catch (err) {
           send({ type: "error", error: `Failed to launch Python: ${err}` });
-          activeSync = null;
           close();
           return;
         }
@@ -320,7 +348,6 @@ function streamDownload(
 
         child.on("error", (err) => {
           send({ type: "error", error: `Python failed: ${err.message}` });
-          activeSync = null;
           close();
         });
 
@@ -336,14 +363,11 @@ function streamDownload(
                 `Sync exited with code ${code} and no output.`,
             });
           }
-          activeSync = null;
           close();
         });
       },
       cancel() {
-        // Client navigated away; the child keeps running to completion so a
-        // half-written dataset directory isn't left behind.
-        activeSync = null;
+        stopChild();
       },
     }),
     {
@@ -361,6 +385,14 @@ function streamDownload(
  * `label` is what the single-run lock and its 409 report, so a blocked caller
  * is told which dataset is holding it rather than just which org.
  */
+function writeKeyForTarget(
+  root: string,
+  target: { label: string; args: string[] },
+): string {
+  const targetPath = path.resolve(root, ...target.label.split("/"));
+  return target.args[0] === "--org" ? `${targetPath}/*` : targetPath;
+}
+
 function resolveTarget(body: {
   source?: unknown;
   repo?: unknown;
@@ -446,9 +478,13 @@ export async function POST(request: NextRequest): Promise<Response> {
     return Response.json({ error: String(err) }, { status: 500 });
   }
 
-  if (activeSync) {
+  const writeKey = writeKeyForTarget(root, target);
+  const activeWrite = activeDatasetWrite(writeKey);
+  if (activeSync || activeWrite) {
     return Response.json(
-      { error: `A sync of ${activeSync.source} is already running.` },
+      {
+        error: `A dataset write of ${activeSync?.source ?? activeWrite?.label} is already running.`,
+      },
       { status: 409 },
     );
   }
@@ -483,6 +519,17 @@ export async function POST(request: NextRequest): Promise<Response> {
       );
     }
 
+    const writeLease = beginDatasetWrite(
+      "metadata-sync",
+      target.label,
+      writeKey,
+    );
+    if (!writeLease) {
+      return Response.json(
+        { error: "Another dataset write started before this sync." },
+        { status: 409 },
+      );
+    }
     activeSync = { source: target.label, startedAt: Date.now() };
     return streamDownload(
       statsScriptPath(),
@@ -490,6 +537,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       python.bin,
       endpoint,
       token,
+      writeLease,
     );
   }
 
@@ -537,6 +585,13 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
+  const writeLease = beginDatasetWrite("metadata-sync", target.label, writeKey);
+  if (!writeLease) {
+    return Response.json(
+      { error: "Another dataset write started before this sync." },
+      { status: 409 },
+    );
+  }
   activeSync = { source: target.label, startedAt: Date.now() };
   return streamDownload(
     syncScriptPath(),
@@ -544,5 +599,6 @@ export async function POST(request: NextRequest): Promise<Response> {
     python.bin,
     HF_SYNC_ENDPOINT,
     token,
+    writeLease,
   );
 }
