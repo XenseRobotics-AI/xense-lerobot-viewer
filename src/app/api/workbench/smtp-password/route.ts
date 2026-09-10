@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { isSameOriginRequest, noStoreHeaders } from "@/lib/request-security";
 import {
   normalizeWorkbenchSmtpPassword,
+  workbenchSmtpPasswordFilePath,
   writeWorkbenchSmtpPassword,
 } from "@/lib/workbench-mail-runtime";
 
@@ -45,7 +46,10 @@ export async function PUT(request: NextRequest): Promise<Response> {
   }
 
   try {
-    const result = await writeWorkbenchSmtpPassword(password);
+    const result = await writeWorkbenchSmtpPassword(
+      password,
+      workbenchSmtpPasswordFilePath(),
+    );
     return Response.json(
       {
         message: "SMTP password saved.",

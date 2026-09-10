@@ -363,6 +363,9 @@ export default function WorkbenchMailComposer({
                 {passwordSaving ? t("workbench.saving") : t("workbench.save")}
               </button>
             </div>
+            <span className="mt-1 block text-[11px] leading-4 text-slate-500">
+              {t("workbench.smtpPasswordHint")}
+            </span>
           </label>
           {passwordStatus && (
             <div

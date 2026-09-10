@@ -1066,8 +1066,10 @@ export const zh: Record<MessageKey, string> = {
   "workbench.excluded": "已排除 {count} 个",
   "workbench.viewExcluded": "查看排除的数据集",
   "workbench.mail": "邮件发送",
-  "workbench.smtpPassword": "SMTP 密码",
-  "workbench.smtpPasswordPlaceholder": "QQ 邮箱授权码",
+  "workbench.smtpPassword": "SMTP 授权码",
+  "workbench.smtpPasswordPlaceholder": "QQ 或 163 邮箱授权码",
+  "workbench.smtpPasswordHint":
+    "请输入当前配置的 QQ 或 163 邮箱授权码，不是邮箱登录密码。",
   "workbench.smtpPasswordRequired": "SMTP 密码不能为空。",
   "workbench.smtpPasswordSaved": "SMTP 密码已保存。",
   "workbench.save": "保存",

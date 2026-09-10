@@ -3,7 +3,10 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 import { isSameOriginRequest } from "@/lib/request-security";
 import { pythonSpawnEnv } from "@/lib/python-runtime";
-import { workbenchSmtpPasswordFilePath } from "@/lib/workbench-mail-runtime";
+import {
+  normalizeWorkbenchSmtpProvider,
+  workbenchSmtpPasswordFilePath,
+} from "@/lib/workbench-mail-runtime";
 import {
   normalizeWorkbenchMailRecipients,
   validateWorkbenchMailMessage,
@@ -101,10 +104,15 @@ function pythonBin(): string {
 }
 
 function mailSpawnEnv(message: WorkbenchMailMessage): NodeJS.ProcessEnv {
+  const provider = normalizeWorkbenchSmtpProvider(process.env.SMTP_PROVIDER);
+  const sender =
+    process.env.SMTP_FROM_ADDRESS?.trim() ||
+    (provider === "qq" ? WORKBENCH_MAIL_SENDER : "");
   const env = {
     ...pythonSpawnEnv(),
-    SMTP_FROM_ADDRESS: WORKBENCH_MAIL_SENDER,
-    SMTP_USERNAME: process.env.SMTP_USERNAME?.trim() || WORKBENCH_MAIL_SENDER,
+    SMTP_PROVIDER: provider,
+    SMTP_FROM_ADDRESS: sender,
+    SMTP_USERNAME: process.env.SMTP_USERNAME?.trim() || sender,
     SMTP_TO_ADDRESS: message.recipient,
     SMTP_SUBJECT: message.subject,
     SMTP_TEXT_BODY: message.textBody,
@@ -112,7 +120,7 @@ function mailSpawnEnv(message: WorkbenchMailMessage): NodeJS.ProcessEnv {
   } as NodeJS.ProcessEnv;
 
   if (!env.SMTP_PASSWORD?.trim() && !env.SMTP_PASSWORD_FILE?.trim()) {
-    env.SMTP_PASSWORD_FILE = workbenchSmtpPasswordFilePath();
+    env.SMTP_PASSWORD_FILE = workbenchSmtpPasswordFilePath(provider);
   }
 
   return env;

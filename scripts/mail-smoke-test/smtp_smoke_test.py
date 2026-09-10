@@ -7,6 +7,7 @@ Required environment variables:
   SMTP_PASSWORD or SMTP_PASSWORD_FILE
 
 Optional environment variables:
+  SMTP_PROVIDER=qq
   SMTP_HOST=smtp.qq.com
   SMTP_PORT=465
   SMTP_FROM_ADDRESS=1796262052@qq.com
@@ -18,9 +19,9 @@ Optional environment variables:
   SMTP_USE_SSL=1
   SMTP_TIMEOUT_SECONDS=15
 
-For QQ Mail, SMTP_PASSWORD must be the IMAP/SMTP authorization code, not the
-login password. If SMTP_PASSWORD_FILE is set, the script reads the password from
-that file instead.
+For QQ Mail and NetEase 163 Mail, SMTP_PASSWORD must be the provider's SMTP
+authorization code, not the login password. If SMTP_PASSWORD_FILE is set, the
+script reads the password from that file instead.
 """
 
 from __future__ import annotations
@@ -37,8 +38,6 @@ from email.utils import formatdate, getaddresses, make_msgid
 from pathlib import Path
 from typing import Any
 
-DEFAULT_SMTP_HOST = "smtp.qq.com"
-DEFAULT_SMTP_PORT = 465
 DEFAULT_FROM_ADDRESS = "1796262052@qq.com"
 DEFAULT_TO_ADDRESS = "frank@xenserobotics.com"
 DEFAULT_SUBJECT = "SMTP smoketest"
@@ -52,6 +51,20 @@ DEFAULT_TIMEOUT_SECONDS = 15.0
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
+SMTP_PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
+    "qq": {
+        "host": "smtp.qq.com",
+        "port": 465,
+        "from_address": DEFAULT_FROM_ADDRESS,
+        "use_ssl": True,
+    },
+    "163": {
+        "host": "smtp.163.com",
+        "port": 465,
+        "from_address": None,
+        "use_ssl": True,
+    },
+}
 
 
 class ConfigError(Exception):
@@ -78,6 +91,15 @@ def get_optional_env(name: str, default: str) -> str:
     if value is None or not value.strip():
         return default
     return value.strip()
+
+
+def get_provider() -> str:
+    provider = os.environ.get("SMTP_PROVIDER", "qq").strip().lower()
+    if provider in {"netease", "netease163"}:
+        provider = "163"
+    if provider not in SMTP_PROVIDER_PRESETS:
+        raise ConfigError("SMTP_PROVIDER must be one of qq or 163")
+    return provider
 
 
 def get_password() -> str:
@@ -180,7 +202,17 @@ def build_message(
 
 
 def load_config() -> dict[str, Any]:
-    from_address = get_optional_env("SMTP_FROM_ADDRESS", DEFAULT_FROM_ADDRESS)
+    provider = get_provider()
+    preset = SMTP_PROVIDER_PRESETS[provider]
+    from_address = os.environ.get("SMTP_FROM_ADDRESS", "").strip()
+    if not from_address:
+        default_from_address = preset["from_address"]
+        if default_from_address is None:
+            raise ConfigError(
+                "missing required env var: SMTP_FROM_ADDRESS "
+                "(required when SMTP_PROVIDER=163)"
+            )
+        from_address = default_from_address
     to_addresses = parse_recipient_addresses(
         get_optional_env("SMTP_TO_ADDRESS", DEFAULT_TO_ADDRESS)
     )
@@ -188,14 +220,15 @@ def load_config() -> dict[str, Any]:
     subject = get_optional_env("SMTP_SUBJECT", DEFAULT_SUBJECT)
     text_body = get_optional_env("SMTP_TEXT_BODY", DEFAULT_TEXT_BODY)
     html_body = get_optional_env("SMTP_HTML_BODY", DEFAULT_HTML_BODY)
-    host = get_optional_env("SMTP_HOST", DEFAULT_SMTP_HOST)
-    port = parse_port(get_optional_env("SMTP_PORT", str(DEFAULT_SMTP_PORT)))
+    host = get_optional_env("SMTP_HOST", preset["host"])
+    port = parse_port(get_optional_env("SMTP_PORT", str(preset["port"])))
     username = get_optional_env("SMTP_USERNAME", from_address)
     password = get_password()
     timeout = parse_timeout()
-    use_ssl = parse_bool_env("SMTP_USE_SSL", default=port == 465)
+    use_ssl = parse_bool_env("SMTP_USE_SSL", default=preset["use_ssl"])
 
     return {
+        "provider": provider,
         "from_address": from_address,
         "to_address": to_address,
         "to_addresses": to_addresses,
@@ -308,6 +341,7 @@ def main() -> int:
             "result": {
                 "status": "ok",
                 "message": "SMTP smoke test sent.",
+                "provider": config["provider"],
                 "from": config["from_address"],
                 "to": config["to_address"],
                 "recipients": config["to_addresses"],

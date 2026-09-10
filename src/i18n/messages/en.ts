@@ -1111,8 +1111,10 @@ export const en = {
   "workbench.excluded": "{count} excluded",
   "workbench.viewExcluded": "View excluded datasets",
   "workbench.mail": "Email",
-  "workbench.smtpPassword": "SMTP password",
-  "workbench.smtpPasswordPlaceholder": "QQ mailbox authorization code",
+  "workbench.smtpPassword": "SMTP authorization code",
+  "workbench.smtpPasswordPlaceholder": "QQ or 163 authorization code",
+  "workbench.smtpPasswordHint":
+    "Use the configured QQ or 163 authorization code, not the mailbox login password.",
   "workbench.smtpPasswordRequired": "SMTP password is required.",
   "workbench.smtpPasswordSaved": "SMTP password saved.",
   "workbench.save": "Save",
