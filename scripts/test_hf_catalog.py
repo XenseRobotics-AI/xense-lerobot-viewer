@@ -10,6 +10,31 @@ import hf_catalog
 
 
 class CatalogEntryTest(unittest.TestCase):
+    def test_storage_falls_back_to_repository_detail_when_listing_omits_it(self) -> None:
+        item = types.SimpleNamespace(
+            id="TacVerse/example",
+            sha="same-sha",
+            createdAt=None,
+            lastModified=None,
+            downloads=0,
+        )
+
+        class Api:
+            def dataset_info(self, **kwargs):
+                self.kwargs = kwargs
+                return types.SimpleNamespace(used_storage=1234)
+
+        with tempfile.TemporaryDirectory() as root:
+            entry = hf_catalog.build_entry(
+                Api(),
+                item,
+                Path(root),
+                "token",
+                None,
+                False,
+            )
+        self.assertEqual(entry["storageBytes"], 1234)
+
     def test_same_sha_cache_hit_backfills_listing_fields(self) -> None:
         item = types.SimpleNamespace(
             id="TacVerse/example",

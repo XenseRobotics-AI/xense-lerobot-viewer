@@ -16,7 +16,7 @@ os.environ.setdefault("HF_ENDPOINT", "https://huggingface.co")
 os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "15")
 os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
 
-CATALOG_VERSION = 3
+CATALOG_VERSION = 4
 RESERVED_ROOT_DIRECTORIES = {"data", "videos", "meta"}
 
 
@@ -128,6 +128,15 @@ def catalog_fields(item: Any) -> dict[str, Any]:
         downloads = int(downloads) if downloads is not None else None
     except (TypeError, ValueError):
         downloads = None
+    storage = getattr(item, "usedStorage", None)
+    if storage is None:
+        storage = getattr(item, "used_storage", None)
+    try:
+        storage = int(storage) if storage is not None else None
+    except (TypeError, ValueError):
+        storage = None
+    if storage is not None and storage < 0:
+        storage = None
     return {
         "sha": str(getattr(item, "sha", None))
         if getattr(item, "sha", None)
@@ -141,7 +150,45 @@ def catalog_fields(item: Any) -> dict[str, Any]:
             or getattr(item, "last_modified", None)
         ),
         "downloads": downloads,
+        "storageBytes": storage,
     }
+
+
+def catalog_fields_with_storage(
+    api: Any,
+    item: Any,
+    repo_id: str,
+    token: str | None,
+    revision: str | None,
+) -> dict[str, Any]:
+    """Read storage from dataset_info when list_datasets omits it.
+
+    The Hub currently accepts ``usedStorage`` on the repository-detail
+    endpoint, while the same expansion can be rejected by the listing
+    endpoint. Keep the fast listing as the primary source and use this
+    per-repository fallback only when needed.
+    """
+    fields = catalog_fields(item)
+    if fields["storageBytes"] is not None:
+        return fields
+    dataset_info = getattr(api, "dataset_info", None)
+    if not callable(dataset_info):
+        return fields
+    try:
+        detail = dataset_info(
+            repo_id=repo_id,
+            revision=revision or None,
+            expand=["usedStorage"],
+            token=token,
+        )
+        detail_storage = catalog_fields(detail)["storageBytes"]
+        if detail_storage is not None:
+            fields["storageBytes"] = detail_storage
+    except Exception:
+        # Storage is supplemental metadata; a transient detail lookup must not
+        # hide a repository whose ordinary catalog fields are still usable.
+        pass
+    return fields
 
 
 def info_fields(info: dict[str, Any]) -> dict[str, Any]:
@@ -182,9 +229,13 @@ def info_fields(info: dict[str, Any]) -> dict[str, Any]:
 
 
 def minimal_entry(
-    item: Any, root: Path, metadata_error: str | None = None
+    item: Any,
+    root: Path,
+    metadata_error: str | None = None,
+    fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     repo_id = str(getattr(item, "id", ""))
+    catalog = fields or catalog_fields(item)
     return {
         "repoId": repo_id,
         "org": repo_id.split("/", 1)[0] if "/" in repo_id else "",
@@ -198,7 +249,7 @@ def minimal_entry(
         "fps": None,
         "durationHours": None,
         "robotType": None,
-        **catalog_fields(item),
+        **catalog,
         "metadataState": "error" if metadata_error else "unknown",
         **({"metadataError": metadata_error} if metadata_error else {}),
     }
@@ -319,7 +370,13 @@ def build_entry(
     progress: Any | None = None,
 ) -> dict[str, Any]:
     repo_id = str(getattr(item, "id", ""))
-    fields = catalog_fields(item)
+    fields = catalog_fields_with_storage(
+        api,
+        item,
+        repo_id,
+        token,
+        str(getattr(item, "sha", "")) or None,
+    )
     sha = fields["sha"]
     if (
         old
@@ -336,15 +393,15 @@ def build_entry(
         info = read_downloaded_info(repo_id, "meta/info.json", token, sha)
     except Exception as exc:
         if not is_missing_entry(exc):
-            return minimal_entry(item, root, safe_error(exc, token))
+            return minimal_entry(item, root, safe_error(exc, token), fields)
         try:
             children = folder_children(
                 api, repo_id, token, progress, revision=sha
             )
         except Exception as child_exc:
-            return minimal_entry(item, root, safe_error(child_exc, token))
+            return minimal_entry(item, root, safe_error(child_exc, token), fields)
         if not children:
-            return minimal_entry(item, root, safe_error(exc, token))
+            return minimal_entry(item, root, safe_error(exc, token), fields)
         return {
             **minimal_entry(item, root),
             "layout": "folder",
@@ -392,7 +449,12 @@ def main() -> int:
             api.list_datasets(
                 author=args.org,
                 sort="lastModified",
-                expand=["sha", "createdAt", "lastModified", "downloads"],
+                expand=[
+                    "sha",
+                    "createdAt",
+                    "lastModified",
+                    "downloads",
+                ],
                 token=token,
             )
         )

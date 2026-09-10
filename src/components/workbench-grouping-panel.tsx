@@ -30,7 +30,6 @@ import {
 } from "recharts";
 import type { EpisodeData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import type { LocalDatasetSummary } from "@/lib/local-datasets-discovery";
-import { buildHomepageDatasetStatistics } from "@/utils/homepageDatasetStatistics";
 import {
   getLinkedHubDatasetRepoId,
   makeLocalRepoId,
@@ -44,6 +43,8 @@ import { formatBytes } from "@/utils/byteSize";
 import {
   computeWorkbenchAdditionTimeline,
   computeWorkbenchAdditionRollup,
+  computeWorkbenchProductionHours,
+  computeWorkbenchSelectedStorageBytes,
   WORKBENCH_DATASET_SOURCE_KEYS,
   countHalfOpenDays,
   getWorkbenchDatasetWorkstation,
@@ -167,6 +168,7 @@ type WorkbenchDataset = LocalDatasetSummary & {
   uploader?: string | null;
   uploaderDisplayName?: string | null;
   durationHours?: number | null;
+  hubStorageBytes?: number | null;
   dailyAdditions?: WorkbenchDailyAddition[];
 };
 
@@ -1008,6 +1010,7 @@ export default function WorkbenchGroupingPanel({
           dataset.uploaderDisplayName ??
           dataset.hf?.uploaderDisplayName ??
           null,
+        hubStorageBytes: dataset.hubStorageBytes ?? null,
       })),
     [datasets],
   );
@@ -1104,12 +1107,9 @@ export default function WorkbenchGroupingPanel({
     .map((dataset) => dataset.relativePath)
     .sort((left, right) => left.localeCompare(right));
   const undatedDatasetCount = undatedDatasetPaths.length;
-  const organizationTotalHours = buildHomepageDatasetStatistics(
-    sourceFilteredLocalDatasets,
-    {
-      preserveOrder: true,
-    },
-  ).hours;
+  const organizationTotalHours = computeWorkbenchProductionHours(
+    sourceFilteredDatasets,
+  );
   const selectedDatasetPaths = useMemo(
     () =>
       workbenchAdditionDatasetPaths(workstationRollupDatasets, {
@@ -1118,20 +1118,9 @@ export default function WorkbenchGroupingPanel({
       }),
     [range.endDate, range.startDate, workstationRollupDatasets],
   );
-  const selectedStorageBytes = selectedDatasetPaths.reduce(
-    (sum, datasetPath) => {
-      const dataset = workstationRollupDatasets.find(
-        (item) => item.relativePath === datasetPath,
-      );
-      const bytes = dataset?.sizeBytes;
-      return (
-        sum +
-        (typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0
-          ? bytes
-          : 0)
-      );
-    },
-    0,
+  const selectedStorageBytes = computeWorkbenchSelectedStorageBytes(
+    workstationRollupDatasets,
+    selectedDatasetPaths,
   );
   const robotRows = useMemo(
     () =>
@@ -1767,22 +1756,8 @@ export default function WorkbenchGroupingPanel({
       JSON.stringify(rewardDefaults.episodeDurationLevels);
 
   const mailRollupDatasets = useMemo<WorkbenchRollupDataset[]>(
-    () =>
-      workstationRollupDatasets.filter(
-        (dataset) =>
-          (dataset.source ??
-            workbenchDatasetSourceKey(dataset.relativePath)) !== "unclassified",
-      ),
+    () => workstationRollupDatasets,
     [workstationRollupDatasets],
-  );
-  const mailLocalDatasets = useMemo(
-    () =>
-      sourceFilteredLocalDatasets.filter(
-        (dataset) =>
-          (dataset.source ??
-            workbenchDatasetSourceKey(dataset.relativePath)) !== "unclassified",
-      ),
-    [sourceFilteredLocalDatasets],
   );
   const mailTotalTimeline = useMemo(
     () =>
@@ -1802,36 +1777,25 @@ export default function WorkbenchGroupingPanel({
   );
   const mailSelectedStorageBytes = useMemo(
     () =>
-      mailSelectedDatasetPaths.reduce((sum, datasetPath) => {
-        const dataset = mailRollupDatasets.find(
-          (item) => item.relativePath === datasetPath,
-        );
-        const bytes = dataset?.sizeBytes;
-        return (
-          sum +
-          (typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0
-            ? bytes
-            : 0)
-        );
-      }, 0),
+      computeWorkbenchSelectedStorageBytes(
+        mailRollupDatasets,
+        mailSelectedDatasetPaths,
+      ),
     [mailRollupDatasets, mailSelectedDatasetPaths],
   );
   const mailOrganizationTotalHours = useMemo(
-    () =>
-      buildHomepageDatasetStatistics(mailLocalDatasets, {
-        preserveOrder: true,
-      }).hours,
-    [mailLocalDatasets],
+    () => computeWorkbenchProductionHours(mailRollupDatasets),
+    [mailRollupDatasets],
   );
   const mailSourceCount = useMemo(
     () =>
       new Set(
-        mailLocalDatasets.map(
+        sourceFilteredDatasets.map(
           (dataset) =>
             dataset.source ?? workbenchDatasetSourceKey(dataset.relativePath),
         ),
       ).size,
-    [mailLocalDatasets],
+    [sourceFilteredDatasets],
   );
   const mailWorkstationRows = useMemo(
     () =>

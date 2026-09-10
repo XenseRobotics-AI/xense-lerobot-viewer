@@ -5,6 +5,8 @@ import {
   computeWorkbenchAdditionRollup,
   computeWorkbenchAdditionTimeline,
   computeWorkbenchRollup,
+  computeWorkbenchProductionHours,
+  computeWorkbenchSelectedStorageBytes,
   computeWorkbenchTimeline,
   countHalfOpenDays,
   formatWorkbenchRewardCoins,
@@ -223,6 +225,30 @@ describe("Workbench production-day date ranges", () => {
     ).toEqual({
       startDateTime: "2026-09-02T00:00",
       endDateTime: "2026-09-03T00:00",
+    });
+  });
+
+  test("skips the current local day when selecting the automatic range", () => {
+    expect(
+      getWorkbenchLatestAvailableDateTimeRange(
+        ["2026-09-02", "2026-09-10"],
+        new Date(2026, 8, 10, 12),
+      ),
+    ).toEqual({
+      startDateTime: "2026-09-02T00:00",
+      endDateTime: "2026-09-03T00:00",
+    });
+  });
+
+  test("falls back to yesterday when only the current day is available", () => {
+    expect(
+      getWorkbenchLatestAvailableDateTimeRange(
+        ["2026-09-10"],
+        new Date(2026, 8, 10, 12),
+      ),
+    ).toEqual({
+      startDateTime: "2026-09-09T00:00",
+      endDateTime: "2026-09-10T00:00",
     });
   });
 
@@ -453,6 +479,66 @@ describe("computeWorkbenchRollup", () => {
     expect(rows).toEqual([
       expect.objectContaining({ count: 1, episodes: 0, frames: 0, hours: 0 }),
     ]);
+  });
+});
+
+describe("Workbench overview metrics", () => {
+  test("limits organization hours to confirmed TacCap production datasets", () => {
+    expect(
+      computeWorkbenchProductionHours([
+        dataset("TacVerse/taccap-g1-place-cup-0909", {
+          source: "taccap-g1",
+          total_frames: 36_000,
+          fps: 10,
+        }),
+        dataset("TacVerse/taccap-g1-remove-and-place-paper", {
+          source: "unclassified",
+          robot_type: "bi_taccap_gripper",
+          durationHours: 2.25,
+        }),
+        dataset("TacVerse/xtac-umi-g1-operate-tape-measure-0909", {
+          source: "xtac-umi-g1",
+          durationHours: 4,
+        }),
+        dataset("TacVerse/tacflow-output", {
+          source: "tacflow",
+          durationHours: 8,
+        }),
+        dataset("TacVerse/other-0909", {
+          source: "unclassified",
+          durationHours: 16,
+        }),
+        dataset("TacVerse/merged/taccap-g1-place-cup-0909", {
+          source: "taccap-g1",
+          durationHours: 32,
+        }),
+      ]),
+    ).toBe(3.25);
+  });
+
+  test("prefers the largest selected Hub storage value and falls back locally", () => {
+    const rows = [
+      dataset("TacVerse/a-0909", {
+        hubStorageBytes: 100,
+        sizeBytes: 1_000,
+      }),
+      dataset("TacVerse/b-0909", {
+        hubStorageBytes: 300,
+        sizeBytes: 2_000,
+      }),
+    ];
+    expect(
+      computeWorkbenchSelectedStorageBytes(rows, [
+        "TacVerse/a-0909",
+        "TacVerse/b-0909",
+      ]),
+    ).toBe(300);
+    expect(
+      computeWorkbenchSelectedStorageBytes(
+        rows.map((row) => ({ ...row, hubStorageBytes: null })),
+        ["TacVerse/a-0909", "TacVerse/b-0909"],
+      ),
+    ).toBe(3_000);
   });
 });
 
