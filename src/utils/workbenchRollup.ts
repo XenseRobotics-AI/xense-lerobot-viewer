@@ -95,6 +95,7 @@ export type WorkbenchRollupDataset = Pick<
   capturedTo?: string | null;
   facets?: Pick<DatasetFacets, "capturedFrom" | "capturedTo" | "dateEvidence">;
   robotId?: string | null;
+  collectorSerialNumber?: string | null;
   leftGripperSn?: string | null;
   uploader?: string | null;
   uploaderName?: string | null;
@@ -290,12 +291,49 @@ export function getWorkbenchLeftSnWorkstation(
 }
 
 /**
- * Resolve a dataset's workstation using the new robot_id mapping first, then
- * the legacy left-gripper serial-number mapping. The latter is required for
- * older or partially migrated metadata that has no usable robot_id.
+ * Return the most stable identity available for workstation statistics.
+ * XUMI collector serials are dataset-level hardware identities and therefore
+ * take precedence over robot_id and the legacy left-gripper serial.
+ */
+export function getWorkbenchDatasetIdentity(
+  dataset: Pick<
+    WorkbenchRollupDataset,
+    "collectorSerialNumber" | "robotId" | "leftGripperSn"
+  >,
+): string | null {
+  for (const value of [
+    dataset.collectorSerialNumber,
+    dataset.robotId,
+    dataset.leftGripperSn,
+  ]) {
+    const normalized = value?.trim();
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+export function getWorkbenchDatasetIdentitySource(
+  dataset: Pick<
+    WorkbenchRollupDataset,
+    "collectorSerialNumber" | "robotId" | "leftGripperSn"
+  >,
+): "collector" | "robot_id" | "left_gripper_sn" | null {
+  if (dataset.collectorSerialNumber?.trim()) return "collector";
+  if (dataset.robotId?.trim()) return "robot_id";
+  if (dataset.leftGripperSn?.trim()) return "left_gripper_sn";
+  return null;
+}
+
+/**
+ * Resolve a dataset's workstation using collector serial, robot_id, then the
+ * legacy left-gripper serial-number mapping. The latter is required for older
+ * or partially migrated metadata.
  */
 export function getWorkbenchDatasetWorkstation(
-  dataset: Pick<WorkbenchRollupDataset, "robotId" | "leftGripperSn">,
+  dataset: Pick<
+    WorkbenchRollupDataset,
+    "collectorSerialNumber" | "robotId" | "leftGripperSn"
+  >,
   robotMappings: readonly Readonly<Record<string, string>>[] = [],
   legacyMappings: readonly Readonly<Record<string, string>>[] = [],
 ): string | null {
@@ -313,8 +351,10 @@ export function getWorkbenchDatasetWorkstation(
   };
 
   return (
+    lookup(dataset.collectorSerialNumber, robotMappings) ??
     lookup(dataset.robotId, robotMappings) ??
     lookup(dataset.leftGripperSn, legacyMappings) ??
+    lookup(dataset.leftGripperSn, robotMappings) ??
     null
   );
 }
@@ -546,7 +586,8 @@ export function workbenchRollupLabel(
   }
   if (dimension === "task") return workbenchTaskPrefix(dataset.relativePath);
   if (dimension === "robot_type") return dataset.robot_type || "—";
-  if (dimension === "robot_id") return dataset.robotId || "—";
+  if (dimension === "robot_id")
+    return getWorkbenchDatasetIdentity(dataset) || "—";
   if (dimension === "left_gripper_sn") return dataset.leftGripperSn || "—";
   if (dimension === "source") {
     return (

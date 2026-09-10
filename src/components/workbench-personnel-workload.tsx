@@ -1,4 +1,5 @@
 import WorkbenchRuleBadge from "@/components/workbench-rule-badge";
+import { useT } from "@/context/locale-context";
 import type { WorkbenchPersonnelRollup } from "@/types/workbench-personnel.types";
 import { formatWorkbenchRewardAmount } from "@/utils/workbenchRewards";
 
@@ -29,31 +30,44 @@ export default function WorkbenchPersonnelWorkload({
 }: {
   rollup: WorkbenchPersonnelRollup;
 }) {
+  const t = useT();
+  const columnLabels: Record<
+    (typeof WORKBENCH_PERSONNEL_WORKLOAD_COLUMNS)[number],
+    string
+  > = {
+    Personnel: t("workbench.personnel"),
+    Workstation: t("workbench.workstation"),
+    "Avg hours": t("workbench.avgHours"),
+    "Avg target": t("workbench.perPersonTargetHours"),
+    Rate: t("workbench.rate"),
+    Rule: t("workbench.rule"),
+    Reward: t("workbench.reward"),
+  };
   return (
     <section className="rounded-md border border-white/10 bg-[var(--surface-1)]/35 p-4">
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
         <div>
           <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
-            Personnel workload
+            {t("workbench.personnelWorkload")}
           </h4>
           <p className="mt-1 text-[11px] text-slate-500">
-            Average personnel hours equal Workstation hours divided by Original
-            collectors. Contribution weights are used only for quality bonuses.
+            {t("workbench.personnelWorkloadHint")}
           </p>
         </div>
         <span className="text-[10px] text-slate-500">
-          {rollup.rows.length} personnel
+          {t("workbench.personnelCount", { count: rollup.rows.length })}
         </span>
       </div>
       {rollup.unattributedHours > 0 && (
         <div className="mb-3 rounded-md border border-amber-400/25 bg-amber-400/5 px-3 py-2 text-xs text-amber-200">
-          Personnel attribution incomplete:{" "}
-          {formatHours(rollup.unattributedHours)} h cannot be assigned.
+          {t("workbench.personnelAttributionIncomplete", {
+            hours: formatHours(rollup.unattributedHours),
+          })}
         </div>
       )}
       <div className="overflow-x-auto">
         <table
-          aria-label="Personnel workload"
+          aria-label={t("workbench.personnelWorkload")}
           className="w-full min-w-[900px] border-collapse text-left text-xs"
         >
           <thead className="bg-[var(--surface-2)] text-slate-400">
@@ -64,13 +78,13 @@ export default function WorkbenchPersonnelWorkload({
                   className="px-3 py-2.5 font-medium"
                   title={
                     column === "Avg hours"
-                      ? "Per-person hours"
+                      ? t("workbench.rateTitle")
                       : column === "Avg target"
-                        ? "Per-person target hours"
+                        ? t("workbench.perPersonTargetHours")
                         : undefined
                   }
                 >
-                  {column}
+                  {columnLabels[column]}
                 </th>
               ))}
             </tr>
@@ -82,7 +96,7 @@ export default function WorkbenchPersonnelWorkload({
                   colSpan={WORKBENCH_PERSONNEL_WORKLOAD_COLUMNS.length}
                   className="px-3 py-5 text-center text-slate-500"
                 >
-                  No personnel mappings are configured.
+                  {t("workbench.noPersonnelMapping")}
                 </td>
               </tr>
             ) : (
@@ -122,7 +136,7 @@ export default function WorkbenchPersonnelWorkload({
                 colSpan={6}
                 className="px-3 py-2.5 text-right font-medium text-slate-300"
               >
-                Personnel bonus total
+                {t("workbench.personnelBonusTotal")}
               </td>
               <td className="px-3 py-2.5 font-semibold text-slate-100 tabular-nums">
                 {formatWorkbenchRewardAmount(rollup.totalBonus)}

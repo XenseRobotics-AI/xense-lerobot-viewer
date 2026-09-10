@@ -28,6 +28,8 @@ export type WorkbenchDisplaySlideConfig = Readonly<{
   durationMs: number;
 }>;
 
+export const TACCAP_WORKBENCH_REPLAY_DURATION_SECONDS = 15;
+
 export const WORKBENCH_DISPLAY_SLIDES: readonly WorkbenchDisplaySlideConfig[] =
   Object.freeze([
     Object.freeze({
@@ -81,12 +83,39 @@ const WORKBENCH_DISPLAY_SLIDES_WITH_REPLAY: readonly WorkbenchDisplaySlideConfig
     WORKBENCH_DISPLAY_SLIDES[WORKBENCH_DISPLAY_SLIDES.length - 1],
   ]);
 
+function replaySlideForDuration(
+  durationSeconds: number | null | undefined,
+): WorkbenchDisplaySlideConfig {
+  const durationMs =
+    typeof durationSeconds === "number" && Number.isFinite(durationSeconds)
+      ? Math.max(0, durationSeconds * 1_000)
+      : WORKBENCH_DISPLAY_REPLAY_SLIDE.durationMs;
+  if (durationMs === WORKBENCH_DISPLAY_REPLAY_SLIDE.durationMs) {
+    return WORKBENCH_DISPLAY_REPLAY_SLIDE;
+  }
+  return Object.freeze({
+    ...WORKBENCH_DISPLAY_REPLAY_SLIDE,
+    durationMs,
+  });
+}
+
 export function getWorkbenchDisplaySlides(
   hasReplay: boolean,
+  replayDurationSeconds?: number | null,
 ): readonly WorkbenchDisplaySlideConfig[] {
-  return hasReplay
-    ? WORKBENCH_DISPLAY_SLIDES_WITH_REPLAY
-    : WORKBENCH_DISPLAY_SLIDES;
+  if (!hasReplay) return WORKBENCH_DISPLAY_SLIDES;
+  if (
+    replayDurationSeconds === undefined ||
+    replayDurationSeconds === null ||
+    replayDurationSeconds === TACCAP_WORKBENCH_REPLAY_DURATION_SECONDS
+  ) {
+    return WORKBENCH_DISPLAY_SLIDES_WITH_REPLAY;
+  }
+  return Object.freeze([
+    ...WORKBENCH_DISPLAY_SLIDES.slice(0, -1),
+    replaySlideForDuration(replayDurationSeconds),
+    WORKBENCH_DISPLAY_SLIDES[WORKBENCH_DISPLAY_SLIDES.length - 1],
+  ]);
 }
 
 export const WORKBENCH_DISPLAY_TOTAL_DURATION_MS =
@@ -206,8 +235,6 @@ export type WorkbenchDisplayPersonnelRow = Readonly<{
   reward: number;
   email: string;
 }>;
-
-export const TACCAP_WORKBENCH_REPLAY_DURATION_SECONDS = 15;
 
 export type WorkbenchDisplayReplaySource = Readonly<{
   datasetName: string;

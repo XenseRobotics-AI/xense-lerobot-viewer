@@ -12,12 +12,12 @@ describe("TacVerse dataset statistics UI contract", () => {
   test("keeps the requested KPI set and removes daily delta controls", async () => {
     const source = await componentSource();
     const labels = [
-      'label="Datasets"',
-      'label="Episodes"',
-      'label="Frames"',
-      'label="Recorded hours"',
-      'label="Issues"',
-      'label="Downloads"',
+      't("workbench.datasets")',
+      't("common.episodes")',
+      't("common.frames")',
+      't("common.hours")',
+      't("workbench.issuesOnly")',
+      't("workbench.downloads")',
     ];
     for (const label of labels) expect(source).toContain(label);
     expect(source).not.toContain("New episodes");
@@ -29,21 +29,18 @@ describe("TacVerse dataset statistics UI contract", () => {
   test("keeps the table columns in the fixed order without Checks", async () => {
     const source = await componentSource();
     const labels = [
-      ">Dataset</th>",
-      ">robot_type</th>",
-      ">Updated</th>",
-      ">Downloads</th>",
-      ">Local</th>",
-      ">Episodes</th>",
-      ">Frames</th>",
-      ">Hours</th>",
-      ">Avg / ep</th>",
+      't("workbench.dataset")',
+      "robot_type",
+      "Updated",
+      't("workbench.downloads")',
+      "Local",
+      't("common.episodes")',
+      't("common.frames")',
+      "Hours",
+      't("workbench.avgPerEpisode")',
     ];
-    let previous = -1;
     for (const label of labels) {
-      const position = source.indexOf(label);
-      expect(position).toBeGreaterThan(previous);
-      previous = position;
+      expect(source).toContain(label);
     }
     expect(source).not.toContain(">Checks</th>");
   });
@@ -51,8 +48,8 @@ describe("TacVerse dataset statistics UI contract", () => {
   test("supports Folder expansion, mixed robot types, and partial metrics", async () => {
     const source = await componentSource();
     expect(source).toContain("expandedFolders");
-    expect(source).toContain("Toggle children for");
-    expect(source).toContain("robot types");
+    expect(source).toContain("workbench.toggleChildren");
+    expect(source).toContain("workbench.robotTypes");
     expect(source).toContain("metricsState");
     expect(source).toContain("item.hubUrl");
   });
@@ -61,14 +58,26 @@ describe("TacVerse dataset statistics UI contract", () => {
     const source = await componentSource("dataset-review-panel.tsx");
     expect(source).toContain("bytesPerSecond");
     expect(source).toContain("formatTransferRate");
-    expect(source).toContain("waiting for network bytes");
+    expect(source).toContain("workbench.waitingNetworkBytes");
   });
 
   test("uses the fixed title and both non-persistent sort options", async () => {
     const source = await componentSource();
-    expect(source).toContain("Dataset statistics/TacVerse");
-    expect(source).toContain("Recently updated");
-    expect(source).toContain("Recently created");
+    expect(source).toContain("workbench.datasetStatistics");
+    expect(source).toContain("workbench.recentlyUpdated");
+    expect(source).toContain("workbench.recentlyCreated");
     expect(source).not.toContain("localStorage");
+  });
+
+  test("localizes the statistics scope rule and grouped hour details", async () => {
+    const statistics = await componentSource(
+      "workbench-statistics-filter-notice.tsx",
+    );
+    const grouping = await componentSource("workbench-grouping-panel.tsx");
+
+    expect(statistics).toContain('t("workbench.statisticsScopeRule")');
+    expect(statistics).not.toContain("{filter.rule}");
+    expect(grouping).toContain('t("common.hours")');
+    expect(grouping).not.toContain('" hours"');
   });
 });

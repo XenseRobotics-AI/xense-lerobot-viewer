@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import WorkbenchPersonnelWorkload, {
-  WORKBENCH_PERSONNEL_WORKLOAD_COLUMNS,
-} from "@/components/workbench-personnel-workload";
+import WorkbenchPersonnelWorkload from "@/components/workbench-personnel-workload";
 import type { WorkbenchPersonnelRollup } from "@/types/workbench-personnel.types";
+import { LocaleProvider } from "@/context/locale-context";
 
 function rollup(): WorkbenchPersonnelRollup {
   return {
@@ -37,9 +36,20 @@ function rollup(): WorkbenchPersonnelRollup {
 describe("WorkbenchPersonnelWorkload", () => {
   test("renders the fixed column order, deduplicated workstations, and total", () => {
     const html = renderToStaticMarkup(
-      <WorkbenchPersonnelWorkload rollup={rollup()} />,
+      <LocaleProvider>
+        <WorkbenchPersonnelWorkload rollup={rollup()} />
+      </LocaleProvider>,
     );
-    const headerPositions = WORKBENCH_PERSONNEL_WORKLOAD_COLUMNS.map((column) =>
+    const renderedColumns = [
+      "Personnel",
+      "Workstation",
+      "Avg hours",
+      "Per-person target hours",
+      "Rate",
+      "Rule",
+      "Reward",
+    ];
+    const headerPositions = renderedColumns.map((column) =>
       html.indexOf(`>${column}</th>`),
     );
 
@@ -48,7 +58,7 @@ describe("WorkbenchPersonnelWorkload", () => {
     expect(html).toContain("张三");
     expect(html).toContain(">Avg hours</th>");
     expect(html).toContain('title="Per-person hours"');
-    expect(html).toContain(">Avg target</th>");
+    expect(html).toContain(">Per-person target hours</th>");
     expect(html).toContain('title="Per-person target hours"');
     expect(html).toContain("A1, B2");
     expect(html).toContain("Personnel bonus total");
@@ -60,7 +70,9 @@ describe("WorkbenchPersonnelWorkload", () => {
 
   test("keeps the table horizontally scrollable for 390px layouts", () => {
     const html = renderToStaticMarkup(
-      <WorkbenchPersonnelWorkload rollup={rollup()} />,
+      <LocaleProvider>
+        <WorkbenchPersonnelWorkload rollup={rollup()} />
+      </LocaleProvider>,
     );
     expect(html).toContain("overflow-x-auto");
     expect(html).toContain("min-w-[900px]");
@@ -70,7 +82,9 @@ describe("WorkbenchPersonnelWorkload", () => {
     const empty = rollup();
     empty.rows = [];
     const html = renderToStaticMarkup(
-      <WorkbenchPersonnelWorkload rollup={empty} />,
+      <LocaleProvider>
+        <WorkbenchPersonnelWorkload rollup={empty} />
+      </LocaleProvider>,
     );
 
     expect(html).toContain("No personnel mappings are configured.");

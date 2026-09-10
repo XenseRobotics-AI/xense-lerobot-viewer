@@ -110,6 +110,29 @@ describe("personnel schedule inheritance", () => {
 });
 
 describe("personnel workload rollup", () => {
+  test("uses the collector serial as the workstation mapping key", () => {
+    const xtac: WorkbenchRollupDataset = {
+      ...dataset,
+      relativePath: "TacVerse/xtac-umi-g1-task-0903",
+      collectorSerialNumber: "collector-1",
+      robotId: "robot-1",
+      leftGripperSn: "left-1",
+    };
+    const result = computeWorkbenchPersonnelRollup(
+      [xtac],
+      { "collector-1": "A1" },
+      personnelConfig(),
+      { startDate: "2026-09-03", endDate: "2026-09-04" },
+      rules,
+    );
+
+    expect(result.unattributedHours).toBe(0);
+    expect(result.rows.map((row) => row.workstations)).toEqual([
+      ["A1"],
+      ["A1"],
+    ]);
+  });
+
   test("divides co-assigned workstation hours evenly by original collectors", () => {
     const config = personnelConfig();
     config.schedules["2026-09-03"][0].members[1].creditFactor = 3;

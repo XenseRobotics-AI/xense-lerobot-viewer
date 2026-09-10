@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { useT } from "@/context/locale-context";
 import type {
   DatasetDisplayInfo,
   EpisodeData,
@@ -110,7 +111,13 @@ function Card({ label, value }: { label: string; value: string | number }) {
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({
+  status,
+  t,
+}: {
+  status: string;
+  t: ReturnType<typeof useT>;
+}) {
   const tone =
     status === "fail"
       ? "border-red-400/30 bg-red-400/10 text-red-300"
@@ -121,12 +128,12 @@ function StatusBadge({ status }: { status: string }) {
           : "border-emerald-400/30 bg-emerald-400/10 text-emerald-300";
   const label =
     status === "fail"
-      ? "FAIL"
+      ? t("workbench.statusFail")
       : status === "warn"
-        ? "WARN"
+        ? t("workbench.statusWarn")
         : status === "skip"
-          ? "SKIP"
-          : "PASS";
+          ? t("workbench.statusSkip")
+          : t("workbench.statusPass");
   return (
     <span
       className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide ${tone}`}
@@ -140,7 +147,13 @@ function LoadingLine({ children }: { children: React.ReactNode }) {
   return <p className="text-sm text-slate-400">{children}</p>;
 }
 
-function EpisodeDurationGroups({ stats }: { stats: EpisodeLengthStats }) {
+function EpisodeDurationGroups({
+  stats,
+  t,
+}: {
+  stats: EpisodeLengthStats;
+  t: ReturnType<typeof useT>;
+}) {
   const episodesByBin = useMemo(
     () =>
       assignEpisodesToBins(
@@ -178,17 +191,21 @@ function EpisodeDurationGroups({ stats }: { stats: EpisodeLengthStats }) {
                 {bin.binLabel}
               </span>
               <span className="tabular-nums text-slate-500">
-                {ids.length} episodes
+                {t("workbench.episodesInRange", { count: ids.length })}
               </span>
             </summary>
             <div className="overflow-x-auto border-t border-white/10">
               <table className="w-full min-w-[360px] text-left text-xs">
                 <thead className="text-[10px] uppercase tracking-wide text-slate-500">
                   <tr>
-                    <th className="px-3 py-1.5 font-medium">Episode</th>
-                    <th className="px-3 py-1.5 font-medium">Duration</th>
+                    <th className="px-3 py-1.5 font-medium">
+                      {t("workbench.episode")}
+                    </th>
+                    <th className="px-3 py-1.5 font-medium">
+                      {t("workbench.duration")}
+                    </th>
                     <th className="px-3 py-1.5 text-right font-medium">
-                      Frames
+                      {t("common.frames")}
                     </th>
                   </tr>
                 </thead>
@@ -217,10 +234,12 @@ function EpisodeDurationGroups({ stats }: { stats: EpisodeLengthStats }) {
               </table>
               {ids.length > MAX_EPISODE_ROWS_PER_BIN && (
                 <p className="border-t border-white/5 px-3 py-2 text-[11px] text-slate-500">
-                  Showing the first {MAX_EPISODE_ROWS_PER_BIN.toLocaleString()}{" "}
-                  episodes;{" "}
-                  {(ids.length - MAX_EPISODE_ROWS_PER_BIN).toLocaleString()}{" "}
-                  more are in this range.
+                  {t("workbench.showingFirstEpisodes", {
+                    count: MAX_EPISODE_ROWS_PER_BIN.toLocaleString(),
+                    more: (
+                      ids.length - MAX_EPISODE_ROWS_PER_BIN
+                    ).toLocaleString(),
+                  })}
                 </p>
               )}
             </div>
@@ -241,6 +260,7 @@ export default function DatasetReviewPanel({
   encodedPath,
   datasetName,
 }: DatasetReviewPanelProps) {
+  const t = useT();
   const searchParams = useSearchParams();
   const organization = datasetName.split("/", 1)[0]?.trim() ?? "";
   const [quality, setQuality] = useState<QualityResponse | null>(null);
@@ -301,7 +321,7 @@ export default function DatasetReviewPanel({
     const requestId = ++qualityRequestIdRef.current;
     if (!encodedPath) {
       setQuality(null);
-      setQualityError("Custom checks are available only for local datasets.");
+      setQualityError(t("workbench.localChecksOnly"));
       setQualityLoading(false);
       return;
     }
@@ -351,20 +371,18 @@ export default function DatasetReviewPanel({
       });
 
     return () => controller.abort();
-  }, [encodedPath, refreshToken]);
+  }, [encodedPath, refreshToken, t]);
 
   const checkSummary = quality
     ? quality.aggregate.n_fail > 0
-      ? `${quality.aggregate.n_fail} failed`
+      ? t("workbench.failedChecks", { count: quality.aggregate.n_fail })
       : quality.aggregate.n_warn > 0
-        ? `${quality.aggregate.n_warn} warnings`
-        : "All custom checks passed"
+        ? t("workbench.warningChecks", { count: quality.aggregate.n_warn })
+        : t("workbench.allChecksPassed")
     : null;
   const refreshStatistics = async () => {
     if (!statisticsOrganization) {
-      setStatisticsRefreshError(
-        "Workbench statistics requires a dataset organization.",
-      );
+      setStatisticsRefreshError(t("workbench.organizationRequired"));
       setStatisticsRefreshMessage(null);
       return;
     }
@@ -394,11 +412,14 @@ export default function DatasetReviewPanel({
           error?: string;
         };
         throw new Error(
-          payload.error || `Statistics refresh failed (${response.status}).`,
+          payload.error ||
+            t("workbench.statisticsRefreshFailedStatus", {
+              status: response.status,
+            }),
         );
       }
       if (!response.body) {
-        throw new Error("Statistics refresh returned no stream.");
+        throw new Error(t("workbench.statisticsStreamMissing"));
       }
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -442,7 +463,8 @@ export default function DatasetReviewPanel({
             });
           }
           if (event.type === "error" && !refreshError) {
-            refreshError = event.error || "Statistics refresh failed.";
+            refreshError =
+              event.error || t("workbench.statisticsRefreshFailedFallback");
           }
           if (
             event.type === "result" &&
@@ -492,28 +514,40 @@ export default function DatasetReviewPanel({
       setStatisticsRefreshToken((value) => value + 1);
       const formatCatalogMessage = (count: number | null): string =>
         count === null
-          ? "Catalog refreshed."
-          : `Catalog refreshed: ${count.toLocaleString()} datasets visible to the current credential.`;
+          ? t("workbench.catalogRefreshed")
+          : t("workbench.catalogRefreshedCount", {
+              count: count.toLocaleString(),
+            });
       const catalogMessage = formatCatalogMessage(
         catalogCount as number | null,
       );
       const syncMessage =
         result.failed.length === 0
           ? result.downloaded === 0
-            ? "Stats files are already up to date."
-            : `Stats files synced: ${result.downloaded.toLocaleString()} datasets.`
-          : `Stats files synced: ${result.downloaded.toLocaleString()} datasets, ${result.failed.length.toLocaleString()} failed.`;
+            ? t("workbench.statsAlreadyCurrent")
+            : t("workbench.statsSynced", {
+                count: result.downloaded.toLocaleString(),
+              })
+          : t("workbench.statsSyncedWithFailures", {
+              count: result.downloaded.toLocaleString(),
+              failed: result.failed.length.toLocaleString(),
+            });
       const archivedRepos = result.archivedRepos ?? 0;
       const archivedSnapshots = result.archivedMetaSnapshots ?? 0;
       const archivedFiles = result.archivedFiles ?? 0;
       const archiveFailures = result.archiveFailures?.length ?? 0;
       const archiveMessage =
         archivedRepos || archivedSnapshots || archivedFiles || archiveFailures
-          ? ` Archived ${archivedRepos.toLocaleString()} removed datasets and ${archivedSnapshots.toLocaleString()} meta snapshots (${archivedFiles.toLocaleString()} files)${
-              archiveFailures
-                ? `; ${archiveFailures.toLocaleString()} archive operations failed.`
-                : "."
-            }`
+          ? ` ${t("workbench.archived", {
+              repos: archivedRepos.toLocaleString(),
+              snapshots: archivedSnapshots.toLocaleString(),
+              files: archivedFiles.toLocaleString(),
+              suffix: archiveFailures
+                ? t("workbench.archiveFailureSuffix", {
+                    count: archiveFailures.toLocaleString(),
+                  })
+                : ".",
+            })}`
           : "";
       setStatisticsRefreshMessage(
         `${catalogMessage} ${syncMessage}${archiveMessage}`,
@@ -521,7 +555,9 @@ export default function DatasetReviewPanel({
     } catch (error: unknown) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       const message =
-        error instanceof Error ? error.message : "Statistics refresh failed.";
+        error instanceof Error
+          ? error.message
+          : t("workbench.statisticsRefreshFailedFallback");
       setStatisticsProgressError(message);
       setStatisticsProgress((current) => ({
         ...(current ?? {}),
@@ -555,7 +591,9 @@ export default function DatasetReviewPanel({
       }
     } catch (error: unknown) {
       setStatisticsRefreshError(
-        error instanceof Error ? error.message : "HF account check failed.",
+        error instanceof Error
+          ? error.message
+          : t("workbench.accountCheckFailed"),
       );
     } finally {
       setAccountBusy(false);
@@ -568,7 +606,9 @@ export default function DatasetReviewPanel({
       setHfAccount(await clearHfAccount());
     } catch (error: unknown) {
       setStatisticsRefreshError(
-        error instanceof Error ? error.message : "Unable to clear HF token.",
+        error instanceof Error
+          ? error.message
+          : t("workbench.clearTokenFailed"),
       );
     } finally {
       setAccountBusy(false);
@@ -581,23 +621,24 @@ export default function DatasetReviewPanel({
       : null;
   const progressLabel =
     statisticsProgress?.phase === "catalog"
-      ? "Refreshing Hub catalog"
+      ? t("workbench.refreshingHubCatalog")
       : statisticsProgress?.phase === "stats"
-        ? "Syncing stats files"
+        ? t("workbench.syncingStatsFiles")
         : statisticsProgress?.phase === "complete"
-          ? "Statistics refresh complete"
+          ? t("workbench.statisticsRefreshComplete")
           : statisticsProgress?.phase === "error"
-            ? "Statistics refresh failed"
+            ? t("workbench.statisticsRefreshFailed")
             : null;
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-6 py-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="text-xl font-semibold text-slate-100">Workbench</h2>
+          <h2 className="text-xl font-semibold text-slate-100">
+            {t("workbench.panelTitle")}
+          </h2>
           <p className="mt-1 text-xs text-slate-500">
-            Read-only dataset statistics and Workbench custom checks. Doctor and
-            Parquet remain independent.
+            {t("workbench.panelDescription")}
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -607,7 +648,7 @@ export default function DatasetReviewPanel({
               onClick={() => setRefreshToken((value) => value + 1)}
               className="rounded-md border border-white/10 bg-[var(--surface-1)]/70 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-cyan-400/40 hover:text-cyan-200"
             >
-              Refresh checks
+              {t("workbench.refreshChecks")}
             </button>
           )}
           <button
@@ -621,15 +662,15 @@ export default function DatasetReviewPanel({
             className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-3 py-1.5 text-xs text-cyan-100 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {statisticsAction === "refresh"
-              ? "Refreshing statistics…"
-              : "Refresh statistics"}
+              ? t("workbench.refreshingStatistics")
+              : t("workbench.refreshStatistics")}
           </button>
           <label className="flex items-center gap-1.5 text-[11px] text-slate-400">
-            <span>Hub</span>
+            <span>{t("workbench.hub")}</span>
             <select
               value={statisticsEndpoint}
               onChange={(event) => setStatisticsEndpoint(event.target.value)}
-              aria-label="Hugging Face endpoint"
+              aria-label={t("workbench.huggingFaceEndpoint")}
               className="rounded-md border border-white/10 bg-[var(--surface-1)] px-2 py-1.5 text-[11px] text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50"
             >
               {STATISTICS_ENDPOINTS.map((endpoint) => (
@@ -646,17 +687,19 @@ export default function DatasetReviewPanel({
             title={hfAccount?.endpoint ?? undefined}
           >
             {hfAccount?.authenticated
-              ? `HF: ${hfAccount.username ?? "authenticated"}`
+              ? `HF: ${hfAccount.username ?? t("workbench.authenticated")}`
               : hfAccount?.tokenPresent
-                ? "HF token configured (not checked)"
-                : "HF: not signed in"}
+                ? t("workbench.tokenConfigured")
+                : t("workbench.notSignedIn")}
           </span>
           <button
             type="button"
             onClick={() => setShowStatisticsToken((value) => !value)}
             className="rounded-md border border-white/10 px-2.5 py-1.5 text-[11px] text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-100"
           >
-            {hfAccount?.authenticated ? "Change token" : "HF token"}
+            {hfAccount?.authenticated
+              ? t("workbench.changeToken")
+              : t("workbench.hfToken")}
           </button>
           <button
             type="button"
@@ -668,7 +711,9 @@ export default function DatasetReviewPanel({
             }
             className="rounded-md border border-white/10 px-2.5 py-1.5 text-[11px] text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {accountBusy ? "Checking account…" : "Check account"}
+            {accountBusy
+              ? t("workbench.checkingAccount")
+              : t("workbench.checkAccount")}
           </button>
           {hfAccount?.source === "viewer" && (
             <button
@@ -677,7 +722,7 @@ export default function DatasetReviewPanel({
               disabled={accountBusy || statisticsAction !== null}
               className="rounded-md border border-white/10 px-2.5 py-1.5 text-[11px] text-slate-500 transition-colors hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Clear local token
+              {t("workbench.clearLocalToken")}
             </button>
           )}
         </div>
@@ -685,8 +730,7 @@ export default function DatasetReviewPanel({
 
       {statisticsEndpoint === HF_MIRROR_ENDPOINT && (
         <p className="-mt-2 text-[11px] text-amber-200/80">
-          hf-mirror.com may not serve metadata files. Use huggingface.co when
-          Refresh statistics needs to download stats JSON.
+          {t("workbench.mirrorHint")}
         </p>
       )}
 
@@ -701,7 +745,7 @@ export default function DatasetReviewPanel({
             }}
             placeholder="hf_…"
             autoComplete="new-password"
-            aria-label="Hugging Face token"
+            aria-label={t("workbench.hfToken")}
             className="min-w-[18rem] flex-1 rounded-md border border-white/10 bg-black/20 px-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 focus:border-cyan-300/60 focus:outline-none"
           />
           <button
@@ -710,11 +754,10 @@ export default function DatasetReviewPanel({
             disabled={accountBusy || !statisticsToken.trim()}
             className="rounded-md bg-cyan-400/80 px-3 py-1.5 text-xs font-semibold text-slate-950 transition-colors hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {accountBusy ? "Verifying…" : "Verify and save"}
+            {accountBusy ? t("workbench.verifying") : t("workbench.verifySave")}
           </button>
           <p className="w-full text-[11px] text-slate-500">
-            The token is sent only to this local backend and saved under
-            .xense-viewer/secrets after successful verification.
+            {t("workbench.tokenHelp")}
           </p>
         </div>
       )}
@@ -746,23 +789,24 @@ export default function DatasetReviewPanel({
           <p className="mt-1.5 text-[11px] text-slate-500">
             {statisticsProgress?.index && statisticsProgress.total
               ? `${statisticsProgress.index.toLocaleString()} / ${statisticsProgress.total.toLocaleString()}`
-              : "Waiting for progress events…"}
+              : t("workbench.waitingProgress")}
             {(statisticsProgress?.repo || statisticsProgress?.repoId) &&
               ` · ${statisticsProgress.repo || statisticsProgress.repoId}`}
           </p>
           {statisticsProgress?.phase === "stats" && (
             <p className="mt-1 text-[11px] tabular-nums text-cyan-200/80">
               {statisticsProgress.filesTotal
-                ? `Meta files ${(
-                    statisticsProgress.filesDone ?? 0
-                  ).toLocaleString()} / ${statisticsProgress.filesTotal.toLocaleString()}`
-                : "Resolving meta file list…"}
+                ? t("workbench.metaFiles", {
+                    done: (statisticsProgress.filesDone ?? 0).toLocaleString(),
+                    total: statisticsProgress.filesTotal.toLocaleString(),
+                  })
+                : t("workbench.resolvingMetaFiles")}
               {statisticsProgress.bytes
                 ? ` · ${formatTransferred(statisticsProgress.bytes)}`
                 : ""}
               {statisticsProgress.bytesPerSecond
                 ? ` · ${formatTransferRate(statisticsProgress.bytesPerSecond)}`
-                : " · waiting for network bytes…"}
+                : ` · ${t("workbench.waitingNetworkBytes")}`}
             </p>
           )}
           {statisticsProgressError && (
@@ -788,9 +832,9 @@ export default function DatasetReviewPanel({
       <div className="flex flex-wrap gap-1 border-b border-white/10 pb-1">
         {(
           [
-            ["grouping", "Grouped statistics"],
-            ["dataset-statistics", "Dataset statistics/TacVerse"],
-            ["checks", "Current dataset checks"],
+            ["grouping", t("workbench.groupedStatistics")],
+            ["dataset-statistics", t("workbench.datasetStatistics")],
+            ["checks", t("workbench.currentDatasetChecks")],
           ] as const
         ).map(([value, label]) => (
           <button
@@ -811,11 +855,11 @@ export default function DatasetReviewPanel({
       {workbenchView !== "checks" && (
         <fieldset className="rounded-lg border border-white/10 bg-[var(--surface-1)]/35 px-3 py-2.5">
           <legend className="px-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-            Dataset category
+            {t("workbench.datasetCategory")}
           </legend>
           <div
             className="flex flex-wrap items-center gap-x-5 gap-y-2"
-            aria-label="Dataset category"
+            aria-label={t("workbench.datasetCategory")}
           >
             <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-slate-300">
               <input
@@ -826,15 +870,15 @@ export default function DatasetReviewPanel({
                 onChange={() => setHubCategoryFilter([])}
                 className="accent-cyan-400"
               />
-              <span>All datasets</span>
+              <span>{t("workbench.allDatasetsCategory")}</span>
             </label>
             {(
               [
-                ["taccap-g1", "TacVerse/taccap-g1 · Dated"],
-                ["xtac-umi-g1", "TacVerse/xtac-umi-g1"],
-                ["taccap-g1-merged", "TacVerse/taccap-g1 · Merged"],
-                ["folder", "Folder repositories"],
-                ["other", "Other datasets"],
+                ["taccap-g1", t("workbench.datedCategory")],
+                ["xtac-umi-g1", t("workbench.xtacCategory")],
+                ["taccap-g1-merged", t("workbench.mergedCategory")],
+                ["folder", t("workbench.folderRepositories")],
+                ["other", t("workbench.otherDatasets")],
               ] as const
             ).map(([value, label]) => (
               <label
@@ -878,34 +922,34 @@ export default function DatasetReviewPanel({
             <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
               <div>
                 <h3 className="text-sm font-semibold uppercase tracking-wide text-cyan-200">
-                  Dataset Statistics
+                  {t("workbench.datasetStatisticsTitle")}
                 </h3>
                 <p className="mt-1 text-xs text-slate-500">
-                  Summary derived from meta/info.json and episode metadata.
+                  {t("workbench.datasetStatisticsHint")}
                 </p>
               </div>
               {episodeLengthStatsLoading && (
                 <span className="text-xs text-slate-500">
-                  Loading episode metadata…
+                  {t("workbench.loadingEpisodeMetadata")}
                 </span>
               )}
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <Card
-                label="Total Episodes"
+                label={t("workbench.totalEpisodes")}
                 value={datasetInfo.total_episodes.toLocaleString()}
               />
               <Card
-                label="Total Frames"
+                label={t("workbench.totalFrames")}
                 value={datasetInfo.total_frames.toLocaleString()}
               />
               <Card
-                label="Recording Time"
+                label={t("workbench.recordingTime")}
                 value={formatHours(datasetInfo.total_frames, datasetInfo.fps)}
               />
               <Card
-                label="Average Episode"
+                label={t("workbench.averageEpisode")}
                 value={
                   episodeLengthStats
                     ? `${episodeLengthStats.meanEpisodeLength.toFixed(2)}s`
@@ -913,16 +957,16 @@ export default function DatasetReviewPanel({
                 }
               />
               <Card
-                label="Dataset Size"
+                label={t("workbench.datasetSize")}
                 value={formatSize(datasetInfo.dataset_size_mb)}
               />
-              <Card label="FPS" value={datasetInfo.fps || "—"} />
+              <Card label={t("workbench.fps")} value={datasetInfo.fps || "—"} />
               <Card
-                label="Tasks"
+                label={t("common.tasks")}
                 value={datasetInfo.total_tasks.toLocaleString()}
               />
               <Card
-                label="Robot Type"
+                label={t("workbench.robotType")}
                 value={datasetInfo.robot_type ?? "unknown"}
               />
             </div>
@@ -932,7 +976,7 @@ export default function DatasetReviewPanel({
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <p className="font-medium text-red-100">
-                      Episode statistics could not be loaded
+                      {t("workbench.episodeStatsFailed")}
                     </p>
                     <p className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-red-200/85">
                       {episodeLengthStatsError}
@@ -943,7 +987,7 @@ export default function DatasetReviewPanel({
                     onClick={onRetryEpisodeStats}
                     className="shrink-0 rounded-md border border-red-300/30 px-3 py-1.5 text-xs text-red-100 transition-colors hover:border-red-200/70 hover:bg-red-300/10"
                   >
-                    Retry statistics
+                    {t("workbench.retryStatistics")}
                   </button>
                 </div>
               </div>
@@ -952,7 +996,7 @@ export default function DatasetReviewPanel({
             {episodeLengthStatsLoading ? (
               <div className="mt-5 rounded-lg border border-white/10 bg-[var(--surface-0)]/40 p-4">
                 <LoadingLine>
-                  Computing episode length distribution…
+                  {t("workbench.computingEpisodeDistribution")}
                 </LoadingLine>
               </div>
             ) : episodeLengthStats ? (
@@ -960,11 +1004,13 @@ export default function DatasetReviewPanel({
                 <div className="rounded-lg border border-white/10 bg-[var(--surface-0)]/40 p-4">
                   <div className="mb-3 flex items-baseline justify-between gap-2">
                     <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
-                      Episode Length Distribution
+                      {t("workbench.episodeLengthDistribution")}
                     </h4>
                     <span className="text-[10px] text-slate-500">
-                      {episodeLengthStats.allEpisodeLengths.length.toLocaleString()}{" "}
-                      episodes
+                      {t("workbench.episodesInRange", {
+                        count:
+                          episodeLengthStats.allEpisodeLengths.length.toLocaleString(),
+                      })}
                     </span>
                   </div>
                   <EpisodeLengthHistogram
@@ -976,19 +1022,18 @@ export default function DatasetReviewPanel({
                 <div className="rounded-lg border border-white/10 bg-[var(--surface-0)]/40 p-4">
                   <div className="mb-3 flex items-baseline justify-between gap-2">
                     <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
-                      Episode Details
+                      {t("workbench.episodeDetails")}
                     </h4>
                     <span className="text-[10px] text-slate-500">
-                      expand a duration range
+                      {t("workbench.expandDurationRange")}
                     </span>
                   </div>
-                  <EpisodeDurationGroups stats={episodeLengthStats} />
+                  <EpisodeDurationGroups stats={episodeLengthStats} t={t} />
                 </div>
               </div>
             ) : !episodeLengthStatsError ? (
               <div className="mt-5 rounded-lg border border-amber-400/20 bg-amber-400/5 p-4 text-xs text-amber-200/80">
-                Episode duration metadata is unavailable for this dataset
-                version.
+                {t("workbench.episodeDurationUnavailable")}
               </div>
             ) : null}
           </section>
@@ -997,11 +1042,10 @@ export default function DatasetReviewPanel({
             <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
               <div>
                 <h3 className="text-sm font-semibold uppercase tracking-wide text-emerald-200">
-                  Custom Checks
+                  {t("workbench.customChecks")}
                 </h3>
                 <p className="mt-1 text-xs text-slate-500">
-                  Workbench rules only: name format, average duration, and
-                  prompt quality. PICO MoTracker is intentionally excluded.
+                  {t("workbench.customChecksHint")}
                 </p>
               </div>
               {checkSummary && (
@@ -1010,9 +1054,7 @@ export default function DatasetReviewPanel({
             </div>
 
             {qualityLoading ? (
-              <LoadingLine>
-                Loading task metadata and custom checks…
-              </LoadingLine>
+              <LoadingLine>{t("workbench.loadingChecks")}</LoadingLine>
             ) : qualityError ? (
               <div className="rounded-lg border border-amber-400/20 bg-amber-400/5 p-4 text-sm text-amber-200">
                 {qualityError}
@@ -1021,19 +1063,24 @@ export default function DatasetReviewPanel({
               <div className="space-y-3">
                 <div className="flex flex-wrap gap-2 text-[10px] text-slate-500">
                   <span className="rounded border border-white/10 px-2 py-1">
-                    {quality.tasks.length.toLocaleString()} task prompts loaded
+                    {t("workbench.taskPromptsLoaded", {
+                      count: quality.tasks.length.toLocaleString(),
+                    })}
                   </span>
                   {quality.config?.avg_duration && (
                     <span className="rounded border border-white/10 px-2 py-1">
-                      Average duration target:{" "}
-                      {quality.config.avg_duration.min_sec}–
-                      {quality.config.avg_duration.max_sec}s
+                      {t("workbench.averageDurationTarget", {
+                        min: quality.config.avg_duration.min_sec,
+                        max: quality.config.avg_duration.max_sec,
+                      })}
                     </span>
                   )}
                   {quality.config?.prompt && (
                     <span className="rounded border border-white/10 px-2 py-1">
-                      Prompt target: {quality.config.prompt.min_words}–
-                      {quality.config.prompt.max_words} words
+                      {t("workbench.promptTarget", {
+                        min: quality.config.prompt.min_words,
+                        max: quality.config.prompt.max_words,
+                      })}
                     </span>
                   )}
                 </div>
@@ -1051,13 +1098,17 @@ export default function DatasetReviewPanel({
                           {check.message}
                         </p>
                       </div>
-                      <StatusBadge status={check.status} />
+                      <StatusBadge status={check.status} t={t} />
                     </div>
                     {check.details && check.details.length > 0 && (
                       <details className="mt-2 text-xs text-slate-500">
                         <summary className="cursor-pointer select-none hover:text-slate-300">
-                          {check.details.length} detail
-                          {check.details.length === 1 ? "" : "s"}
+                          {t(
+                            check.details.length === 1
+                              ? "workbench.detail_one"
+                              : "workbench.detail_other",
+                            { count: check.details.length },
+                          )}
                         </summary>
                         <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto border-l border-white/10 pl-3">
                           {check.details.map((detail, index) => (
@@ -1070,7 +1121,7 @@ export default function DatasetReviewPanel({
                 ))}
               </div>
             ) : (
-              <LoadingLine>Custom checks have not run yet.</LoadingLine>
+              <LoadingLine>{t("workbench.customChecksNotRun")}</LoadingLine>
             )}
           </section>
         </>

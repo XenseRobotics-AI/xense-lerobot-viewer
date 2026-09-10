@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
+import { useT } from "@/context/locale-context";
 import { formatCompact, formatEpisodeLength } from "@/utils/corpusStats";
 import {
   EMPTY_TACVERSE_HUB_CATEGORY_SELECTION,
@@ -68,21 +69,21 @@ function formatSummaryHours(value: number): string {
   });
 }
 
-function localBadge(status: TacverseLocalStatus) {
+function localBadge(status: TacverseLocalStatus, t: ReturnType<typeof useT>) {
   if (status === "downloaded") {
     return {
-      label: "Downloaded",
+      label: t("workbench.downloaded"),
       className: "border-emerald-400/25 bg-emerald-500/10 text-emerald-200",
     };
   }
   if (status === "incomplete") {
     return {
-      label: "Incomplete",
+      label: t("workbench.incomplete"),
       className: "border-amber-400/25 bg-amber-500/10 text-amber-200",
     };
   }
   return {
-    label: "Missing",
+    label: t("workbench.localMissing"),
     className: "border-slate-400/20 bg-slate-500/10 text-slate-400",
   };
 }
@@ -94,6 +95,7 @@ export default function WorkbenchDatasetStatistics({
   categoryFilter?: TacverseHubCategorySelection;
   refreshToken?: number;
 }) {
+  const t = useT();
   const [payload, setPayload] =
     useState<TacverseDatasetStatisticsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -138,7 +140,7 @@ export default function WorkbenchDatasetStatistics({
           );
         }
         if (!Array.isArray(result.datasets)) {
-          throw new Error("Dataset statistics response is incomplete.");
+          throw new Error(t("workbench.statisticsIncomplete"));
         }
         return result;
       })
@@ -154,7 +156,7 @@ export default function WorkbenchDatasetStatistics({
       });
 
     return () => controller.abort();
-  }, [categoryFilter, refreshToken, retryToken]);
+  }, [categoryFilter, refreshToken, retryToken, t]);
 
   const summary = useMemo(
     () =>
@@ -177,7 +179,7 @@ export default function WorkbenchDatasetStatistics({
   if (loading) {
     return (
       <section className="rounded-xl border border-white/10 bg-[var(--surface-0)]/40 p-5 text-sm text-slate-400">
-        Loading TacVerse dataset statistics…
+        {t("workbench.loadingDashboard")}
       </section>
     );
   }
@@ -187,11 +189,9 @@ export default function WorkbenchDatasetStatistics({
       <section className="rounded-xl border border-amber-400/25 bg-amber-400/5 p-5 text-sm text-amber-200">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="font-medium">
-              Dataset statistics could not be loaded
-            </p>
+            <p className="font-medium">{t("workbench.statisticsLoadFailed")}</p>
             <p className="mt-1 text-xs text-amber-200/75">
-              {error || "The dataset statistics response was incomplete."}
+              {error || t("workbench.statisticsIncomplete")}
             </p>
           </div>
           <button
@@ -199,7 +199,7 @@ export default function WorkbenchDatasetStatistics({
             onClick={() => setRetryToken((value) => value + 1)}
             className="rounded-md border border-amber-300/30 px-3 py-1.5 text-xs text-amber-100 transition-colors hover:border-amber-200/70 hover:bg-amber-300/10"
           >
-            Retry
+            {t("workbench.retry")}
           </button>
         </div>
       </section>
@@ -217,57 +217,72 @@ export default function WorkbenchDatasetStatistics({
             id="dataset-statistics-title"
             className="text-sm font-semibold text-cyan-200"
           >
-            Dataset statistics/TacVerse
+            {t("workbench.datasetStatistics")}
           </h2>
           <p className="mt-1 text-[11px] text-slate-500">
-            Hub catalog visible to the current credential
+            {t("workbench.hubCatalogVisible")}
             {payload.refreshedAt
-              ? ` · refreshed ${new Date(payload.refreshedAt).toLocaleString()}`
-              : " · not refreshed yet"}
+              ? ` · ${t("workbench.refreshed", { date: new Date(payload.refreshedAt).toLocaleString() })}`
+              : ` · ${t("workbench.notRefreshed")}`}
           </p>
         </div>
         <label className="flex items-center gap-2 text-[10px] text-slate-500">
-          Sort
+          {t("workbench.sort")}
           <select
             value={sort}
             onChange={(event) =>
               setSort(event.target.value as TacverseDatasetSort)
             }
-            aria-label="Sort TacVerse datasets"
+            aria-label={t("workbench.sortTacVerse")}
             className="rounded-md border border-white/10 bg-[var(--surface-1)] px-2 py-1.5 text-xs text-slate-200 focus:border-cyan-400 focus:outline-none"
           >
-            <option value="updated">Recently updated</option>
-            <option value="created">Recently created</option>
+            <option value="updated">{t("workbench.recentlyUpdated")}</option>
+            <option value="created">{t("workbench.recentlyCreated")}</option>
           </select>
         </label>
       </div>
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        <KpiCard label="Datasets" value={summary.datasets.toLocaleString()} />
-        <KpiCard label="Episodes" value={formatCompact(summary.episodes)} />
-        <KpiCard label="Frames" value={formatCompact(summary.frames)} />
         <KpiCard
-          label="Recorded hours"
+          label={t("workbench.datasets")}
+          value={summary.datasets.toLocaleString()}
+        />
+        <KpiCard
+          label={t("common.episodes")}
+          value={formatCompact(summary.episodes)}
+        />
+        <KpiCard
+          label={t("common.frames")}
+          value={formatCompact(summary.frames)}
+        />
+        <KpiCard
+          label={t("common.hours")}
           value={formatSummaryHours(summary.hours)}
           tone="accent"
         />
         <KpiCard
-          label="Issues"
+          label={t("workbench.issuesOnly")}
           value={summary.issues.toLocaleString()}
           tone={summary.issues > 0 ? "warn" : "ok"}
         />
-        <KpiCard label="Downloads" value={formatCompact(summary.downloads)} />
+        <KpiCard
+          label={t("workbench.downloads")}
+          value={formatCompact(summary.downloads)}
+        />
       </div>
 
       {payload.refreshedAt === null && payload.hubTotal === 0 && (
         <p className="mt-4 rounded-md border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-xs text-amber-200">
-          Hub catalog is empty. Please Refresh statistics first.
+          {t("workbench.hubCatalogEmpty")}{" "}
+          {t("workbench.refreshStatisticsFirst")}
         </p>
       )}
 
       <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
         <label className="relative min-w-0 flex-1">
-          <span className="sr-only">Filter TacVerse dataset statistics</span>
+          <span className="sr-only">
+            {t("workbench.filterDatasetStatistics")}
+          </span>
           <svg
             className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500"
             viewBox="0 0 20 20"
@@ -283,7 +298,7 @@ export default function WorkbenchDatasetStatistics({
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter by dataset name or robot_type"
+            placeholder={t("workbench.datasetFilterPlaceholder")}
             className="w-full rounded-md border border-white/10 bg-[var(--surface-1)]/60 py-2 pl-9 pr-3 text-xs text-slate-100 placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none"
           />
         </label>
@@ -294,14 +309,15 @@ export default function WorkbenchDatasetStatistics({
             onChange={(event) => setIssuesOnly(event.target.checked)}
             className="accent-cyan-400"
           />
-          Issues only
+          {t("workbench.issuesOnly")}
         </label>
       </div>
 
       {(payload.catalogFailures?.length ?? 0) > 0 && (
         <p className="mt-3 rounded-md border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-[11px] text-amber-200/80">
-          {payload.catalogFailures?.length.toLocaleString()} repositories had
-          metadata errors and are retained with unavailable values.
+          {t("workbench.metadataErrors", {
+            count: payload.catalogFailures?.length.toLocaleString() ?? "0",
+          })}
         </p>
       )}
 
@@ -309,15 +325,31 @@ export default function WorkbenchDatasetStatistics({
         <table className="w-full min-w-[1080px] border-collapse text-left text-xs">
           <thead className="sticky top-0 z-10 bg-[var(--surface-2)] text-[10px] uppercase tracking-wider text-slate-400">
             <tr>
-              <th className="px-3 py-2.5 font-medium">Dataset</th>
+              <th className="px-3 py-2.5 font-medium">
+                {t("workbench.dataset")}
+              </th>
               <th className="px-3 py-2.5 font-medium">robot_type</th>
-              <th className="px-3 py-2.5 font-medium">Updated</th>
-              <th className="px-3 py-2.5 text-right font-medium">Downloads</th>
-              <th className="px-3 py-2.5 font-medium">Local</th>
-              <th className="px-3 py-2.5 text-right font-medium">Episodes</th>
-              <th className="px-3 py-2.5 text-right font-medium">Frames</th>
-              <th className="px-3 py-2.5 text-right font-medium">Hours</th>
-              <th className="px-3 py-2.5 text-right font-medium">Avg / ep</th>
+              <th className="px-3 py-2.5 font-medium">
+                {t("workbench.updated")}
+              </th>
+              <th className="px-3 py-2.5 text-right font-medium">
+                {t("workbench.downloads")}
+              </th>
+              <th className="px-3 py-2.5 font-medium">
+                {t("workbench.local")}
+              </th>
+              <th className="px-3 py-2.5 text-right font-medium">
+                {t("common.episodes")}
+              </th>
+              <th className="px-3 py-2.5 text-right font-medium">
+                {t("common.frames")}
+              </th>
+              <th className="px-3 py-2.5 text-right font-medium">
+                {t("common.hours")}
+              </th>
+              <th className="px-3 py-2.5 text-right font-medium">
+                {t("workbench.avgPerEpisode")}
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-white/5">
@@ -326,7 +358,7 @@ export default function WorkbenchDatasetStatistics({
                 item: TacverseDatasetStatisticsRow,
                 child = false,
               ) => {
-                const local = localBadge(item.localStatus);
+                const local = localBadge(item.localStatus, t);
                 const averageSeconds =
                   item.episodes !== null &&
                   item.episodes > 0 &&
@@ -348,7 +380,9 @@ export default function WorkbenchDatasetStatistics({
                           <button
                             type="button"
                             aria-expanded={expandedFolders.has(item.repoId)}
-                            aria-label={`Toggle children for ${item.repoId}`}
+                            aria-label={t("workbench.toggleChildren", {
+                              repo: item.repoId,
+                            })}
                             onClick={() =>
                               setExpandedFolders((current) => {
                                 const next = new Set(current);
@@ -369,14 +403,18 @@ export default function WorkbenchDatasetStatistics({
                             target="_blank"
                             rel="noreferrer"
                             className="block truncate font-medium text-slate-200 hover:text-cyan-200"
-                            title={`Open ${item.repoId} on Hugging Face`}
+                            title={t("workbench.openOnHub", {
+                              repo: item.repoId,
+                            })}
                           >
                             {child ? item.name : item.repoId}
                           </a>
                           <div className="mt-0.5 flex flex-wrap gap-1">
                             {item.rowType === "folder" && (
                               <span className="rounded border border-cyan-400/20 bg-cyan-400/5 px-1 text-[9px] uppercase text-cyan-200">
-                                Folder · {item.children.length} children
+                                {t("workbench.folderChildren", {
+                                  count: item.children.length,
+                                })}
                               </span>
                             )}
                             {item.metricsState !== "ok" && (
@@ -384,11 +422,13 @@ export default function WorkbenchDatasetStatistics({
                                 className="rounded border border-amber-400/20 bg-amber-400/5 px-1 text-[9px] uppercase text-amber-200"
                                 title={
                                   item.metricsState === "partial"
-                                    ? "Known values are aggregated; some child metadata is unavailable."
-                                    : "Statistics metadata is unavailable."
+                                    ? t("workbench.partialValues")
+                                    : t("workbench.unavailableMetadata")
                                 }
                               >
-                                {item.metricsState}
+                                {item.metricsState === "partial"
+                                  ? t("workbench.metricsPartial")
+                                  : t("workbench.metricsUnavailable")}
                               </span>
                             )}
                             {item.categoryWarning && (
@@ -396,7 +436,7 @@ export default function WorkbenchDatasetStatistics({
                                 className="rounded border border-amber-400/20 bg-amber-400/5 px-1 text-[9px] text-amber-200"
                                 title={item.categoryWarning}
                               >
-                                robot_type warning
+                                {t("workbench.robotTypeWarning")}
                               </span>
                             )}
                           </div>
@@ -410,7 +450,9 @@ export default function WorkbenchDatasetStatistics({
                       }
                     >
                       {mixedRobotTypes
-                        ? `${item.robotTypes.length} robot types`
+                        ? t("workbench.robotTypes", {
+                            count: item.robotTypes.length,
+                          })
                         : (item.robotType ?? "—")}
                     </td>
                     <td
@@ -466,14 +508,16 @@ export default function WorkbenchDatasetStatistics({
         </table>
         {rows.length === 0 && (
           <div className="px-4 py-8 text-center text-xs text-slate-500">
-            No datasets match the current filters.
+            {t("workbench.noDatasetMatch")}
           </div>
         )}
       </div>
       <div className="mt-2 text-[10px] text-slate-500">
-        Showing {rows.length.toLocaleString()} of{" "}
-        {payload.categoryTotal.toLocaleString()} datasets in this category ·{" "}
-        {payload.hubTotal.toLocaleString()} total in the TacVerse Hub catalog
+        {t("workbench.showingDatasets", {
+          shown: rows.length.toLocaleString(),
+          category: payload.categoryTotal.toLocaleString(),
+          total: payload.hubTotal.toLocaleString(),
+        })}
       </div>
     </section>
   );

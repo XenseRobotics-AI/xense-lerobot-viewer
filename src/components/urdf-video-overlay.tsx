@@ -174,6 +174,7 @@ function ResizableVideoGroup({
   children,
   className,
   defaultWidth,
+  defaultWidthRatio,
   maxWidth,
   maxWidthRatio,
   minWidth,
@@ -186,6 +187,7 @@ function ResizableVideoGroup({
   children: ReactNode;
   className: string;
   defaultWidth: string;
+  defaultWidthRatio: number;
   maxWidth: number;
   maxWidthRatio: number;
   minWidth: number;
@@ -202,6 +204,7 @@ function ResizableVideoGroup({
     startX: number;
   } | null>(null);
   const [width, setWidth] = useState<number | null>(null);
+  const [overlayWidth, setOverlayWidth] = useState<number | null>(null);
   const [resizing, setResizing] = useState(false);
 
   const clampWidth = useCallback(
@@ -223,12 +226,23 @@ function ResizableVideoGroup({
   useEffect(() => {
     const overlay = containerRef.current?.parentElement;
     if (!overlay || typeof ResizeObserver === "undefined") return;
+    const updateOverlayWidth = () => {
+      const nextWidth = overlay.getBoundingClientRect().width;
+      if (nextWidth > 0) {
+        setOverlayWidth(Math.round(nextWidth));
+      }
+    };
+    updateOverlayWidth();
     const observer = new ResizeObserver(() => {
+      updateOverlayWidth();
       setWidth((current) => (current === null ? null : clampWidth(current)));
     });
     observer.observe(overlay);
     return () => observer.disconnect();
   }, [clampWidth]);
+
+  const responsiveDefaultWidth =
+    overlayWidth === null ? null : clampWidth(overlayWidth * defaultWidthRatio);
 
   const handlePointerDown = useCallback(
     (
@@ -318,7 +332,12 @@ function ResizableVideoGroup({
       }}
       onPointerDownCapture={onActivate}
       style={{
-        width: width === null ? defaultWidth : `${width}px`,
+        width:
+          width === null
+            ? responsiveDefaultWidth === null
+              ? defaultWidth
+              : `${responsiveDefaultWidth}px`
+            : `${width}px`,
         zIndex: activeLayer ? 40 : 20,
       }}
     >
@@ -404,10 +423,11 @@ export default function UrdfVideoOverlay({
           {...resizeLabels}
           activeLayer={frontLayer === "left"}
           className="absolute left-3 top-3"
-          defaultWidth="clamp(13rem, 28vw, 22rem)"
-          maxWidth={520}
-          maxWidthRatio={0.42}
-          minWidth={120}
+          defaultWidth="clamp(6rem, 30vw, 28rem)"
+          defaultWidthRatio={0.3}
+          maxWidth={640}
+          maxWidthRatio={0.45}
+          minWidth={96}
           onActivate={() => setFrontLayer("left")}
           resizeEdges={["right"]}
         >
@@ -424,12 +444,13 @@ export default function UrdfVideoOverlay({
           }`}
           defaultWidth={
             hasSingleHead
-              ? "clamp(8rem, 16vw, 14rem)"
-              : "clamp(12rem, 29vw, 26rem)"
+              ? "clamp(7rem, 20vw, 18rem)"
+              : "clamp(11rem, 34vw, 32rem)"
           }
-          maxWidth={760}
-          maxWidthRatio={0.7}
-          minWidth={hasSingleHead ? 128 : 240}
+          defaultWidthRatio={hasSingleHead ? 0.2 : 0.34}
+          maxWidth={900}
+          maxWidthRatio={0.74}
+          minWidth={hasSingleHead ? 112 : 180}
           onActivate={() => setFrontLayer("center")}
           resizeEdges={["left", "right"]}
         >
@@ -448,10 +469,11 @@ export default function UrdfVideoOverlay({
           {...resizeLabels}
           activeLayer={frontLayer === "right"}
           className="absolute right-3 top-3"
-          defaultWidth="clamp(13rem, 28vw, 22rem)"
-          maxWidth={520}
-          maxWidthRatio={0.42}
-          minWidth={120}
+          defaultWidth="clamp(6rem, 30vw, 28rem)"
+          defaultWidthRatio={0.3}
+          maxWidth={640}
+          maxWidthRatio={0.45}
+          minWidth={96}
           onActivate={() => setFrontLayer("right")}
           resizeEdges={["left"]}
         >

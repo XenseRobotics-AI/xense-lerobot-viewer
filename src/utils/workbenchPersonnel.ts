@@ -10,6 +10,8 @@ import {
   workbenchDayKey,
   workbenchDatasetSuffixDay,
   workbenchDatasetRangeContributions,
+  getWorkbenchDatasetIdentity,
+  getWorkbenchDatasetWorkstation,
   type WorkbenchDailyAddition,
   type WorkbenchRollupDataset,
   type WorkbenchRollupDateRange,
@@ -99,11 +101,8 @@ export function computeWorkbenchPersonnelRollup(
   const workstationEpisodes = new Map<string, number>();
   const datasetAdditions = new Map<string, WorkbenchDailyAddition[]>();
   for (const dataset of datasets) {
-    const workstationKey =
-      dataset.robotId?.trim() || dataset.leftGripperSn?.trim();
-    const workstation = workstationKey
-      ? workstationMappings[workstationKey]?.trim()
-      : "";
+    const workstation =
+      getWorkbenchDatasetWorkstation(dataset, [workstationMappings]) ?? "";
     const additions = workbenchDatasetRangeContributions(dataset, range).filter(
       (addition) => {
         const hours = Number(addition.hours);
@@ -269,7 +268,7 @@ export function computeWorkbenchPersonnelRollup(
       });
       continue;
     }
-    const key = dataset.robotId?.trim() || dataset.leftGripperSn?.trim();
+    const key = getWorkbenchDatasetIdentity(dataset);
     const workstation = key ? workstationMappings[key]?.trim() : "";
     const assignment = resolveWorkbenchPersonnelSchedule(
       personnelConfig.schedules,

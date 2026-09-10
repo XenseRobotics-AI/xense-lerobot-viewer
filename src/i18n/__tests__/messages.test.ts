@@ -101,6 +101,18 @@ describe("zh translation coverage", () => {
     "viewer.tab.parquet",
     "viewer.tab.workbench",
     "viewer.tab.tacflow",
+    // Workbench product labels, protocol identifiers, units, examples, and
+    // repository paths stay stable across locales.
+    "workbench.episode",
+    "workbench.fps",
+    "workbench.hub",
+    "workbench.mappingWorkstationPlaceholder",
+    "workbench.panelTitle",
+    "workbench.robotIdSource",
+    "workbench.sourceTaccap",
+    "workbench.sourceTacflow",
+    "workbench.sourceXtac",
+    "workbench.xtacCategory",
     // Pure formula — symbols and units only, nothing to translate.
     "doctor.speedFormula",
     // Value + unit, and units render in English in both languages (see the

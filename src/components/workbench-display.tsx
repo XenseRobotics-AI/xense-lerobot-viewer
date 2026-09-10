@@ -10,6 +10,9 @@ import {
   useRef,
   useState,
 } from "react";
+import { useT } from "@/context/locale-context";
+import type { InterpolationVars } from "@/i18n/format";
+import type { MessageKey } from "@/i18n/messages";
 import { createPortal } from "react-dom";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
@@ -73,6 +76,7 @@ type BarStyle = CSSProperties & {
   "--display-delay": string;
   "--display-bar-width": string;
 };
+type Translator = (key: MessageKey, vars?: InterpolationVars) => string;
 
 function formatHours(value: number): string {
   return `${value.toLocaleString("en-US", {
@@ -118,10 +122,34 @@ function rewardToneClass(tone: WorkbenchDisplayRewardTone): string {
   return styles.rewardNeutral;
 }
 
-function formatRange(snapshot: WorkbenchDisplaySnapshot): string {
+function displaySlideTitle(id: WorkbenchDisplaySlideId, t: Translator): string {
+  switch (id) {
+    case "overview":
+      return t("workbench.overview");
+    case "workstation-detail":
+      return t("workbench.workstationDetail");
+    case "personnel-workload":
+      return t("workbench.personnelWorkload");
+    case "workstation-heatmap":
+      return t("workbench.workstationDayHeatmap");
+    case "daily-trend":
+      return t("workbench.dailyTrend");
+    case "top-groups":
+      return t("workbench.topGroups");
+    case "3d-replay":
+      return t("viewer.tab.urdf");
+    case "taccap-video":
+      return t("workbench.tacCapVideo");
+  }
+}
+
+function formatRange(
+  snapshot: WorkbenchDisplaySnapshot,
+  t: Translator,
+): string {
   const { startDate, endDate } = snapshot.dateRange;
-  if (!startDate && !endDate) return "No date range available";
-  return `${startDate ?? "Beginning"} → ${endDate ?? "Latest"}`;
+  if (!startDate && !endDate) return t("workbench.rangeNoDate");
+  return `${startDate ?? t("workbench.beginning")} → ${endDate ?? t("workbench.latest")}`;
 }
 
 function formatCapturedAt(value: string): string {
@@ -170,9 +198,13 @@ function EmptySlide({
 }
 
 function SummaryHeader({ snapshot }: { snapshot: WorkbenchDisplaySnapshot }) {
+  const t = useT();
   const cards = [
-    ["Selected range hours", formatHours(snapshot.summary.selectedRangeHours)],
-    ["Total bonus", formatReward(snapshot.summary.totalBonus)],
+    [
+      t("workbench.selectedRangeHours"),
+      formatHours(snapshot.summary.selectedRangeHours),
+    ],
+    [t("workbench.totalBonus"), formatReward(snapshot.summary.totalBonus)],
   ] as const;
   const bonusToneClass = rewardToneClass(
     getWorkbenchDisplayRewardTone(snapshot.summary.totalBonus),
@@ -181,14 +213,20 @@ function SummaryHeader({ snapshot }: { snapshot: WorkbenchDisplaySnapshot }) {
   return (
     <header className={styles.header}>
       <div className={styles.identity}>
-        <div className={styles.eyebrow}>Workbench · Live operations</div>
+        <div className={styles.eyebrow}>
+          {t("workbench.dashboard")} · {t("workbench.liveSnapshot")}
+        </div>
         <div className={styles.organization} title={snapshot.organization}>
           {snapshot.organization}
         </div>
         <div className={styles.contextLine}>
-          <span>{formatRange(snapshot)}</span>
+          <span>{formatRange(snapshot, t)}</span>
           <span className={styles.contextDivider} aria-hidden="true" />
-          <span>Snapshot {formatCapturedAt(snapshot.capturedAt)}</span>
+          <span>
+            {t("workbench.snapshot", {
+              date: formatCapturedAt(snapshot.capturedAt),
+            })}
+          </span>
         </div>
       </div>
       <div className={styles.summaryGrid}>
@@ -196,7 +234,7 @@ function SummaryHeader({ snapshot }: { snapshot: WorkbenchDisplaySnapshot }) {
           <div
             className={[
               styles.summaryCard,
-              label === "Total bonus" ? bonusToneClass : "",
+              label === t("workbench.totalBonus") ? bonusToneClass : "",
             ].join(" ")}
             key={label}
           >
@@ -245,23 +283,27 @@ function OverviewSlide({
   reducedMotion: boolean;
   total: number;
 }) {
+  const t = useT();
   const metrics = [
     [
-      "Organization total hours",
+      t("workbench.organizationTotalHours"),
       formatHours(snapshot.summary.organizationTotalHours),
     ],
-    ["Selected range hours", formatHours(snapshot.summary.selectedRangeHours)],
-    ["Episodes", formatCount(snapshot.summary.episodes)],
-    ["Tasks", formatCount(snapshot.summary.tasks)],
-    ["Storage", formatBytes(snapshot.summary.storageBytes)],
     [
-      "Daily target hours",
+      t("workbench.selectedRangeHours"),
+      formatHours(snapshot.summary.selectedRangeHours),
+    ],
+    [t("common.episodes"), formatCount(snapshot.summary.episodes)],
+    [t("common.tasks"), formatCount(snapshot.summary.tasks)],
+    [t("common.storage"), formatBytes(snapshot.summary.storageBytes)],
+    [
+      t("workbench.dailyTargetHours"),
       `${formatHours(snapshot.summary.dailyTargetHours)} / day`,
     ],
-    ["Total bonus", formatReward(snapshot.summary.totalBonus)],
-    ["Sources", formatCount(snapshot.summary.robotIds)],
+    [t("workbench.totalBonus"), formatReward(snapshot.summary.totalBonus)],
+    [t("workbench.sourcesCount"), formatCount(snapshot.summary.robotIds)],
     [
-      "Days in range",
+      t("workbench.daysInRange"),
       snapshot.summary.daysInRange === null
         ? "—"
         : formatCount(snapshot.summary.daysInRange),
@@ -280,8 +322,8 @@ function OverviewSlide({
       <SlideHeading
         index={0}
         total={total}
-        title="Overview"
-        meta="Selected range snapshot"
+        title={t("workbench.overview")}
+        meta={t("workbench.selectedRangeSnapshot")}
       />
       <div className={styles.overviewFrame}>
         <div className={styles.overviewGrid}>
@@ -295,7 +337,7 @@ function OverviewSlide({
                   : index === activeCardIndex
                     ? styles.overviewCardActive
                     : styles.overviewCardDimmed,
-                label === "Total bonus" ? bonusToneClass : "",
+                label === t("workbench.totalBonus") ? bonusToneClass : "",
               ].join(" ")}
               data-focused={index === activeCardIndex || undefined}
               key={label}
@@ -307,8 +349,9 @@ function OverviewSlide({
         </div>
         {snapshot.unattributedHours > 0 && (
           <div className={styles.overviewNote}>
-            {formatHours(snapshot.unattributedHours)} of workstation hours are
-            not assigned to personnel.
+            {t("workbench.unassignedHours", {
+              hours: formatHours(snapshot.unattributedHours),
+            })}
           </div>
         )}
       </div>
@@ -327,6 +370,7 @@ function WorkstationDetailSlide({
   pageCursor: number;
   total: number;
 }) {
+  const t = useT();
   const elapsedPage = Math.floor(
     elapsedMs / WORKBENCH_DISPLAY_DETAIL_PAGE_DURATION_MS,
   );
@@ -340,32 +384,38 @@ function WorkstationDetailSlide({
       <SlideHeading
         index={1}
         total={total}
-        title="Workstation detail"
+        title={t("workbench.workstationDetail")}
         meta={
           snapshot.workstations.length === 0
-            ? "No workstation rows"
-            : `Page ${page.pageIndex + 1} / ${page.pageCount} · ${snapshot.workstations.length} workstations`
+            ? t("workbench.noWorkstationRows")
+            : t("workbench.pageWorkstations", {
+                page: page.pageIndex + 1,
+                pages: page.pageCount,
+                count: snapshot.workstations.length,
+              })
         }
       />
       {page.items.length === 0 ? (
-        <EmptySlide range={formatRange(snapshot)}>
-          No workstation additions in this range
+        <EmptySlide range={formatRange(snapshot, t)}>
+          {t("workbench.noWorkstationAdditions")}
         </EmptySlide>
       ) : (
         <div className={styles.tableFrame}>
           <table className={styles.detailTable}>
             <thead>
               <tr>
-                <th>Workstation</th>
-                <th>Personnel</th>
-                <th>Source repos</th>
-                <th>Datasets</th>
-                <th title="Workstation Hours">WS hours</th>
-                <th>Target</th>
-                <th>Rate</th>
-                <th>Rule</th>
-                <th>Avg / ep</th>
-                <th>Reward</th>
+                <th>{t("workbench.workstation")}</th>
+                <th>{t("workbench.personnel")}</th>
+                <th>{t("workbench.sourceRepos")}</th>
+                <th>{t("workbench.datasets")}</th>
+                <th title={t("workbench.workstationHours")}>
+                  {t("workbench.workstationHours")}
+                </th>
+                <th>{t("workbench.target")}</th>
+                <th>{t("workbench.rate")}</th>
+                <th>{t("workbench.rule")}</th>
+                <th>{t("workbench.avgPerEpisode")}</th>
+                <th>{t("workbench.reward")}</th>
               </tr>
             </thead>
             <tbody>
@@ -388,7 +438,7 @@ function WorkstationDetailSlide({
                   >
                     <td
                       className={`${styles.primaryCell} ${styles.workstationCell}`}
-                      title={`Robot ID: ${row.robotId}`}
+                      title={t("workbench.robotId", { id: row.robotId })}
                     >
                       {row.workstation}
                     </td>
@@ -456,6 +506,7 @@ function PersonnelWorkloadSlide({
   pageCursor: number;
   total: number;
 }) {
+  const t = useT();
   const elapsedPage = Math.floor(
     elapsedMs / WORKBENCH_DISPLAY_PERSONNEL_PAGE_DURATION_MS,
   );
@@ -469,29 +520,37 @@ function PersonnelWorkloadSlide({
       <SlideHeading
         index={2}
         total={total}
-        title="Personnel workload"
+        title={t("workbench.personnelWorkload")}
         meta={
           snapshot.personnelRows.length === 0
-            ? "No personnel rows"
-            : `Page ${page.pageIndex + 1} / ${page.pageCount} · ${snapshot.personnelRows.length} personnel`
+            ? t("workbench.noPersonnelRows")
+            : t("workbench.pagePersonnel", {
+                page: page.pageIndex + 1,
+                pages: page.pageCount,
+                count: snapshot.personnelRows.length,
+              })
         }
       />
       {page.items.length === 0 ? (
-        <EmptySlide range={formatRange(snapshot)}>
-          No personnel workload in this range
+        <EmptySlide range={formatRange(snapshot, t)}>
+          {t("workbench.noPersonnelWorkload")}
         </EmptySlide>
       ) : (
         <div className={styles.tableFrame}>
           <table className={styles.personnelTable}>
             <thead>
               <tr>
-                <th>Personnel</th>
-                <th>Workstation</th>
-                <th title="Per-person hours">Avg hours</th>
-                <th title="Per-person target hours">Avg target</th>
-                <th>Rate</th>
-                <th>Rule</th>
-                <th>Reward</th>
+                <th>{t("workbench.personnel")}</th>
+                <th>{t("workbench.workstation")}</th>
+                <th title={t("workbench.rateTitle")}>
+                  {t("workbench.avgHours")}
+                </th>
+                <th title={t("workbench.perPersonTargetHours")}>
+                  {t("workbench.perPersonTargetHours")}
+                </th>
+                <th>{t("workbench.rate")}</th>
+                <th>{t("workbench.rule")}</th>
+                <th>{t("workbench.reward")}</th>
               </tr>
             </thead>
             <tbody>
@@ -542,7 +601,7 @@ function PersonnelWorkloadSlide({
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={6}>Personnel bonus total</td>
+                <td colSpan={6}>{t("workbench.personnelBonusTotal")}</td>
                 <td className={styles.toneSuccess}>
                   {formatReward(snapshot.personnelBonusTotal)}
                 </td>
@@ -566,6 +625,7 @@ function WorkstationHeatmapSlide({
   windowCursor: number;
   total: number;
 }) {
+  const t = useT();
   const elapsedWindow = Math.floor(
     elapsedMs / WORKBENCH_DISPLAY_HEATMAP_WINDOW_DURATION_MS,
   );
@@ -585,16 +645,22 @@ function WorkstationHeatmapSlide({
       <SlideHeading
         index={3}
         total={total}
-        title="Workstation day heatmap"
+        title={t("workbench.workstationDayHeatmap")}
         meta={
           snapshot.heatmapDays.length === 0
-            ? "No daily additions since 2026-08-22"
-            : `2026-08-22 → ${snapshot.dateRange.endDate ?? "Latest"} · Window ${windowPage.pageIndex + 1} / ${windowPage.pageCount} · Top ${snapshot.heatmapRows.length}`
+            ? t("workbench.noDataSince", { date: "2026-08-22" })
+            : t("workbench.windowMeta", {
+                start: "2026-08-22",
+                end: snapshot.dateRange.endDate ?? t("workbench.latest"),
+                page: windowPage.pageIndex + 1,
+                pages: windowPage.pageCount,
+                count: snapshot.heatmapRows.length,
+              })
         }
       />
       {windowPage.items.length === 0 || snapshot.heatmapRows.length === 0 ? (
-        <EmptySlide range={formatRange(snapshot)}>
-          No workstation day data in this range
+        <EmptySlide range={formatRange(snapshot, t)}>
+          {t("workbench.noWorkstationDayData")}
         </EmptySlide>
       ) : (
         <div
@@ -603,7 +669,9 @@ function WorkstationHeatmapSlide({
             gridTemplateColumns: `minmax(11rem, 1.6fr) repeat(${windowPage.items.length}, minmax(0, 1fr))`,
           }}
         >
-          <div className={styles.heatmapCorner}>Workstation</div>
+          <div className={styles.heatmapCorner}>
+            {t("workbench.workstation")}
+          </div>
           {windowPage.items.map((day, dayIndex) => (
             <div
               key={day}
@@ -672,6 +740,7 @@ const DailyTrendSlide = memo(function DailyTrendSlide({
   reducedMotion: boolean;
   total: number;
 }) {
+  const t = useT();
   const chartRows = snapshot.trend.map((row) => ({
     ...row,
     label: row.day.slice(5),
@@ -687,12 +756,12 @@ const DailyTrendSlide = memo(function DailyTrendSlide({
       <SlideHeading
         index={4}
         total={total}
-        title="Daily trend"
-        meta={`2026-07-01 → ${snapshot.dateRange.endDate ?? "Latest"} · ${snapshot.trend.length} reporting day${snapshot.trend.length === 1 ? "" : "s"}`}
+        title={t("workbench.dailyTrend")}
+        meta={`${"2026-07-01"} → ${snapshot.dateRange.endDate ?? t("workbench.latest")} · ${t(snapshot.trend.length === 1 ? "workbench.reportingDay_one" : "workbench.reportingDay_other", { count: snapshot.trend.length })}`}
       />
       {chartRows.length === 0 ? (
-        <EmptySlide range={formatRange(snapshot)}>
-          No daily trend data in this range
+        <EmptySlide range={formatRange(snapshot, t)}>
+          {t("workbench.noDailyTrendData")}
         </EmptySlide>
       ) : (
         <div className={styles.trendLayout}>
@@ -732,7 +801,7 @@ const DailyTrendSlide = memo(function DailyTrendSlide({
                   }}
                   formatter={(value) => [
                     formatHours(Number(value ?? 0)),
-                    "Daily hours",
+                    t("workbench.dailyHours"),
                   ]}
                   labelFormatter={(_, payload) =>
                     String(payload[0]?.payload?.day ?? "")
@@ -745,7 +814,9 @@ const DailyTrendSlide = memo(function DailyTrendSlide({
                     strokeDasharray="8 7"
                     strokeWidth={1.5}
                     label={{
-                      value: "Daily target " + formatHours(dailyTargetHours),
+                      value: t("workbench.dailyTarget", {
+                        hours: formatHours(dailyTargetHours),
+                      }),
                       fill: "#fbbf24",
                       fontSize: 13,
                       position: "insideTopRight",
@@ -768,22 +839,23 @@ const DailyTrendSlide = memo(function DailyTrendSlide({
           </div>
           <aside className={styles.trendMetrics}>
             <div className={styles.largeMetric}>
-              <span>Cumulative hours</span>
+              <span>{t("workbench.cumulativeHours")}</span>
               <strong>
                 {formatHours(snapshot.summary.selectedRangeHours)}
               </strong>
-              <small>Selected reporting range</small>
+              <small>{t("workbench.selectedReportingRange")}</small>
             </div>
             <div className={styles.smallMetrics}>
               <div>
                 <span>
-                  Daily target · {formatCount(snapshot.workstations.length)}{" "}
-                  groups
+                  {t("workbench.dailyTargetGroups", {
+                    count: formatCount(snapshot.workstations.length),
+                  })}
                 </span>
                 <strong>{formatHours(dailyTargetHours)}</strong>
               </div>
               <div>
-                <span>Peak day</span>
+                <span>{t("workbench.peakDay")}</span>
                 <strong>{formatHours(peakHours)}</strong>
               </div>
             </div>
@@ -807,6 +879,7 @@ function TacCapReplaySlide({
   paused: boolean;
   total: number;
 }) {
+  const t = useT();
   const replay = snapshot.replay;
   const chartRows = useMemo(
     () => (replay ? Array.from(replay.chartRows) : []),
@@ -841,8 +914,12 @@ function TacCapReplaySlide({
   );
   const episodeTimeSeconds = replay.randomStartSeconds + localTimeSeconds;
   const issues = [
-    ...replay.missingVideoStreams.map((side) => `${side} video streams`),
-    ...replay.missingTrajectories.map((side) => `${side} TCP trajectory`),
+    ...replay.missingVideoStreams.map(
+      (side) => `${side} ${t("workbench.videoStreams")}`,
+    ),
+    ...replay.missingTrajectories.map(
+      (side) => `${side} ${t("workbench.tcpTrajectory")}`,
+    ),
   ];
 
   return (
@@ -850,8 +927,12 @@ function TacCapReplaySlide({
       <SlideHeading
         index={6}
         total={total}
-        title="3D Replay"
-        meta={`Episode ${replay.episodeId} · ${replay.fps || 30} FPS · ${replay.windowDurationSeconds.toFixed(1)}s window`}
+        title={t("viewer.tab.urdf")}
+        meta={t("workbench.episodeMeta", {
+          episode: replay.episodeId,
+          fps: replay.fps || 30,
+          seconds: replay.windowDurationSeconds.toFixed(1),
+        })}
       />
       <div className={styles.replayFrame}>
         <Canvas
@@ -916,10 +997,16 @@ function TacCapReplaySlide({
         />
         <div className={styles.replayStatus}>
           <span>
-            {replay.recognizedVideoCount} / 6 video streams · t+
-            {localTimeSeconds.toFixed(1)}s
+            {t("workbench.replayStatus", {
+              count: replay.recognizedVideoCount,
+              seconds: localTimeSeconds.toFixed(1),
+            })}
           </span>
-          {issues.length > 0 && <strong>Missing: {issues.join(", ")}</strong>}
+          {issues.length > 0 && (
+            <strong>
+              {t("workbench.missing", { items: issues.join(", ") })}
+            </strong>
+          )}
         </div>
       </div>
     </section>
@@ -933,6 +1020,7 @@ const TopGroupsSlide = memo(function TopGroupsSlide({
   snapshot: WorkbenchDisplaySnapshot;
   total: number;
 }) {
+  const t = useT();
   const maxHours = Math.max(1, ...snapshot.topGroups.map((row) => row.hours));
 
   return (
@@ -940,12 +1028,15 @@ const TopGroupsSlide = memo(function TopGroupsSlide({
       <SlideHeading
         index={5}
         total={total}
-        title="Top groups"
-        meta={`Workstation · ${formatRange(snapshot)} · Top ${snapshot.topGroups.length}`}
+        title={t("workbench.topGroups")}
+        meta={t("workbench.topGroupsMeta", {
+          range: formatRange(snapshot, t),
+          count: snapshot.topGroups.length,
+        })}
       />
       {snapshot.topGroups.length === 0 ? (
-        <EmptySlide range={formatRange(snapshot)}>
-          No group data in this range
+        <EmptySlide range={formatRange(snapshot, t)}>
+          {t("workbench.noGroupData")}
         </EmptySlide>
       ) : (
         <div className={styles.barList}>
@@ -970,7 +1061,9 @@ const TopGroupsSlide = memo(function TopGroupsSlide({
                 <div className={styles.barFill} />
                 <div className={styles.barValues}>
                   <strong>{formatHours(row.hours)}</strong>
-                  <span>{formatCount(row.datasets)} datasets</span>
+                  <span>
+                    {formatCount(row.datasets)} {t("workbench.datasets")}
+                  </span>
                 </div>
               </div>
             </div>
@@ -990,6 +1083,7 @@ function TacCapVideoSlide({
   paused: boolean;
   total: number;
 }) {
+  const t = useT();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [muted, setMuted] = useState(false);
   const [showSoundPrompt, setShowSoundPrompt] = useState(false);
@@ -1048,12 +1142,12 @@ function TacCapVideoSlide({
       <SlideHeading
         index={total - 1}
         total={total}
-        title="TacCap Video"
-        meta="Showcase · First 20 seconds"
+        title={t("workbench.tacCapVideo")}
+        meta={t("workbench.showcaseFirst20")}
       />
       <div className={styles.showcaseVideoFrame}>
         <video
-          aria-label="TacCap showcase video"
+          aria-label={t("workbench.tacCapShowcaseVideo")}
           autoPlay
           className={styles.showcaseVideo}
           muted={muted}
@@ -1068,7 +1162,7 @@ function TacCapVideoSlide({
             onClick={restoreSound}
             type="button"
           >
-            Autoplay continued muted · Turn sound on
+            {t("workbench.autoplayMuted")}
           </button>
         )}
       </div>
@@ -1080,9 +1174,14 @@ export default function WorkbenchDisplay({
   snapshot,
   onExit,
 }: WorkbenchDisplayProps) {
+  const t = useT();
   const reducedMotion = useReducedMotion();
   const slides = useMemo(
-    () => getWorkbenchDisplaySlides(Boolean(snapshot.replay)),
+    () =>
+      getWorkbenchDisplaySlides(
+        Boolean(snapshot.replay),
+        snapshot.replay?.windowDurationSeconds,
+      ),
     [snapshot.replay],
   );
   const [slideIndex, setSlideIndex] = useState(0);
@@ -1288,7 +1387,8 @@ export default function WorkbenchDisplay({
   }, [onExit]);
 
   const slide = slides[slideIndex];
-  const slideProgress = Math.min(1, elapsedMs / slide.durationMs);
+  const slideProgress =
+    slide.durationMs > 0 ? Math.min(1, elapsedMs / slide.durationMs) : 1;
   const slideContent = useMemo(() => {
     switch (slide.id as WorkbenchDisplaySlideId) {
       case "overview":
@@ -1362,7 +1462,7 @@ export default function WorkbenchDisplay({
       className={styles.display}
       role="dialog"
       aria-modal="true"
-      aria-label="Workbench operations display"
+      aria-label={t("workbench.operationsDisplay")}
       onMouseMove={showControls}
     >
       <div className={styles.ambientGlow} aria-hidden="true" />
@@ -1380,8 +1480,8 @@ export default function WorkbenchDisplay({
         <button
           type="button"
           onClick={() => moveSlide(-1)}
-          aria-label="Previous chapter"
-          title="Previous chapter (Left arrow)"
+          aria-label={t("workbench.previousChapter")}
+          title={t("workbench.previousShortcut")}
           tabIndex={controlsVisible ? 0 : -1}
         >
           <FiChevronLeft aria-hidden="true" />
@@ -1389,8 +1489,14 @@ export default function WorkbenchDisplay({
         <button
           type="button"
           onClick={togglePlayback}
-          aria-label={paused ? "Resume display" : "Pause display"}
-          title={paused ? "Resume (Space)" : "Pause (Space)"}
+          aria-label={
+            paused ? t("workbench.resumeDisplay") : t("workbench.pauseDisplay")
+          }
+          title={
+            paused
+              ? t("workbench.resumeShortcut")
+              : t("workbench.pauseShortcut")
+          }
           tabIndex={controlsVisible ? 0 : -1}
         >
           {paused ? (
@@ -1402,8 +1508,8 @@ export default function WorkbenchDisplay({
         <button
           type="button"
           onClick={() => moveSlide(1)}
-          aria-label="Next chapter"
-          title="Next chapter (Right arrow)"
+          aria-label={t("workbench.nextChapter")}
+          title={t("workbench.nextShortcut")}
           tabIndex={controlsVisible ? 0 : -1}
         >
           <FiChevronRight aria-hidden="true" />
@@ -1412,8 +1518,8 @@ export default function WorkbenchDisplay({
         <button
           type="button"
           onClick={exitDisplay}
-          aria-label="Exit display"
-          title="Exit display (Esc)"
+          aria-label={t("workbench.exitDisplay")}
+          title={t("workbench.exitShortcut")}
           tabIndex={controlsVisible ? 0 : -1}
         >
           <FiX aria-hidden="true" />
@@ -1422,7 +1528,7 @@ export default function WorkbenchDisplay({
 
       <footer
         className={styles.progress}
-        aria-label="Display chapter progress"
+        aria-label={t("workbench.displayProgress")}
         tabIndex={0}
         style={{
           gridTemplateColumns: `repeat(${slides.length}, minmax(0, 1fr))`,
@@ -1443,14 +1549,16 @@ export default function WorkbenchDisplay({
               </div>
               <div className={styles.progressLabel}>
                 <span>{String(index + 1).padStart(2, "0")}</span>
-                <strong>{item.title}</strong>
+                <strong>{displaySlideTitle(item.id, t)}</strong>
                 <small>{item.durationMs / 1_000}s</small>
               </div>
             </div>
           );
         })}
       </footer>
-      {paused && <div className={styles.pausedBadge}>Paused</div>}
+      {paused && (
+        <div className={styles.pausedBadge}>{t("workbench.paused")}</div>
+      )}
     </div>,
     document.body,
   );

@@ -7,6 +7,7 @@ import WorkbenchPersonnelMappingEditor, {
 } from "@/components/workbench-personnel-mapping-editor";
 import type { WorkbenchPersonnelConfig } from "@/types/workbench-personnel.types";
 import { resolveWorkbenchPersonnelSchedule } from "@/utils/workbenchPersonnel";
+import { LocaleProvider } from "@/context/locale-context";
 
 function config(): WorkbenchPersonnelConfig {
   return {
@@ -34,13 +35,15 @@ function config(): WorkbenchPersonnelConfig {
 describe("WorkbenchPersonnelMappingEditor", () => {
   test("renders one editable row per workstation-person relationship", () => {
     const html = renderToStaticMarkup(
-      <WorkbenchPersonnelMappingEditor
-        organization="TacVerse"
-        config={config()}
-        workstationSuggestions={["A2", "A5", "B2"]}
-        defaultDay="2026-09-04"
-        onSaved={() => undefined}
-      />,
+      <LocaleProvider>
+        <WorkbenchPersonnelMappingEditor
+          organization="TacVerse"
+          config={config()}
+          workstationSuggestions={["A2", "A5", "B2"]}
+          defaultDay="2026-09-04"
+          onSaved={() => undefined}
+        />
+      </LocaleProvider>,
     );
 
     expect(html).toContain("Personnel mapping");
@@ -51,7 +54,7 @@ describe("WorkbenchPersonnelMappingEditor", () => {
     expect(html).toContain(">Email</th>");
     expect(html).toContain(">Original collectors</th>");
     expect(html).toContain(">Action</th>");
-    expect(html).toContain('aria-label="Mapping 1 collector count"');
+    expect(html).toContain('aria-label="Mapping 1 original collector count"');
     expect(html).toContain('value="2"');
     expect(html).toContain('value="张三"');
     expect(html).toContain('value="李四"');
