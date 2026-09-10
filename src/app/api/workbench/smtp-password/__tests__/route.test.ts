@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { PUT } from "@/app/api/workbench/smtp-password/route";
+import { workbenchSmtpPasswordFilePath } from "@/lib/workbench-mail-runtime";
 
 const previousPasswordFile = process.env.SMTP_PASSWORD_FILE;
+const previousProvider = process.env.SMTP_PROVIDER;
 let tempDir: string;
 let passwordFile: string;
 
@@ -13,11 +15,14 @@ beforeEach(async () => {
   tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "xense-smtp-password-"));
   passwordFile = path.join(tempDir, "qq_smtp_password");
   process.env.SMTP_PASSWORD_FILE = passwordFile;
+  delete process.env.SMTP_PROVIDER;
 });
 
 afterEach(async () => {
   if (previousPasswordFile === undefined) delete process.env.SMTP_PASSWORD_FILE;
   else process.env.SMTP_PASSWORD_FILE = previousPasswordFile;
+  if (previousProvider === undefined) delete process.env.SMTP_PROVIDER;
+  else process.env.SMTP_PROVIDER = previousProvider;
   await fs.rm(tempDir, { recursive: true, force: true });
 });
 
@@ -79,5 +84,11 @@ describe("Workbench SMTP password route", () => {
     );
     const stat = await fs.stat(passwordFile);
     expect(stat.mode & 0o777).toBe(0o600);
+  });
+
+  test("resolves the 163 default password path when no file is configured", () => {
+    delete process.env.SMTP_PASSWORD_FILE;
+    process.env.SMTP_PROVIDER = "163";
+    expect(workbenchSmtpPasswordFilePath()).toBe("/tmp/163_smtp_password");
   });
 });

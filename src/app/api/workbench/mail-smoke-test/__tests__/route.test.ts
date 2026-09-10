@@ -11,6 +11,8 @@ const previousEnv = {
   PYTHONHOME: process.env.PYTHONHOME,
   SMTP_PASSWORD: process.env.SMTP_PASSWORD,
   SMTP_PASSWORD_FILE: process.env.SMTP_PASSWORD_FILE,
+  SMTP_PROVIDER: process.env.SMTP_PROVIDER,
+  SMTP_FROM_ADDRESS: process.env.SMTP_FROM_ADDRESS,
   SMTP_USERNAME: process.env.SMTP_USERNAME,
 };
 
@@ -33,6 +35,8 @@ beforeEach(async () => {
   delete process.env.PYTHONHOME;
   delete process.env.SMTP_PASSWORD;
   delete process.env.SMTP_PASSWORD_FILE;
+  delete process.env.SMTP_PROVIDER;
+  delete process.env.SMTP_FROM_ADDRESS;
   delete process.env.SMTP_USERNAME;
   process.env.PYTHONPATH = "/tmp/should-not-leak";
 });
@@ -147,6 +151,46 @@ console.log(JSON.stringify({
       htmlBody: "<!doctype html><html><body>HTML report</body></html>",
       passwordFile: "/tmp/qq_smtp_password",
       pythonPath: null,
+    });
+  });
+
+  test("passes the 163 provider and configured sender to SMTP", async () => {
+    process.env.SMTP_PROVIDER = "163";
+    process.env.SMTP_FROM_ADDRESS = "operator@163.com";
+    await writeFakePython(`
+console.log(JSON.stringify({
+  type: "result",
+  result: {
+    provider: process.env.SMTP_PROVIDER,
+    from: process.env.SMTP_FROM_ADDRESS,
+    username: process.env.SMTP_USERNAME,
+    passwordFile: process.env.SMTP_PASSWORD_FILE
+  }
+}));
+`);
+
+    const response = await POST(
+      postRequest({
+        org: "TacVerse",
+        message: {
+          sender: "ignored@example.com",
+          recipient: "frank@xenserobotics.com",
+          subject: "SMTP smoketest",
+          textBody: "Plain report",
+          htmlBody: "<html><body>Report</body></html>",
+        },
+      }),
+    );
+    const payload = (await response.json()) as {
+      result: Record<string, unknown>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.result).toMatchObject({
+      provider: "163",
+      from: "operator@163.com",
+      username: "operator@163.com",
+      passwordFile: "/tmp/163_smtp_password",
     });
   });
 

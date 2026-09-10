@@ -558,4 +558,21 @@ describe("TacCap Workbench replay", () => {
       slideElapsedMs: 0,
     });
   });
+
+  test("switches to the final video when a short replay window ends", () => {
+    const slides = getWorkbenchDisplaySlides(true, 8.5);
+
+    expect(slides[6]).toMatchObject({
+      id: "3d-replay",
+      durationMs: 8_500,
+    });
+    expect(getWorkbenchDisplaySlideAtElapsed(80_999, slides)).toEqual({
+      slideIndex: 6,
+      slideElapsedMs: 7_999,
+    });
+    expect(getWorkbenchDisplaySlideAtElapsed(81_500, slides)).toEqual({
+      slideIndex: 7,
+      slideElapsedMs: 0,
+    });
+  });
 });

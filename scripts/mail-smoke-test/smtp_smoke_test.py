@@ -225,7 +225,7 @@ def load_config() -> dict[str, Any]:
     username = get_optional_env("SMTP_USERNAME", from_address)
     password = get_password()
     timeout = parse_timeout()
-    use_ssl = parse_bool_env("SMTP_USE_SSL", default=preset["use_ssl"])
+    use_ssl = parse_bool_env("SMTP_USE_SSL", default=port == 465)
 
     return {
         "provider": provider,

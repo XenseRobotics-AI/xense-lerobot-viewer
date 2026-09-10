@@ -1177,7 +1177,11 @@ export default function WorkbenchDisplay({
   const t = useT();
   const reducedMotion = useReducedMotion();
   const slides = useMemo(
-    () => getWorkbenchDisplaySlides(Boolean(snapshot.replay)),
+    () =>
+      getWorkbenchDisplaySlides(
+        Boolean(snapshot.replay),
+        snapshot.replay?.windowDurationSeconds,
+      ),
     [snapshot.replay],
   );
   const [slideIndex, setSlideIndex] = useState(0);
@@ -1383,7 +1387,8 @@ export default function WorkbenchDisplay({
   }, [onExit]);
 
   const slide = slides[slideIndex];
-  const slideProgress = Math.min(1, elapsedMs / slide.durationMs);
+  const slideProgress =
+    slide.durationMs > 0 ? Math.min(1, elapsedMs / slide.durationMs) : 1;
   const slideContent = useMemo(() => {
     switch (slide.id as WorkbenchDisplaySlideId) {
       case "overview":
