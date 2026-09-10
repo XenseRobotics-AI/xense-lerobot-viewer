@@ -68,7 +68,7 @@ afterEach(async () => {
 });
 
 describe("Workbench statistics route", () => {
-  test("matches bucketed local paths to their unbucketed Hub repo ids", async () => {
+  test("matches bucketed local paths and keeps local recording totals", async () => {
     await writeDataset("TacVerse/released/example-0902", {
       total_episodes: 1,
       total_frames: 3_600,
@@ -109,7 +109,7 @@ describe("Workbench statistics route", () => {
     expect(payload.datasets).toEqual([
       expect.objectContaining({
         relativePath: "TacVerse/released/example-0902",
-        total_episodes: 12,
+        total_episodes: 1,
         uploader: "alice",
         lastModified: "2026-09-02T12:00:00Z",
       }),
@@ -333,6 +333,7 @@ describe("Workbench statistics route", () => {
             totalFrames: 54_000,
             fps: 30,
             durationHours: 0.5,
+            storageBytes: 1234,
             lastModified: "2026-08-17T10:00:00Z",
           },
           {
@@ -488,10 +489,14 @@ describe("Workbench statistics route", () => {
     const metadataOnly = payload.datasets.find(
       (dataset) => dataset.relativePath === "TacVerse/metadata-only-0818",
     );
+    const older = payload.datasets.find(
+      (dataset) => dataset.relativePath === "TacVerse/older-0817",
+    );
+    expect(older).toMatchObject({ hubStorageBytes: 1234 });
     expect(newer).toMatchObject({
-      total_episodes: 25,
-      total_frames: 90_000,
-      fps: 30,
+      total_episodes: 5,
+      total_frames: 18_000,
+      fps: 10,
       lastModified: "2026-08-18T10:00:00Z",
       uploader: "alice",
       uploaderDisplayName: "Alice",
@@ -500,9 +505,9 @@ describe("Workbench statistics route", () => {
       dailyAdditions: [
         {
           day: "2026-08-18",
-          episodes: 25,
-          frames: 90_000,
-          hours: 0.833,
+          episodes: 5,
+          frames: 18_000,
+          hours: 0.5,
         },
       ],
       hf: {
@@ -518,9 +523,9 @@ describe("Workbench statistics route", () => {
       dailyAdditions: [],
     });
     expect(payload.datasets[2]).toMatchObject({
-      total_episodes: 11,
-      total_frames: 54_000,
-      fps: 30,
+      total_episodes: 1,
+      total_frames: 3_600,
+      fps: 10,
       lastModified: "2026-08-17T10:00:00Z",
       uploader: "XR-Bot3",
       uploaderDisplayName: "洪锐",

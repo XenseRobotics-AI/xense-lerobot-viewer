@@ -102,6 +102,8 @@ export type WorkbenchRollupDataset = Pick<
   uploaderDisplayName?: string | null;
   lastModified?: string | null;
   durationHours?: number | null;
+  /** Storage reported by the Hub; distinct from local `sizeBytes`. */
+  hubStorageBytes?: number | null;
   dailyAdditions?: WorkbenchDailyAddition[];
   tacflowScore?: import("@/types/workbench-score.types").WorkbenchDatasetScore;
 };
@@ -183,6 +185,14 @@ function parseDayKey(value: string): number | null {
 
 function dayKeyFromUtc(value: number): string {
   return new Date(value).toISOString().slice(0, 10);
+}
+
+function dayKeyFromLocal(value: Date): string {
+  return [
+    value.getFullYear(),
+    String(value.getMonth() + 1).padStart(2, "0"),
+    String(value.getDate()).padStart(2, "0"),
+  ].join("-");
 }
 
 function suffixYear(lastModified: string | null | undefined): number {
@@ -487,6 +497,72 @@ function sourceKeyForDataset(
 ): WorkbenchDatasetSourceKey {
   return dataset.source ?? workbenchDatasetSourceKey(dataset.relativePath);
 }
+
+const WORKBENCH_TACCAP_PRODUCTION_DATASET_NAMES = new Set([
+  "taccap-g1-remove-and-place-paper",
+]);
+
+/**
+ * Select the production corpus used by the overview total.
+ *
+ * Dated TacCap repositories are the primary production stream. The materialized
+ * remove-and-place-paper repository has no date suffix, but its canonical name
+ * and robot type identify it as the same production stream. Other unclassified
+ * repositories remain out of this total until they have an explicit rule.
+ */
+export function isWorkbenchProductionDataset(
+  dataset: WorkbenchRollupDataset,
+): boolean {
+  if (isWorkbenchStatisticsExcludedDataset(dataset.relativePath)) return false;
+  if (sourceKeyForDataset(dataset) === "taccap-g1") return true;
+  if (sourceKeyForDataset(dataset) !== "unclassified") return false;
+  return (
+    WORKBENCH_TACCAP_PRODUCTION_DATASET_NAMES.has(
+      workbenchDatasetName(dataset.relativePath),
+    ) && dataset.robot_type?.trim() === "bi_taccap_gripper"
+  );
+}
+
+export function filterWorkbenchProductionDatasets(
+  datasets: readonly WorkbenchRollupDataset[],
+): WorkbenchRollupDataset[] {
+  return datasets.filter(isWorkbenchProductionDataset);
+}
+
+export function computeWorkbenchProductionHours(
+  datasets: readonly WorkbenchRollupDataset[],
+): number {
+  return roundHours(
+    filterWorkbenchProductionDatasets(datasets).reduce(
+      (sum, dataset) => sum + datasetHours(dataset),
+      0,
+    ),
+  );
+}
+
+/**
+ * Hub storage is repository-level metadata, so the selected range reports the
+ * largest selected repository rather than summing the same logical corpus
+ * across repositories. Fall back to local directory sizes for old catalogs.
+ */
+export function computeWorkbenchSelectedStorageBytes(
+  datasets: readonly WorkbenchRollupDataset[],
+  selectedPaths: readonly string[],
+): number {
+  const selected = new Set(selectedPaths);
+  const rows = datasets.filter((dataset) => selected.has(dataset.relativePath));
+  const hubStorage = rows
+    .map((dataset) => dataset.hubStorageBytes)
+    .filter(
+      (value): value is number =>
+        typeof value === "number" && Number.isFinite(value) && value >= 0,
+    );
+  if (hubStorage.length > 0) return Math.max(...hubStorage);
+  return rows.reduce((sum, dataset) => {
+    const value = dataset.sizeBytes;
+    return sum + (Number.isFinite(value) && value > 0 ? value : 0);
+  }, 0);
+}
 function formatWorkbenchDateTimeLocal(value: Date): string {
   return (
     [
@@ -515,16 +591,21 @@ export function getWorkbenchDefaultDateTimeRange(
 }
 
 /**
- * Choose the newest complete production day represented by daily additions.
- * The range is local-midnight to local-midnight so it can be passed directly
- * to a datetime-local input without turning a UTC catalog timestamp into a
- * partial day.
+ * Choose the newest completed production day represented by daily additions.
+ *
+ * The current local day may still be receiving metadata-only uploads. It is
+ * therefore excluded from the automatic range; operators can still select it
+ * explicitly. The range is local-midnight to local-midnight so it can be passed
+ * directly to a datetime-local input without turning a UTC catalog timestamp
+ * into a partial day.
  */
 export function getWorkbenchLatestAvailableDateTimeRange(
   availableDays: readonly string[],
   fallbackNow: Date = new Date(),
 ): WorkbenchDateTimeRange {
-  const latestDay = [...new Set(availableDays.filter(isDayKey))].sort().at(-1);
+  const sortedDays = [...new Set(availableDays.filter(isDayKey))].sort();
+  const today = dayKeyFromLocal(fallbackNow);
+  const latestDay = sortedDays.filter((day) => day < today).at(-1);
   if (!latestDay) return getWorkbenchDefaultDateTimeRange(fallbackNow);
 
   const start = new Date(`${latestDay}T00:00:00`);
