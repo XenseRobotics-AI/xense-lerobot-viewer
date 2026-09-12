@@ -222,6 +222,10 @@ export const zh: Record<MessageKey, string> = {
   "pathswitch.use": "使用",
   "pathswitch.choose": "选择文件夹…",
   "pathswitch.choosing": "对话框已打开…",
+  "pathswitch.switching": "正在切换到 {path}，扫描中。",
+  "pathswitch.switchingHint":
+    "若目录很大且存储较慢（如外接硬盘），可能需要一分钟。",
+  "pathswitch.notSwitched": "仍在浏览默认根目录：{path} 已不是已知位置。",
   "pathswitch.dialogTitle": "选择数据集文件夹",
   "pathswitch.dialogUnavailable": "无法打开文件夹对话框：{reason}",
   "repofetch.another": "下载另一个",
