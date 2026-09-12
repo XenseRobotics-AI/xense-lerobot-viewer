@@ -227,6 +227,11 @@ export const en = {
   "pathswitch.use": "Use",
   "pathswitch.choose": "Choose folder…",
   "pathswitch.choosing": "Dialog open…",
+  "pathswitch.switching": "Switching to {path} — scanning it now.",
+  "pathswitch.switchingHint":
+    "A large directory on slow storage (an external drive) can take a minute.",
+  "pathswitch.notSwitched":
+    "Still browsing the default root: {path} is no longer a known location.",
   "pathswitch.dialogTitle": "Choose a dataset folder",
   "pathswitch.dialogUnavailable": "No folder dialog: {reason}",
 
