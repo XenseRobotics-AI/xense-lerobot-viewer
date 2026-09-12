@@ -17,6 +17,10 @@ import {
 } from "@/lib/dataset-locations-store";
 import type { DatasetFacets } from "@/lib/dataset-facets";
 import { computeFacets } from "@/lib/dataset-facets-server";
+import {
+  createDatasetSizeResolver,
+  type DatasetSizeResolver,
+} from "@/lib/dataset-size-cache";
 
 export type { DatasetTags } from "@/lib/dataset-tags";
 
@@ -207,6 +211,7 @@ async function walkForDatasets(
   depth: number,
   found: LocalDatasetSummary[],
   errors: { path: string; message: string }[],
+  sizes: DatasetSizeResolver,
   useAbsoluteRoutes = false,
 ): Promise<void> {
   if (depth > MAX_SCAN_DEPTH) return;
@@ -237,7 +242,7 @@ async function walkForDatasets(
       const [integrity, tags, sizeBytes, facets] = await Promise.all([
         probeIntegrity(currentDir, info),
         readDatasetTags(currentDir),
-        directorySizeBytes(currentDir),
+        sizes.sizeOf(currentDir),
         computeFacets(
           currentDir,
           relativePath,
@@ -286,6 +291,7 @@ async function walkForDatasets(
           depth + 1,
           found,
           errors,
+          sizes,
           useAbsoluteRoutes,
         ),
       ),
@@ -364,7 +370,19 @@ export async function discoverLocalDatasets(
 
   const datasets: LocalDatasetSummary[] = [];
   const errors: { path: string; message: string }[] = [];
-  await walkForDatasets(browsePath, browsePath, 0, datasets, errors, !isRoot);
+  // Sizes come from the store when the dataset has not moved since it was last
+  // counted; see `dataset-size-cache.ts` for why that matters on a big archive.
+  const sizes = await createDatasetSizeResolver(root, directorySizeBytes);
+  await walkForDatasets(
+    browsePath,
+    browsePath,
+    0,
+    datasets,
+    errors,
+    sizes,
+    !isRoot,
+  );
+  await sizes.flush();
   datasets.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 
   return { root, browsePath, locations: paths, datasets, errors };
