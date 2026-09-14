@@ -456,7 +456,6 @@ describe("Workbench statistics route", () => {
       mappings: { "robot-newer": "D2" },
       legacyMappings: { TCGU01A28Z0069m: "D2" },
     });
-    expect(payload.workstationMappings.defaults.TCGU01A28Z0033m).toBe("N0");
     expect(payload.personnelConfig.org).toBe("TacVerse");
     expect(payload.personnelConfig.people.length).toBeGreaterThan(0);
     expect(

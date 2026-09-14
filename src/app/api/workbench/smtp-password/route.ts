@@ -2,18 +2,31 @@ import { NextRequest } from "next/server";
 import { isSameOriginRequest, noStoreHeaders } from "@/lib/request-security";
 import {
   normalizeWorkbenchSmtpPassword,
-  workbenchSmtpPasswordFilePath,
   writeWorkbenchSmtpPassword,
 } from "@/lib/workbench-mail-runtime";
+import { resolveWorkbenchMailSender } from "@/lib/workbench-mail-sender";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function passwordFromRequestBody(value: unknown): string | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return normalizeWorkbenchSmtpPassword(
-    (value as { password?: unknown }).password,
-  );
+function credentialsFromRequestBody(value: unknown):
+  | {
+      sender: Extract<
+        ReturnType<typeof resolveWorkbenchMailSender>,
+        { ok: true }
+      >["config"];
+      password: string;
+    }
+  | { error: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { error: "Expected a JSON object body." };
+  }
+  const raw = value as { sender?: unknown; password?: unknown };
+  const sender = resolveWorkbenchMailSender(raw.sender);
+  if (!sender.ok) return { error: sender.error };
+  const password = normalizeWorkbenchSmtpPassword(raw.password);
+  if (!password) return { error: "SMTP authorization code is required." };
+  return { sender: sender.config, password };
 }
 
 export async function PUT(request: NextRequest): Promise<Response> {
@@ -37,23 +50,22 @@ export async function PUT(request: NextRequest): Promise<Response> {
     );
   }
 
-  const password = passwordFromRequestBody(body);
-  if (!password) {
+  const credentials = credentialsFromRequestBody(body);
+  if ("error" in credentials) {
     return Response.json(
-      { error: "SMTP password is required." },
+      { error: credentials.error },
       { status: 400, headers: noStoreHeaders() },
     );
   }
 
   try {
-    const result = await writeWorkbenchSmtpPassword(
-      password,
-      workbenchSmtpPasswordFilePath(),
+    await writeWorkbenchSmtpPassword(
+      credentials.password,
+      credentials.sender.provider,
     );
     return Response.json(
       {
-        message: "SMTP password saved.",
-        passwordFile: result.filePath,
+        message: `${credentials.sender.provider.toUpperCase()} SMTP authorization code saved.`,
       },
       { headers: noStoreHeaders() },
     );

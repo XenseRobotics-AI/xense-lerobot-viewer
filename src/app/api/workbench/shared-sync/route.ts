@@ -15,6 +15,7 @@ import {
   digestWorkbenchSharedValue,
   listPendingWorkbenchSharedEvents,
   markWorkbenchSharedEventsSent,
+  migrateLegacyWorkbenchSharedConfig,
   normalizeWorkbenchSharedOrg,
   parseWorkbenchSharedConfig,
   readLocalWorkbenchSharedConfigs,
@@ -93,18 +94,25 @@ function remoteDocuments(
   org: string,
   read: WorkbenchSharedHubReadResult,
 ): Record<WorkbenchSharedConfigKind, WorkbenchSharedConfigDocument | null> {
-  return Object.fromEntries(
-    WORKBENCH_SHARED_CONFIG_KINDS.map((kind) => {
-      const repoPath = workbenchSharedConfigPath(org, kind);
-      const raw = read.files[repoPath];
-      return [
-        kind,
-        raw === null || raw === undefined
-          ? null
-          : parseWorkbenchSharedConfig(raw, kind, org),
-      ];
-    }),
-  ) as Record<WorkbenchSharedConfigKind, WorkbenchSharedConfigDocument | null>;
+  const configurationPath = workbenchSharedConfigPath(org, "configuration");
+  const configurationRaw = read.files[configurationPath];
+  const configuration =
+    configurationRaw === null || configurationRaw === undefined
+      ? migrateLegacyWorkbenchSharedConfig(
+          org,
+          read.files[`configs/${org}/workstation-mappings.json`],
+          read.files[`configs/${org}/personnel-mapping.json`],
+        )
+      : parseWorkbenchSharedConfig(configurationRaw, "configuration", org);
+  const rewardPath = workbenchSharedConfigPath(org, "reward-rules");
+  const rewardRaw = read.files[rewardPath];
+  return {
+    configuration,
+    "reward-rules":
+      rewardRaw === null || rewardRaw === undefined
+        ? null
+        : parseWorkbenchSharedConfig(rewardRaw, "reward-rules", org),
+  };
 }
 
 async function readRemote(
@@ -121,9 +129,13 @@ async function readRemote(
     {
       action: "read",
       repoId: WORKBENCH_SHARED_REPO_ID,
-      paths: WORKBENCH_SHARED_CONFIG_KINDS.map((kind) =>
-        workbenchSharedConfigPath(org, kind),
-      ),
+      paths: [
+        ...WORKBENCH_SHARED_CONFIG_KINDS.map((kind) =>
+          workbenchSharedConfigPath(org, kind),
+        ),
+        `configs/${org}/workstation-mappings.json`,
+        `configs/${org}/personnel-mapping.json`,
+      ],
     },
     token,
   );

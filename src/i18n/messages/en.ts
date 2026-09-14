@@ -1114,11 +1114,13 @@ export const en = {
   "workbench.smtpPassword": "SMTP authorization code",
   "workbench.smtpPasswordPlaceholder": "QQ or 163 authorization code",
   "workbench.smtpPasswordHint":
-    "Use the configured QQ or 163 authorization code, not the mailbox login password.",
-  "workbench.smtpPasswordRequired": "SMTP password is required.",
-  "workbench.smtpPasswordSaved": "SMTP password saved.",
+    "The code is saved for the provider selected by Sender; use an authorization code, not the mailbox login password.",
+  "workbench.smtpPasswordRequired": "SMTP authorization code is required.",
+  "workbench.smtpPasswordSaved": "SMTP authorization code saved.",
   "workbench.save": "Save",
   "workbench.sender": "Sender",
+  "workbench.senderPlaceholder":
+    "Only QQ or 163 email is supported. Feishu email is strictly prohibited.",
   "workbench.recipient": "Recipients",
   "workbench.recipientPlaceholder":
     "Separate multiple email addresses with commas",
@@ -1142,6 +1144,11 @@ export const en = {
   "workbench.teamManagers": "Dylan and other team managers",
   "workbench.rewardNonNegative": "Reward >=0 (selected range)",
   "workbench.allPersonnel": "All personnel",
+  "workbench.configuration": "Configuration",
+  "workbench.dataCollectors": "Data collectors",
+  "workbench.qualityInspectors": "Quality inspectors",
+  "workbench.managers": "Managers",
+  "workbench.developers": "Developers",
   "workbench.copyRepoTitle": "Click to copy {repo}",
   "workbench.copyRepoAria": "Copy source repo {repo}",
   "workbench.copied": "Copied",

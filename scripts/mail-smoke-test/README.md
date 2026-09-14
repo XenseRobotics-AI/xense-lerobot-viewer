@@ -24,24 +24,25 @@ the mailbox login password.
 
 ## 2. Where to store the authorization code
 
-Do not commit the code into this repository.
-For QQ local use, store it in `/tmp/qq_smtp_password`:
+Do not commit the code into this repository. Workbench stores each provider's code separately with `0700` directory permissions and `0600` file permissions.
+For QQ local use, store it in `<LOCAL_DATASET_ROOT>/.xense-viewer/secrets/smtp-qq-authorization-code`:
 
 ```bash
 umask 077
-printf '%s' 'your-qq-mail-authorization-code' > /tmp/qq_smtp_password
+install -d -m 700 "$LOCAL_DATASET_ROOT/.xense-viewer/secrets"
+printf '%s' 'your-qq-mail-authorization-code' > "$LOCAL_DATASET_ROOT/.xense-viewer/secrets/smtp-qq-authorization-code"
 ```
 
-For 163 local use, store it in `/tmp/163_smtp_password`:
+For 163 local use, store it in `<LOCAL_DATASET_ROOT>/.xense-viewer/secrets/smtp-163-authorization-code`:
 
 ```bash
 umask 077
-printf '%s' 'your-163-mail-authorization-code' > /tmp/163_smtp_password
+install -d -m 700 "$LOCAL_DATASET_ROOT/.xense-viewer/secrets"
+printf '%s' 'your-163-mail-authorization-code' > "$LOCAL_DATASET_ROOT/.xense-viewer/secrets/smtp-163-authorization-code"
 ```
 
 The script can read either `SMTP_PASSWORD` directly or `SMTP_PASSWORD_FILE`.
-The Workbench password editor uses the provider-specific path when
-`SMTP_PASSWORD_FILE` is not set.
+The Workbench authorization-code editor derives the provider from Sender and writes the corresponding file under `<LOCAL_DATASET_ROOT>/.xense-viewer/secrets/`. The standalone script reads the file named by `SMTP_PASSWORD_FILE`.
 
 ## 3. Provider settings
 
@@ -55,20 +56,18 @@ Both providers use implicit TLS on port 465 by default:
 
 ## 4. How to set the sender address
 
-Set the sender and login address to the QQ mailbox you want to use:
+Set the sender address to the QQ mailbox you want to use:
 
-- `SMTP_FROM_ADDRESS=1796262052@qq.com`
-- `SMTP_USERNAME=1796262052@qq.com`
+- `SMTP_FROM_ADDRESS=sender@qq.com`
 
-For 163, both values should be the complete 163 mailbox address:
+For 163, use the complete 163 mailbox address:
 
 - `SMTP_FROM_ADDRESS=operator@163.com`
-- `SMTP_USERNAME=operator@163.com`
 
 The recipient, subject, and plain-text/HTML bodies can be passed in the
 environment:
 
-- `SMTP_TO_ADDRESS=frank@xenserobotics.com,jay@xenserobotics.com`
+- `SMTP_TO_ADDRESS=jay@xenserobotics.com`
 - `SMTP_SUBJECT=...`
 - `SMTP_TEXT_BODY=...`
 - `SMTP_HTML_BODY=...`
@@ -90,11 +89,10 @@ Recommended 163 runtime settings:
 ## 5. Run it
 
 ```bash
-SMTP_PASSWORD_FILE=/tmp/qq_smtp_password \
+SMTP_PASSWORD_FILE="$LOCAL_DATASET_ROOT/.xense-viewer/secrets/smtp-qq-authorization-code" \
 SMTP_PROVIDER=qq \
-SMTP_FROM_ADDRESS=1796262052@qq.com \
-SMTP_USERNAME=1796262052@qq.com \
-SMTP_TO_ADDRESS=frank@xenserobotics.com,jay@xenserobotics.com \
+SMTP_FROM_ADDRESS=sender@qq.com \
+SMTP_TO_ADDRESS=jay@xenserobotics.com \
 SMTP_SUBJECT='SMTP smoketest' \
 SMTP_TEXT_BODY='SMTP smoke test from xense-lerobot-viewer.' \
 SMTP_HTML_BODY='<p>SMTP smoke test from xense-lerobot-viewer.</p>' \
@@ -107,11 +105,10 @@ python scripts/mail-smoke-test/smtp_smoke_test.py
 The equivalent 163 command is:
 
 ```bash
-SMTP_PASSWORD_FILE=/tmp/163_smtp_password \
+SMTP_PASSWORD_FILE="$LOCAL_DATASET_ROOT/.xense-viewer/secrets/smtp-163-authorization-code" \
 SMTP_PROVIDER=163 \
 SMTP_FROM_ADDRESS=operator@163.com \
-SMTP_USERNAME=operator@163.com \
-SMTP_TO_ADDRESS=frank@xenserobotics.com,jay@xenserobotics.com \
+SMTP_TO_ADDRESS=jay@xenserobotics.com \
 SMTP_HOST=smtp.163.com \
 SMTP_PORT=465 \
 SMTP_USE_SSL=1 \

@@ -3,14 +3,11 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 import { isSameOriginRequest } from "@/lib/request-security";
 import { pythonSpawnEnv } from "@/lib/python-runtime";
-import {
-  normalizeWorkbenchSmtpProvider,
-  workbenchSmtpPasswordFilePath,
-} from "@/lib/workbench-mail-runtime";
+import { assertWorkbenchSmtpPasswordConfigured } from "@/lib/workbench-mail-runtime";
+import { resolveWorkbenchMailSender } from "@/lib/workbench-mail-sender";
 import {
   normalizeWorkbenchMailRecipients,
   validateWorkbenchMailMessage,
-  WORKBENCH_MAIL_SENDER,
   type WorkbenchMailMessage,
 } from "@/lib/workbench-mail-draft";
 
@@ -79,7 +76,8 @@ function normalizeRequestBody(
   const htmlBody =
     typeof rawMessage.htmlBody === "string" ? rawMessage.htmlBody : "";
   const message = {
-    sender: WORKBENCH_MAIL_SENDER,
+    sender:
+      typeof rawMessage.sender === "string" ? rawMessage.sender.trim() : "",
     recipient,
     subject: subject ?? "",
     textBody,
@@ -103,26 +101,28 @@ function pythonBin(): string {
   return process.env.PYTHON_BIN?.trim() || "python3";
 }
 
-function mailSpawnEnv(message: WorkbenchMailMessage): NodeJS.ProcessEnv {
-  const provider = normalizeWorkbenchSmtpProvider(process.env.SMTP_PROVIDER);
-  const sender =
-    process.env.SMTP_FROM_ADDRESS?.trim() ||
-    (provider === "qq" ? WORKBENCH_MAIL_SENDER : "");
-  const env = {
-    ...pythonSpawnEnv(),
+function mailSpawnEnv(
+  message: WorkbenchMailMessage,
+  passwordFile: string,
+): NodeJS.ProcessEnv {
+  const resolved = resolveWorkbenchMailSender(message.sender);
+  if (!resolved.ok) throw new Error(resolved.error);
+  const { sender, provider, host, port } = resolved.config;
+  const env = pythonSpawnEnv();
+  delete env.SMTP_PASSWORD;
+  Object.assign(env, {
     SMTP_PROVIDER: provider,
+    SMTP_HOST: host,
+    SMTP_PORT: String(port),
+    SMTP_USE_SSL: "1",
     SMTP_FROM_ADDRESS: sender,
-    SMTP_USERNAME: process.env.SMTP_USERNAME?.trim() || sender,
+    SMTP_USERNAME: sender,
+    SMTP_PASSWORD_FILE: passwordFile,
     SMTP_TO_ADDRESS: message.recipient,
     SMTP_SUBJECT: message.subject,
     SMTP_TEXT_BODY: message.textBody,
     SMTP_HTML_BODY: message.htmlBody,
-  } as NodeJS.ProcessEnv;
-
-  if (!env.SMTP_PASSWORD?.trim() && !env.SMTP_PASSWORD_FILE?.trim()) {
-    env.SMTP_PASSWORD_FILE = workbenchSmtpPasswordFilePath(provider);
-  }
-
+  });
   return env;
 }
 
@@ -222,10 +222,24 @@ function parseScriptOutput(
   );
 }
 
-function runMailScript(
+async function runMailScript(
   message: WorkbenchMailMessage,
 ): Promise<MailScriptSuccess | MailScriptFailure> {
-  const env = mailSpawnEnv(message);
+  const resolved = resolveWorkbenchMailSender(message.sender);
+  if (!resolved.ok) {
+    return scriptFailure("config", "SMTP_SENDER_INVALID", resolved.error);
+  }
+
+  let passwordFile: string;
+  try {
+    passwordFile = await assertWorkbenchSmtpPasswordConfigured(
+      resolved.config.provider,
+    );
+  } catch (error: unknown) {
+    return scriptFailure("config", "SMTP_AUTHORIZATION_CODE_MISSING", error);
+  }
+
+  const env = mailSpawnEnv(message, passwordFile);
   const py = pythonBin();
 
   return new Promise((resolve) => {

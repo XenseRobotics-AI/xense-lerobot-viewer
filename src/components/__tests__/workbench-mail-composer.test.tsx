@@ -40,6 +40,12 @@ describe("WorkbenchMailComposer recipient selection", () => {
       </LocaleProvider>,
     );
 
+    expect(html).toContain('<input type="email"');
+    expect(html).toContain(
+      'placeholder="Only QQ or 163 email is supported. Feishu email is strictly prohibited."',
+    );
+    expect(html).toContain('value="jay@xenserobotics.com"');
+    expect(html).not.toContain("1796262052@qq.com");
     expect(html).toContain("Separate multiple email addresses with commas");
     expect(html).toContain("Recipients (multiple selection)");
     expect(html).toContain("Choose a group to fill recipients");

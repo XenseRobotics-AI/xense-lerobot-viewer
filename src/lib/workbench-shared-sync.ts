@@ -5,16 +5,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveLocalDatasetRoot } from "@/lib/local-datasets-discovery";
 import {
-  normalizeWorkbenchWorkstationMappings,
-  readWorkbenchWorkstationMappings,
-  writeWorkbenchWorkstationMappings,
-} from "@/lib/workbench-config-store";
+  readWorkbenchConfiguration,
+  writeWorkbenchConfiguration,
+} from "@/lib/workbench-configuration-store";
+import { normalizeWorkbenchWorkstationMappings } from "@/lib/workbench-config-store";
+import { validateWorkbenchPersonnelOrganizationConfig } from "@/lib/workbench-personnel-store";
 import {
-  WORKBENCH_PERSONNEL_CONFIG_PATH,
-  readWorkbenchPersonnelConfig,
-  validateWorkbenchPersonnelOrganizationConfig,
-  writeWorkbenchPersonnelConfig,
-} from "@/lib/workbench-personnel-store";
+  migrateLegacyWorkbenchConfiguration,
+  validateWorkbenchConfiguration,
+} from "@/utils/workbenchConfiguration";
 import {
   normalizeWorkbenchRewardRulesInput,
   readWorkbenchRewardRules,
@@ -26,12 +25,11 @@ export const WORKBENCH_SHARED_REPO_ID =
 export const WORKBENCH_SHARED_REPO_URL =
   "https://huggingface.co/datasets/" + WORKBENCH_SHARED_REPO_ID;
 export const WORKBENCH_SHARED_CONFIG_KINDS = [
-  "workstation-mappings",
-  "personnel-mapping",
+  "configuration",
   "reward-rules",
 ] as const;
 
-const SHARED_SCHEMA = "xense.workbench.config/1";
+const SHARED_SCHEMA = "xense.workbench.config/2";
 const EVENT_SCHEMA = "xense.workbench.event/1";
 const DEFAULT_UPDATED_AT = "1970-01-01T00:00:00.000Z";
 const STORE_DIR = ".xense-viewer";
@@ -52,7 +50,7 @@ export type WorkbenchSharedConfigKind =
 
 export type WorkbenchSharedConfigDocument = {
   schema: typeof SHARED_SCHEMA;
-  version: 1;
+  version: 2;
   kind: WorkbenchSharedConfigKind;
   org: string;
   updatedAt: string;
@@ -153,51 +151,28 @@ export function workbenchSharedConfigPath(
   return "configs/" + normalizeWorkbenchSharedOrg(org) + "/" + kind + ".json";
 }
 
-function personnelData(
-  people: readonly { id: string; displayName: string; email: string }[],
-  schedules: Record<string, unknown>,
-): Record<string, unknown> {
-  return {
-    people: people.map((person) => ({
-      id: person.id,
-      displayName: person.displayName,
-      email: person.email,
-    })),
-    schedules,
-  };
-}
-
 export async function readLocalWorkbenchSharedConfigs(
   org: string,
   root = resolveLocalDatasetRoot(),
 ): Promise<Record<WorkbenchSharedConfigKind, WorkbenchSharedConfigDocument>> {
   const normalizedOrg = normalizeWorkbenchSharedOrg(org);
-  const [workstations, personnel, rewards] = await Promise.all([
-    readWorkbenchWorkstationMappings(normalizedOrg, root),
-    readWorkbenchPersonnelConfig(normalizedOrg),
+  const [configuration, rewards] = await Promise.all([
+    readWorkbenchConfiguration(normalizedOrg, root),
     readWorkbenchRewardRules(normalizedOrg, root),
   ]);
 
   return {
-    "workstation-mappings": {
+    configuration: {
       schema: SHARED_SCHEMA,
-      version: 1,
-      kind: "workstation-mappings",
+      version: 2,
+      kind: "configuration",
       org: normalizedOrg,
-      updatedAt: normalizeUpdatedAt(workstations.updatedAt),
-      data: { mappings: workstations.mappings },
-    },
-    "personnel-mapping": {
-      schema: SHARED_SCHEMA,
-      version: 1,
-      kind: "personnel-mapping",
-      org: normalizedOrg,
-      updatedAt: normalizeUpdatedAt(personnel.updatedAt),
-      data: personnelData(personnel.people, personnel.schedules),
+      updatedAt: normalizeUpdatedAt(configuration.updatedAt),
+      data: configuration.config as unknown as Record<string, unknown>,
     },
     "reward-rules": {
       schema: SHARED_SCHEMA,
-      version: 1,
+      version: 2,
       kind: "reward-rules",
       org: normalizedOrg,
       updatedAt: normalizeUpdatedAt(rewards.updatedAt),
@@ -212,6 +187,64 @@ export async function readLocalWorkbenchSharedConfigs(
   };
 }
 
+export function migrateLegacyWorkbenchSharedConfig(
+  org: string,
+  workstationDocument: unknown,
+  personnelDocument: unknown,
+): WorkbenchSharedConfigDocument | null {
+  const normalizedOrg = normalizeWorkbenchSharedOrg(org);
+  const workstation =
+    isRecord(workstationDocument) &&
+    workstationDocument.schema === "xense.workbench.config/1" &&
+    workstationDocument.version === 1 &&
+    workstationDocument.kind === "workstation-mappings" &&
+    workstationDocument.org === normalizedOrg &&
+    isRecord(workstationDocument.data) &&
+    isRecord(workstationDocument.data.mappings)
+      ? normalizeWorkbenchWorkstationMappings(workstationDocument.data.mappings)
+      : {};
+  let personnel: ReturnType<
+    typeof validateWorkbenchPersonnelOrganizationConfig
+  > = { people: [], schedules: {}, updatedAt: null };
+  if (
+    isRecord(personnelDocument) &&
+    personnelDocument.schema === "xense.workbench.config/1" &&
+    personnelDocument.version === 1 &&
+    personnelDocument.kind === "personnel-mapping" &&
+    personnelDocument.org === normalizedOrg &&
+    isRecord(personnelDocument.data)
+  ) {
+    personnel = validateWorkbenchPersonnelOrganizationConfig(
+      personnelDocument.data,
+      normalizeUpdatedAt(personnelDocument.updatedAt),
+    );
+  }
+  if (
+    Object.keys(workstation).length === 0 &&
+    personnel.people.length === 0 &&
+    Object.keys(personnel.schedules).length === 0
+  ) {
+    return null;
+  }
+  const timestamps = [workstationDocument, personnelDocument]
+    .filter(isRecord)
+    .map((document) => normalizeUpdatedAt(document.updatedAt))
+    .sort();
+  return {
+    schema: SHARED_SCHEMA,
+    version: 2,
+    kind: "configuration",
+    org: normalizedOrg,
+    updatedAt: timestamps.at(-1) ?? DEFAULT_UPDATED_AT,
+    data: migrateLegacyWorkbenchConfiguration(
+      workstation,
+      personnel,
+      [],
+      normalizedOrg,
+    ) as unknown as Record<string, unknown>,
+  };
+}
+
 export function parseWorkbenchSharedConfig(
   value: unknown,
   expectedKind: WorkbenchSharedConfigKind,
@@ -219,7 +252,14 @@ export function parseWorkbenchSharedConfig(
 ): WorkbenchSharedConfigDocument {
   if (!isRecord(value))
     throw new Error("Shared configuration must be an object.");
-  if (value.schema !== SHARED_SCHEMA || value.version !== 1) {
+  const legacyReward =
+    expectedKind === "reward-rules" &&
+    value.schema === "xense.workbench.config/1" &&
+    value.version === 1;
+  if (
+    !legacyReward &&
+    (value.schema !== SHARED_SCHEMA || value.version !== 2)
+  ) {
     throw new Error("Unsupported shared Workbench configuration schema.");
   }
   if (value.kind !== expectedKind) {
@@ -239,19 +279,9 @@ export function parseWorkbenchSharedConfig(
   const updatedAt = normalizeUpdatedAt(value.updatedAt);
   let data: Record<string, unknown>;
 
-  if (expectedKind === "workstation-mappings") {
-    if (!isRecord(value.data.mappings)) {
-      throw new Error("Shared workstation mappings are missing.");
-    }
-    data = {
-      mappings: normalizeWorkbenchWorkstationMappings(value.data.mappings),
-    };
-  } else if (expectedKind === "personnel-mapping") {
-    const normalized = validateWorkbenchPersonnelOrganizationConfig(
-      value.data,
-      updatedAt,
-    );
-    data = personnelData(normalized.people, normalized.schedules);
+  if (expectedKind === "configuration") {
+    data = validateWorkbenchConfiguration(value.data)
+      .config as unknown as Record<string, unknown>;
   } else {
     const normalized = normalizeWorkbenchRewardRulesInput({
       org,
@@ -268,7 +298,7 @@ export function parseWorkbenchSharedConfig(
 
   return {
     schema: SHARED_SCHEMA,
-    version: 1,
+    version: 2,
     kind: expectedKind,
     org,
     updatedAt,
@@ -346,16 +376,6 @@ export async function applyRemoteWorkbenchSharedConfig(
   root = resolveLocalDatasetRoot(),
 ): Promise<void> {
   const org = normalizeWorkbenchSharedOrg(document.org);
-  if (document.kind === "workstation-mappings") {
-    await writeWorkbenchWorkstationMappings(
-      org,
-      document.data.mappings as Record<string, string>,
-      root,
-      document.updatedAt,
-    );
-    return;
-  }
-
   if (document.kind === "reward-rules") {
     await writeWorkbenchRewardRules(
       org,
@@ -366,17 +386,13 @@ export async function applyRemoteWorkbenchSharedConfig(
     return;
   }
 
-  const normalized = validateWorkbenchPersonnelOrganizationConfig(
-    document.data,
-    document.updatedAt,
-  );
-  await writeWorkbenchPersonnelConfig(
+  const current = await readWorkbenchConfiguration(org, root);
+  await writeWorkbenchConfiguration(
     org,
-    {
-      people: normalized.people,
-      schedules: normalized.schedules,
-    },
-    WORKBENCH_PERSONNEL_CONFIG_PATH,
+    document.data,
+    current.revision,
+    root,
+    [],
     document.updatedAt,
   );
 }

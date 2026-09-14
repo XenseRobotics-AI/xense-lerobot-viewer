@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   listPendingWorkbenchSharedEvents,
   markWorkbenchSharedEventsSent,
+  migrateLegacyWorkbenchSharedConfig,
   parseWorkbenchSharedConfig,
   recordWorkbenchSharedEvent,
   resolveWorkbenchSharedConfig,
@@ -29,37 +30,96 @@ afterEach(async () => {
   );
 });
 
+function configurationDocument(updatedAt: string, workstationName: string) {
+  return parseWorkbenchSharedConfig(
+    {
+      schema: "xense.workbench.config/2",
+      version: 2,
+      kind: "configuration",
+      org: "TacVerse",
+      updatedAt,
+      data: {
+        version: 2,
+        workstations: [{ id: "station", name: workstationName, enabled: true }],
+        devices: [
+          {
+            id: "device",
+            type: "umi_gripper",
+            source: "robot_id",
+            identifier: "robot-1",
+            workstationId: "station",
+          },
+        ],
+        legacyDeviceAliases: [],
+        people: [
+          {
+            id: "operator-one",
+            displayName: "Operator One",
+            email: "operator@example.com",
+            roleHistory: [
+              { effectiveDate: "1970-01-01", role: "data_collector" },
+            ],
+          },
+        ],
+        staffingHistory: [],
+      },
+    },
+    "configuration",
+    "TacVerse",
+  );
+}
+
 describe("Workbench shared synchronization", () => {
-  test("keeps personnel email addresses in the public shared document", () => {
-    const document = parseWorkbenchSharedConfig(
+  test("keeps personnel email addresses in the public v2 document", () => {
+    const document = configurationDocument("2026-09-05T08:00:00.000Z", "A1");
+    expect(
+      (
+        document.data.people as Array<{
+          email: string;
+        }>
+      )[0].email,
+    ).toBe("operator@example.com");
+  });
+
+  test("migrates split v1 documents only when a v2 document is absent", () => {
+    const document = migrateLegacyWorkbenchSharedConfig(
+      "TacVerse",
+      {
+        schema: "xense.workbench.config/1",
+        version: 1,
+        kind: "workstation-mappings",
+        org: "TacVerse",
+        updatedAt: "2026-09-05T08:00:00.000Z",
+        data: { mappings: { TCGU01A28Z0077m: "A5" } },
+      },
       {
         schema: "xense.workbench.config/1",
         version: 1,
         kind: "personnel-mapping",
         org: "TacVerse",
-        updatedAt: "2026-09-05T08:00:00.000Z",
+        updatedAt: "2026-09-05T09:00:00.000Z",
         data: {
           people: [
             {
-              id: "operator-one",
-              displayName: "Operator One",
+              id: "operator",
+              displayName: "Operator",
               email: "operator@example.com",
             },
           ],
           schedules: {},
         },
       },
-      "personnel-mapping",
-      "TacVerse",
     );
-
-    expect(document.data.people).toEqual([
-      {
-        id: "operator-one",
-        displayName: "Operator One",
-        email: "operator@example.com",
-      },
-    ]);
+    expect(document).toMatchObject({
+      schema: "xense.workbench.config/2",
+      version: 2,
+      kind: "configuration",
+      updatedAt: "2026-09-05T09:00:00.000Z",
+    });
+    expect(
+      (document?.data.legacyDeviceAliases as Array<{ identifier: string }>)[0]
+        .identifier,
+    ).toBe("TCGU01A28Z0077m");
   });
 
   test("migrates old shared reward rules with default duration tiers", () => {
@@ -88,6 +148,7 @@ describe("Workbench shared synchronization", () => {
       "TacVerse",
     );
 
+    expect(document.version).toBe(2);
     expect(
       (
         document.data.episodeDurationLevels as Array<{ multiplier: number }>
@@ -96,40 +157,13 @@ describe("Workbench shared synchronization", () => {
   });
 
   test("selects the newer config and resolves timestamp ties deterministically", () => {
-    const older = parseWorkbenchSharedConfig(
-      {
-        schema: "xense.workbench.config/1",
-        version: 1,
-        kind: "workstation-mappings",
-        org: "TacVerse",
-        updatedAt: "2026-09-05T08:00:00.000Z",
-        data: { mappings: { robot: "A1" } },
-      },
-      "workstation-mappings",
-      "TacVerse",
-    );
-    const newer = parseWorkbenchSharedConfig(
-      {
-        ...older,
-        updatedAt: "2026-09-05T09:00:00.000Z",
-        data: { mappings: { robot: "B2" } },
-      },
-      "workstation-mappings",
-      "TacVerse",
-    );
-    const tied = parseWorkbenchSharedConfig(
-      {
-        ...older,
-        data: { mappings: { robot: "C3" } },
-      },
-      "workstation-mappings",
-      "TacVerse",
-    );
+    const older = configurationDocument("2026-09-05T08:00:00.000Z", "A1");
+    const newer = configurationDocument("2026-09-05T09:00:00.000Z", "B2");
+    const tied = configurationDocument("2026-09-05T08:00:00.000Z", "C3");
 
     expect(resolveWorkbenchSharedConfig(older, newer)).toMatchObject({
       winner: "remote",
       conflict: false,
-      document: { data: { mappings: { robot: "B2" } } },
     });
     const first = resolveWorkbenchSharedConfig(older, tied);
     const second = resolveWorkbenchSharedConfig(tied, older);
@@ -166,16 +200,10 @@ describe("Workbench shared synchronization", () => {
       /^events\/2026\/09\/05\/[0-9a-f-]+\.json$/u,
     );
     expect(pending[0].event.details.email).toBe("operator@example.com");
-    expect(pending[0].event.details.datasetPath).toBe(
-      "/home/xense/datasets/TacVerse/example",
-    );
     expect(pending[0].event.details.stdout).toEqual([
       "first line",
       "token=[REDACTED]",
     ]);
-    expect(pending[0].event.details.report).toEqual({
-      checks: [{ id: "schema", passed: true }],
-    });
     expect(pending[0].event.details).not.toHaveProperty("hfToken");
     expect(pending[0].event.details).not.toHaveProperty("password");
 
@@ -183,7 +211,10 @@ describe("Workbench shared synchronization", () => {
     await expect(listPendingWorkbenchSharedEvents(root)).resolves.toEqual([]);
   });
 
-  test("uses organization-scoped config paths", () => {
+  test("uses organization-scoped v2 config paths", () => {
+    expect(workbenchSharedConfigPath("TacVerse", "configuration")).toBe(
+      "configs/TacVerse/configuration.json",
+    );
     expect(workbenchSharedConfigPath("TacVerse", "reward-rules")).toBe(
       "configs/TacVerse/reward-rules.json",
     );

@@ -15,7 +15,6 @@ import {
   FiRefreshCw,
   FiRotateCcw,
   FiSettings,
-  FiUsers,
 } from "react-icons/fi";
 import {
   Bar,
@@ -43,7 +42,6 @@ import WorkbenchSharedSync from "@/components/workbench-shared-sync";
 import { formatBytes } from "@/utils/byteSize";
 import {
   computeWorkbenchAdditionTimeline,
-  computeWorkbenchAdditionRollup,
   WORKBENCH_DATASET_SOURCE_KEYS,
   countHalfOpenDays,
   getWorkbenchDatasetWorkstation,
@@ -60,7 +58,6 @@ import {
   workbenchDatasetSourceKey,
   workbenchDatasetSourceLabel,
   workbenchSourceRepoId,
-  workbenchGroupSourceRepoIds,
   type WorkbenchDailyAddition,
   type WorkbenchDatasetSourceKey,
   type WorkbenchRollupDataset,
@@ -83,10 +80,11 @@ import {
 import WorkbenchMailComposer, {
   type WorkbenchMailRecipientGroup,
 } from "@/components/workbench-mail-composer";
-import WorkbenchPersonnelMappingEditor from "@/components/workbench-personnel-mapping-editor";
+import WorkbenchConfigurationEditor from "@/components/workbench-configuration-editor";
 import WorkbenchPersonnelWorkload from "@/components/workbench-personnel-workload";
 import type { WorkbenchDashboardMailInput } from "@/lib/workbench-mail-draft";
 import type { WorkbenchPersonnelConfig } from "@/types/workbench-personnel.types";
+import type { WorkbenchConfigurationResponse } from "@/types/workbench-configuration.types";
 import { computeWorkbenchPersonnelRollup } from "@/utils/workbenchPersonnel";
 import type { WorkbenchDatasetScore } from "@/types/workbench-score.types";
 import {
@@ -116,6 +114,11 @@ import { workbenchReplayDatasetRank } from "@/utils/workbenchReplayDatasets";
 import { useT } from "@/context/locale-context";
 import type { InterpolationVars } from "@/i18n/format";
 import type { MessageKey } from "@/i18n/messages";
+import {
+  legacyPersonnelConfigFromConfiguration,
+  workbenchMappingsFromConfiguration,
+  workbenchPersonnelEmailGroups,
+} from "@/utils/workbenchConfiguration";
 
 const ALL_WORKBENCH_SOURCES = [...WORKBENCH_DATASET_SOURCE_KEYS];
 
@@ -134,8 +137,6 @@ function parseWorkbenchSources(
     ? ALL_WORKBENCH_SOURCES.filter((source) => requested.has(source))
     : [...ALL_WORKBENCH_SOURCES];
 }
-
-const WORKBENCH_TEAM_MANAGER_NAMES = new Set(["dylan", "frank", "jay"]);
 
 const DATE_SHORTCUTS = [
   { value: "today", key: "workbench.today" },
@@ -257,6 +258,7 @@ type WorkbenchStatisticsPayload = {
   rewardRules?: WorkbenchRewardRulesPayload;
   rewardRuleDefaults?: WorkbenchRewardRulesConfig;
   personnelConfig?: WorkbenchPersonnelConfig;
+  configuration?: WorkbenchConfigurationResponse;
   statisticsFilter?: WorkbenchStatisticsFilterSummary;
   categoryFilter?: TacverseHubCategorySelection;
   refreshedAt?: string | null;
@@ -359,21 +361,6 @@ function cleanStringRecord(input: unknown): Record<string, string> {
     output[key.trim()] = trimmed;
   }
   return output;
-}
-
-function recordsEqual(
-  left: Record<string, string>,
-  right: Record<string, string>,
-): boolean {
-  const leftKeys = Object.keys(left).filter((key) => left[key]?.trim());
-  const rightKeys = Object.keys(right).filter((key) => right[key]?.trim());
-  if (leftKeys.length !== rightKeys.length) return false;
-  leftKeys.sort();
-  rightKeys.sort();
-  return leftKeys.every((key, index) => {
-    const rightKey = rightKeys[index];
-    return key === rightKey && left[key]?.trim() === right[rightKey]?.trim();
-  });
 }
 
 function cloneRewardLevels<T extends object>(levels: readonly T[]): T[] {
@@ -531,26 +518,6 @@ function validateRewardDraft(
     );
   }
   return null;
-}
-
-function mergeMappings(
-  canonical: Record<string, string>,
-  legacy: Record<string, string>,
-): Record<string, string> {
-  return {
-    ...legacy,
-    ...canonical,
-  };
-}
-
-function dateInRange(
-  day: string,
-  startDate: string | null,
-  endDate: string | null,
-): boolean {
-  if (startDate && day < startDate) return false;
-  if (endDate && day >= endDate) return false;
-  return true;
 }
 
 function dayKeyFromDateTimeInput(value: string): string | null {
@@ -836,13 +803,11 @@ export default function WorkbenchGroupingPanel({
     useState<WorkbenchPersonnelConfig>(() =>
       emptyPersonnelConfig(organization),
     );
+  const [workbenchConfiguration, setWorkbenchConfiguration] =
+    useState<WorkbenchConfigurationResponse | null>(null);
   const [mappingEditorOpen, setMappingEditorOpen] = useState(false);
   const [rewardEditorOpen, setRewardEditorOpen] = useState(false);
-  const [personnelEditorOpen, setPersonnelEditorOpen] = useState(false);
-  const [mappingsSaving, setMappingsSaving] = useState(false);
   const [rewardSaving, setRewardSaving] = useState(false);
-  const [mappingsError, setMappingsError] = useState<string | null>(null);
-  const [mappingsMessage, setMappingsMessage] = useState<string | null>(null);
   const [rewardError, setRewardError] = useState<string | null>(null);
   const [rewardMessage, setRewardMessage] = useState<string | null>(null);
   const [workstationQuery, setWorkstationQuery] = useState("");
@@ -968,8 +933,7 @@ export default function WorkbenchGroupingPanel({
         setPersonnelConfig(
           payload.personnelConfig ?? emptyPersonnelConfig(organization),
         );
-        setMappingsError(null);
-        setMappingsMessage(null);
+        setWorkbenchConfiguration(payload.configuration ?? null);
         setRewardError(null);
         setRewardMessage(null);
         if ((payload.errors?.length ?? 0) > 0) {
@@ -1133,22 +1097,6 @@ export default function WorkbenchGroupingPanel({
     },
     0,
   );
-  const robotRows = useMemo(
-    () =>
-      computeWorkbenchAdditionRollup(workstationRollupDatasets, "robot_id", {
-        startDate: range.startDate,
-        endDate: range.endDate,
-      }),
-    [range.endDate, range.startDate, workstationRollupDatasets],
-  );
-  const robotSourceRepoMap = useMemo(
-    () =>
-      workbenchGroupSourceRepoIds(workstationRollupDatasets, "robot_id", {
-        startDate: range.startDate,
-        endDate: range.endDate,
-      }),
-    [range.endDate, range.startDate, workstationRollupDatasets],
-  );
   const workstationHeatmapRange = useMemo(
     () => ({
       startDate: WORKBENCH_WORKSTATION_CONCEPT_START_DATE,
@@ -1239,90 +1187,6 @@ export default function WorkbenchGroupingPanel({
     datasets: row.datasets,
   }));
 
-  const robotDashboardRows = useMemo<WorkbenchDashboardAggregateRow[]>(() => {
-    const sourceRepoIds = robotSourceRepoMap;
-    const grouped = new Map<string, WorkbenchDashboardAggregateRow>();
-    for (const row of robotRows) {
-      const repos = sourceRepoIds.get(row.group) ?? [];
-      const sourceDataset = workstationRollupDatasets.find(
-        (dataset) =>
-          (getWorkbenchDatasetIdentity(dataset) || "—") === row.group,
-      );
-      const workstation = sourceDataset
-        ? (getWorkbenchDatasetWorkstation(
-            sourceDataset,
-            [workstationDraft, workstationMappings, workstationDefaults],
-            [
-              workstationLegacyDraft,
-              workstationLegacyMappings,
-              workstationLegacyDefaults,
-            ],
-          ) ?? "—")
-        : "—";
-      const dailyHours: Record<string, number> = {};
-      for (const dataset of workstationRollupDatasets) {
-        const key = getWorkbenchDatasetIdentity(dataset) || "—";
-        if (key !== row.group) continue;
-        for (const addition of dataset.dailyAdditions ?? []) {
-          if (!dateInRange(addition.day, range.startDate, range.endDate))
-            continue;
-          const hours = Number(addition.hours);
-          if (!Number.isFinite(hours) || hours <= 0) continue;
-          dailyHours[addition.day] = (dailyHours[addition.day] ?? 0) + hours;
-        }
-      }
-      grouped.set(row.group, {
-        ...row,
-        robotId: row.group === "—" ? null : row.group,
-        collectorSerialNumber: sourceDataset?.collectorSerialNumber ?? null,
-        leftGripperSn: sourceDataset?.leftGripperSn ?? null,
-        sourceKey:
-          sourceDataset?.source ??
-          (sourceDataset
-            ? workbenchDatasetSourceKey(sourceDataset.relativePath)
-            : "unclassified"),
-        sourceLabel:
-          sourceDataset?.sourceLabel ??
-          (sourceDataset
-            ? workbenchDatasetSourceLabel(
-                sourceDataset.source ??
-                  workbenchDatasetSourceKey(sourceDataset.relativePath),
-              )
-            : "TacVerse/待确认"),
-        sourceKeys: [
-          sourceDataset?.source ??
-            (sourceDataset
-              ? workbenchDatasetSourceKey(sourceDataset.relativePath)
-              : "unclassified"),
-        ],
-        sourceLabels: [
-          sourceDataset?.sourceLabel ??
-            (sourceDataset
-              ? workbenchDatasetSourceLabel(
-                  sourceDataset.source ??
-                    workbenchDatasetSourceKey(sourceDataset.relativePath),
-                )
-              : "TacVerse/待确认"),
-        ],
-        workstation,
-        sourceRepoIds: repos,
-        dailyHours,
-      });
-    }
-    return Array.from(grouped.values());
-  }, [
-    range.endDate,
-    range.startDate,
-    robotRows,
-    robotSourceRepoMap,
-    workstationRollupDatasets,
-    workstationDefaults,
-    workstationDraft,
-    workstationLegacyDefaults,
-    workstationLegacyDraft,
-    workstationLegacyMappings,
-    workstationMappings,
-  ]);
   const sourceWorkstationDashboardRows = useMemo<
     WorkbenchDashboardAggregateRow[]
   >(() => {
@@ -1637,13 +1501,14 @@ export default function WorkbenchGroupingPanel({
       computeWorkbenchPersonnelRollup(
         workstationRollupDatasets,
         personnelWorkstationMappings,
-        personnelConfig,
+        workbenchConfiguration?.config ?? personnelConfig,
         range,
         rewardDraft,
         datasetScores,
       ),
     [
       personnelConfig,
+      workbenchConfiguration,
       personnelWorkstationMappings,
       range,
       rewardDraft,
@@ -1754,10 +1619,6 @@ export default function WorkbenchGroupingPanel({
     0,
   );
   const rewardValidationError = validateRewardDraft(rewardDraft, t);
-  const workstationDraftDirty = !recordsEqual(
-    mergeMappings(workstationDraft, workstationLegacyDraft),
-    mergeMappings(workstationMappings, workstationLegacyMappings),
-  );
   const rewardDraftDirty =
     rewardDraft.enabled !== rewardDefaults.enabled ||
     rewardDraft.dailyTargetHours !== rewardDefaults.dailyTargetHours ||
@@ -1854,7 +1715,7 @@ export default function WorkbenchGroupingPanel({
       computeWorkbenchPersonnelRollup(
         mailRollupDatasets,
         personnelWorkstationMappings,
-        personnelConfig,
+        workbenchConfiguration?.config ?? personnelConfig,
         range,
         rewardDraft,
         datasetScores,
@@ -1863,6 +1724,7 @@ export default function WorkbenchGroupingPanel({
       datasetScores,
       mailRollupDatasets,
       personnelConfig,
+      workbenchConfiguration,
       personnelWorkstationMappings,
       range,
       rewardDraft,
@@ -1891,68 +1753,57 @@ export default function WorkbenchGroupingPanel({
     );
   }, [mailPersonnelRollup.rows]);
 
-  const recipientSuggestions = useMemo(
-    () =>
-      personnelRollup.rows
-        .filter((row) => row.email.trim())
-        .map((row) => ({
-          label: row.personnel,
-          email: row.email.trim(),
-        })),
-    [personnelRollup.rows],
-  );
+  const recipientSuggestions = useMemo(() => {
+    const people =
+      workbenchConfiguration?.config.people ?? personnelConfig.people;
+    return people
+      .filter((person) => person.email.trim())
+      .map((person) => ({
+        label: person.displayName,
+        email: person.email.trim(),
+      }));
+  }, [personnelConfig.people, workbenchConfiguration]);
   const recipientGroups = useMemo<WorkbenchMailRecipientGroup[]>(() => {
-    const peopleById = new Map(
-      personnelConfig.people.map((person) => [person.id, person]),
-    );
-    const xrPersonIds = new Set<string>();
-    for (const assignments of Object.values(personnelConfig.schedules)) {
-      for (const assignment of assignments) {
-        if (assignment.workstation.trim().toLocaleUpperCase() !== "XR") {
-          continue;
-        }
-        for (const member of assignment.members) {
-          xrPersonIds.add(member.personId);
-        }
-      }
+    const configuration = workbenchConfiguration?.config;
+    if (!configuration) {
+      return [
+        {
+          id: "all-personnel",
+          label: t("workbench.allPersonnel"),
+          emails: dedupeWorkbenchEmails(personnelConfig.people),
+        },
+      ].filter((group) => group.emails.length > 0);
     }
-    const xrPeople = Array.from(xrPersonIds)
-      .map((personId) => peopleById.get(personId))
-      .filter((person): person is WorkbenchPersonnelConfig["people"][number] =>
-        Boolean(person),
-      );
-    const teamManagers = personnelConfig.people.filter((person) =>
-      WORKBENCH_TEAM_MANAGER_NAMES.has(
-        person.displayName.trim().toLocaleLowerCase(),
-      ),
-    );
-    const rewardNonNegative = personnelRollup.rows.filter(
-      (row) => row.reward.amount >= 0,
-    );
-    const groups: WorkbenchMailRecipientGroup[] = [
-      {
-        id: "xr-workstation",
-        label: t("workbench.xrWorkstation"),
-        emails: dedupeWorkbenchEmails(xrPeople),
-      },
-      {
-        id: "team-managers",
-        label: t("workbench.teamManagers"),
-        emails: dedupeWorkbenchEmails(teamManagers),
-      },
-      {
-        id: "reward-non-negative",
-        label: t("workbench.rewardNonNegative"),
-        emails: dedupeWorkbenchEmails(rewardNonNegative),
-      },
+    const now = new Date();
+    const sendingDay = [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0"),
+    ].join("-");
+    const emails = workbenchPersonnelEmailGroups(configuration, sendingDay);
+    const definitions = [
+      ["data-collectors", "data_collector", t("workbench.dataCollectors")],
+      [
+        "quality-inspectors",
+        "data_quality_inspector",
+        t("workbench.qualityInspectors"),
+      ],
+      ["managers", "manager", t("workbench.managers")],
+      ["developers", "developer", t("workbench.developers")],
+    ] as const;
+    return [
+      ...definitions.map(([id, role, label]) => ({
+        id,
+        label,
+        emails: emails[role],
+      })),
       {
         id: "all-personnel",
         label: t("workbench.allPersonnel"),
-        emails: dedupeWorkbenchEmails(personnelConfig.people),
+        emails: emails.all_personnel,
       },
-    ];
-    return groups.filter((group) => group.emails.length > 0);
-  }, [personnelConfig, personnelRollup.rows, t]);
+    ].filter((group) => group.emails.length > 0);
+  }, [personnelConfig.people, t, workbenchConfiguration]);
 
   const mailDashboardInput = useMemo<WorkbenchDashboardMailInput>(
     () => ({
@@ -2016,54 +1867,6 @@ export default function WorkbenchGroupingPanel({
       targetHours,
     ],
   );
-  const saveWorkstationMappings = useCallback(async () => {
-    setMappingsSaving(true);
-    setMappingsError(null);
-    setMappingsMessage(null);
-    try {
-      const response = await fetch(
-        `/api/workbench/workstation-mappings?org=${encodeURIComponent(organization)}`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mappings: mergeMappings(workstationDraft, workstationLegacyDraft),
-          }),
-          cache: "no-store",
-        },
-      );
-      const payload = (await response
-        .json()
-        .catch(() => ({}))) as WorkbenchWorkstationMappingsPayload & {
-        error?: string;
-      };
-      if (!response.ok) {
-        throw new Error(
-          payload.error ||
-            `Workbench mappings save failed (${response.status})`,
-        );
-      }
-      const mappings = cleanStringRecord(payload.mappings);
-      const legacyMappings = cleanStringRecord(payload.legacyMappings);
-      const defaults = cleanStringRecord(payload.defaults);
-      const legacyDefaults = cleanStringRecord(payload.legacyDefaults);
-      setWorkstationMappings(mappings);
-      setWorkstationLegacyMappings(legacyMappings);
-      setWorkstationDraft(mappings);
-      setWorkstationLegacyDraft(legacyMappings);
-      if (Object.keys(defaults).length > 0) setWorkstationDefaults(defaults);
-      if (Object.keys(legacyDefaults).length > 0)
-        setWorkstationLegacyDefaults(legacyDefaults);
-      setMappingsMessage(t("workbench.mappingsSaved"));
-    } catch (reason: unknown) {
-      setMappingsError(
-        reason instanceof Error ? reason.message : String(reason),
-      );
-    } finally {
-      setMappingsSaving(false);
-    }
-  }, [organization, t, workstationDraft, workstationLegacyDraft]);
-
   const saveRewardRules = useCallback(async () => {
     setRewardSaving(true);
     setRewardError(null);
@@ -2129,16 +1932,6 @@ export default function WorkbenchGroupingPanel({
     },
     [],
   );
-
-  const restoreMappings = useCallback(() => {
-    setWorkstationDraft(workstationMappings);
-    setWorkstationLegacyDraft(workstationLegacyMappings);
-  }, [workstationLegacyMappings, workstationMappings]);
-
-  const restoreDefaultMappings = useCallback(() => {
-    setWorkstationDraft(workstationDefaults);
-    setWorkstationLegacyDraft(workstationLegacyDefaults);
-  }, [workstationDefaults, workstationLegacyDefaults]);
 
   const restoreRewardDefaults = useCallback(() => {
     setRewardDraft(rewardDefaults);
@@ -2578,15 +2371,7 @@ export default function WorkbenchGroupingPanel({
               className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100"
             >
               <FiSettings aria-hidden="true" className="h-3.5 w-3.5" />
-              {t("workbench.workstationMappings")}
-            </button>
-            <button
-              type="button"
-              onClick={() => setPersonnelEditorOpen((value) => !value)}
-              className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100"
-            >
-              <FiUsers aria-hidden="true" className="h-3.5 w-3.5" />
-              {t("workbench.personnelMapping")}
+              {t("workbench.configuration")}
             </button>
             <button
               type="button"
@@ -3315,129 +3100,30 @@ export default function WorkbenchGroupingPanel({
             </section>
           )}
 
-          {mappingEditorOpen && (
-            <section className="rounded-md border border-white/10 bg-[var(--surface-1)]/35 p-4">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
-                    {t("workbench.workstationMappings")}
-                  </h4>
-                  <p className="mt-1 text-[11px] text-slate-500">
-                    {t("workbench.mappingEditorHint")}
-                  </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={restoreDefaultMappings}
-                    disabled={mappingsSaving}
-                    className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-200 disabled:opacity-50"
-                  >
-                    {t("workbench.importDefaults")}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={restoreMappings}
-                    disabled={mappingsSaving || !workstationDraftDirty}
-                    className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-cyan-300/50 hover:text-cyan-200 disabled:opacity-50"
-                  >
-                    {t("workbench.reset")}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={saveWorkstationMappings}
-                    disabled={mappingsSaving || !workstationDraftDirty}
-                    className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-3 py-1.5 text-xs text-cyan-100 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/15 disabled:opacity-50"
-                  >
-                    {mappingsSaving
-                      ? t("workbench.saving")
-                      : t("workbench.save")}
-                  </button>
-                </div>
-              </div>
-              {(mappingsError || mappingsMessage) && (
-                <div
-                  className={`mb-3 rounded-md border px-3 py-2 text-xs ${
-                    mappingsError
-                      ? "border-amber-400/25 bg-amber-400/5 text-amber-200"
-                      : "border-emerald-400/25 bg-emerald-400/5 text-emerald-200"
-                  }`}
-                >
-                  {mappingsError || mappingsMessage}
-                </div>
-              )}
-              <div className="overflow-x-auto rounded-md border border-white/10">
-                <table className="w-full min-w-[760px] border-collapse text-left text-xs">
-                  <thead className="bg-[var(--surface-2)] text-slate-400">
-                    <tr>
-                      <th className="px-3 py-2.5 font-medium">
-                        {t("workbench.deviceId")}
-                      </th>
-                      <th className="px-3 py-2.5 font-medium">
-                        {t("workbench.workstation")}
-                      </th>
-                      <th className="px-3 py-2.5 font-medium">
-                        {t("workbench.source")}
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {robotDashboardRows.map((row) => (
-                      <tr
-                        key={`${row.sourceKey}-${row.workstation}-${row.group}`}
-                        className="border-t border-white/5"
-                      >
-                        <td className="px-3 py-2.5 text-slate-100">
-                          {row.robotId ?? "—"}
-                        </td>
-                        <td className="px-3 py-2.5">
-                          {row.robotId ? (
-                            <input
-                              value={
-                                workstationDraft[row.robotId] ??
-                                workstationMappings[row.robotId] ??
-                                workstationDefaults[row.robotId] ??
-                                ""
-                              }
-                              onChange={(event) =>
-                                setWorkstationDraft((current) => ({
-                                  ...current,
-                                  [row.robotId as string]: event.target.value,
-                                }))
-                              }
-                              placeholder={t(
-                                "workbench.workstationPlaceholder",
-                              )}
-                              className="w-full rounded-md border border-white/10 bg-[var(--surface-0)] px-3 py-2 text-slate-100 focus:border-cyan-400 focus:outline-none"
-                            />
-                          ) : (
-                            <span className="text-slate-500">
-                              {t("workbench.legacyOnly")}
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5 text-slate-300">
-                          {row.robotId
-                            ? row.collectorSerialNumber
-                              ? t("workbench.collectorSn")
-                              : t("workbench.robotIdSource")
-                            : row.leftGripperSn
-                              ? t("workbench.leftSn")
-                              : "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {(Object.keys(workstationLegacyMappings).length > 0 ||
-                Object.keys(workstationLegacyDefaults).length > 0) && (
-                <div className="mt-3 rounded-md border border-amber-400/20 bg-amber-400/5 p-3 text-xs text-amber-100">
-                  {t("workbench.legacyMappingWarning")}
-                </div>
-              )}
-            </section>
-          )}
+          <div className={mappingEditorOpen ? "" : "hidden"}>
+            <WorkbenchConfigurationEditor
+              key={organization}
+              organization={organization}
+              initial={workbenchConfiguration ?? undefined}
+              onSaved={(value) => {
+                setWorkbenchConfiguration(value);
+                const mappings = workbenchMappingsFromConfiguration(
+                  value.config,
+                );
+                setWorkstationMappings(mappings.mappings);
+                setWorkstationLegacyMappings(mappings.legacyMappings);
+                setWorkstationDraft(mappings.mappings);
+                setWorkstationLegacyDraft(mappings.legacyMappings);
+                setPersonnelConfig(
+                  legacyPersonnelConfigFromConfiguration(
+                    organization,
+                    value.config,
+                    value.updatedAt,
+                  ),
+                );
+              }}
+            />
+          </div>
 
           {rewardEditorOpen && (
             <section className="rounded-md border border-white/10 bg-[var(--surface-1)]/35 p-4">
@@ -3718,26 +3404,6 @@ export default function WorkbenchGroupingPanel({
                 </div>
               </div>
             </section>
-          )}
-
-          {personnelEditorOpen && (
-            <WorkbenchPersonnelMappingEditor
-              organization={organization}
-              config={personnelConfig}
-              workstationSuggestions={Array.from(
-                new Set(
-                  [
-                    ...Object.values(workstationDefaults),
-                    ...Object.values(workstationMappings),
-                    ...Object.values(workstationDraft),
-                    ...Object.values(workstationLegacyDefaults),
-                    ...Object.values(workstationLegacyMappings),
-                    ...Object.values(workstationLegacyDraft),
-                  ].filter(Boolean),
-                ),
-              ).sort()}
-              onSaved={setPersonnelConfig}
-            />
           )}
 
           <WorkbenchMailComposer

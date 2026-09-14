@@ -41,6 +41,8 @@ export type {
   WorkbenchPersonnelRollup,
 } from "./workbench-personnel.types";
 
+export * from "./workbench-configuration.types";
+
 // Chart types
 export type {
   ChartDataPoint,

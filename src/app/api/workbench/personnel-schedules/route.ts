@@ -1,11 +1,6 @@
-import type { NextRequest } from "next/server";
-import {
-  readWorkbenchPersonnelConfig,
-  WorkbenchPersonnelStoreError,
-  writeWorkbenchPersonnelConfig,
-} from "@/lib/workbench-personnel-store";
-import { isSameOriginRequest, noStoreHeaders } from "@/lib/request-security";
-import { recordWorkbenchSharedEvent } from "@/lib/workbench-shared-sync";
+import { readWorkbenchConfiguration } from "@/lib/workbench-configuration-store";
+import { noStoreHeaders } from "@/lib/request-security";
+import { legacyPersonnelConfigFromConfiguration } from "@/utils/workbenchConfiguration";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,68 +30,28 @@ export async function GET(request: Request): Promise<Response> {
     );
   }
   try {
-    return Response.json(await readWorkbenchPersonnelConfig(org), {
-      headers: noStoreHeaders(),
-    });
+    const configuration = await readWorkbenchConfiguration(org);
+    return Response.json(
+      legacyPersonnelConfigFromConfiguration(
+        org,
+        configuration.config,
+        configuration.updatedAt,
+      ),
+      { headers: noStoreHeaders() },
+    );
   } catch (error: unknown) {
     return errorResponse(error, "Unable to load personnel mapping.");
   }
 }
 
-export async function PUT(request: NextRequest): Promise<Response> {
-  if (!isSameOriginRequest(request)) {
-    return errorResponse(
-      new Error("Cross-origin personnel mapping changes are not allowed."),
-      "Origin rejected.",
-      403,
-    );
-  }
-  const org = organizationFromRequest(request);
-  if (!org) {
-    return errorResponse(
-      new Error("Personnel mapping requires a dataset organization."),
-      "Invalid organization.",
-      400,
-    );
-  }
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return errorResponse(
-      new Error("Invalid JSON body."),
-      "Invalid JSON body.",
-      400,
-    );
-  }
-  try {
-    const input =
-      body &&
-      typeof body === "object" &&
-      !Array.isArray(body) &&
-      "config" in body
-        ? (body as { config: unknown }).config
-        : body;
-    const config = await writeWorkbenchPersonnelConfig(org, input);
-    await recordWorkbenchSharedEvent({
-      org,
-      source: "workbench",
-      kind: "config.personnel-mapping.updated",
-      outcome: "success",
-      details: {
-        updatedAt: config.updatedAt,
-        people: config.people,
-        schedules: config.schedules,
-      },
-    }).catch(() => undefined);
-    return Response.json(config, {
-      headers: noStoreHeaders(),
-    });
-  } catch (error: unknown) {
-    return errorResponse(
-      error,
-      "Unable to save personnel mapping.",
-      error instanceof WorkbenchPersonnelStoreError ? 500 : 400,
-    );
-  }
+export async function PUT(): Promise<Response> {
+  return Response.json(
+    {
+      error:
+        "Personnel schedules are read-only. Save the unified configuration instead.",
+      code: "LEGACY_CONFIGURATION_READ_ONLY",
+      configurationEndpoint: "/api/workbench/configuration",
+    },
+    { status: 410, headers: noStoreHeaders() },
+  );
 }

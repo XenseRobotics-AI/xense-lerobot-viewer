@@ -1,44 +1,58 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
-  DEFAULT_WORKBENCH_163_SMTP_PASSWORD_FILE,
-  DEFAULT_WORKBENCH_SMTP_PASSWORD_FILE,
-  normalizeWorkbenchSmtpProvider,
+  assertWorkbenchSmtpPasswordConfigured,
   workbenchSmtpPasswordFilePath,
+  writeWorkbenchSmtpPassword,
 } from "@/lib/workbench-mail-runtime";
 
-const previousProvider = process.env.SMTP_PROVIDER;
-const previousPasswordFile = process.env.SMTP_PASSWORD_FILE;
+let root: string;
 
-afterEach(() => {
-  if (previousProvider === undefined) delete process.env.SMTP_PROVIDER;
-  else process.env.SMTP_PROVIDER = previousProvider;
-  if (previousPasswordFile === undefined) delete process.env.SMTP_PASSWORD_FILE;
-  else process.env.SMTP_PASSWORD_FILE = previousPasswordFile;
+beforeEach(async () => {
+  root = await fs.mkdtemp(path.join(os.tmpdir(), "xense-smtp-runtime-"));
+});
+
+afterEach(async () => {
+  await fs.rm(root, { recursive: true, force: true });
 });
 
 describe("Workbench SMTP runtime", () => {
-  test("normalizes QQ and NetEase provider aliases", () => {
-    expect(normalizeWorkbenchSmtpProvider(undefined)).toBe("qq");
-    expect(normalizeWorkbenchSmtpProvider("QQ")).toBe("qq");
-    expect(normalizeWorkbenchSmtpProvider("netease")).toBe("163");
-    expect(normalizeWorkbenchSmtpProvider("netease163")).toBe("163");
-    expect(normalizeWorkbenchSmtpProvider("163")).toBe("163");
-    expect(normalizeWorkbenchSmtpProvider("unsupported")).toBe("qq");
+  test("uses provider-specific files under the local dataset root", () => {
+    expect(workbenchSmtpPasswordFilePath("qq", root)).toBe(
+      path.join(root, ".xense-viewer/secrets/smtp-qq-authorization-code"),
+    );
+    expect(workbenchSmtpPasswordFilePath("163", root)).toBe(
+      path.join(root, ".xense-viewer/secrets/smtp-163-authorization-code"),
+    );
   });
 
-  test("uses provider-specific password files unless explicitly overridden", () => {
-    delete process.env.SMTP_PASSWORD_FILE;
-    process.env.SMTP_PROVIDER = "qq";
-    expect(workbenchSmtpPasswordFilePath()).toBe(
-      DEFAULT_WORKBENCH_SMTP_PASSWORD_FILE,
-    );
+  test("atomically stores separate provider codes with private permissions", async () => {
+    await writeWorkbenchSmtpPassword(" qq-code ", "qq", root);
+    await writeWorkbenchSmtpPassword("163-code", "163", root);
 
-    process.env.SMTP_PROVIDER = "163";
-    expect(workbenchSmtpPasswordFilePath()).toBe(
-      DEFAULT_WORKBENCH_163_SMTP_PASSWORD_FILE,
+    const qqPath = workbenchSmtpPasswordFilePath("qq", root);
+    const neteasePath = workbenchSmtpPasswordFilePath("163", root);
+    await expect(fs.readFile(qqPath, "utf8")).resolves.toBe("qq-code\n");
+    await expect(fs.readFile(neteasePath, "utf8")).resolves.toBe("163-code\n");
+    expect((await fs.stat(path.join(root, ".xense-viewer"))).mode & 0o777).toBe(
+      0o700,
     );
+    expect(
+      (await fs.stat(path.join(root, ".xense-viewer/secrets"))).mode & 0o777,
+    ).toBe(0o700);
+    expect((await fs.stat(qqPath)).mode & 0o777).toBe(0o600);
+    expect((await fs.stat(neteasePath)).mode & 0o777).toBe(0o600);
+  });
 
-    process.env.SMTP_PASSWORD_FILE = "/tmp/custom-smtp-password";
-    expect(workbenchSmtpPasswordFilePath()).toBe("/tmp/custom-smtp-password");
+  test("reports a missing provider authorization code clearly", async () => {
+    await expect(
+      assertWorkbenchSmtpPasswordConfigured("qq", root),
+    ).rejects.toThrow("Missing QQ SMTP authorization code");
+    await writeWorkbenchSmtpPassword("163-code", "163", root);
+    await expect(
+      assertWorkbenchSmtpPasswordConfigured("163", root),
+    ).resolves.toBe(workbenchSmtpPasswordFilePath("163", root));
   });
 });

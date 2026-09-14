@@ -112,21 +112,21 @@ describe("isWorkbenchIgnoredRobotId", () => {
 });
 
 describe("getWorkbenchDatasetWorkstation", () => {
-  test("uses the collector serial before robot_id and left-gripper serial", () => {
+  test("uses robot_id before collector serial and left-gripper alias", () => {
     const xtac = dataset("TacVerse/xtac-umi-g1-task-0909", {
       collectorSerialNumber: "collector-1",
       robotId: "robot-1",
       leftGripperSn: "left-1",
     });
 
-    expect(getWorkbenchDatasetIdentity(xtac)).toBe("collector-1");
+    expect(getWorkbenchDatasetIdentity(xtac)).toBe("robot-1");
     expect(
       getWorkbenchDatasetWorkstation(
         xtac,
         [{ "collector-1": "A5", "robot-1": "B2" }],
         [{ "left-1": "D1" }],
       ),
-    ).toBe("A5");
+    ).toBe("B2");
   });
 
   test("falls back to a legacy left-gripper mapping when robot_id is absent", () => {

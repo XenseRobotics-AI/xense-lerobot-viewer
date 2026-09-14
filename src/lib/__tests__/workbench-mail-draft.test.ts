@@ -12,6 +12,7 @@ import {
   workbenchMailDraftStorageKey,
   type WorkbenchDashboardMailInput,
 } from "@/lib/workbench-mail-draft";
+import { resolveWorkbenchMailSender } from "@/lib/workbench-mail-sender";
 
 function createMemoryStorage() {
   const store = new Map<string, string>();
@@ -82,8 +83,8 @@ function createDashboardMailInput(
 describe("workbench mail draft", () => {
   test("provides the default sender, recipient, subject, and empty note", () => {
     expect(createDefaultWorkbenchMailDraft()).toEqual({
-      sender: "1796262052@qq.com",
-      recipient: "frank@xenserobotics.com",
+      sender: "",
+      recipient: "jay@xenserobotics.com",
       subject: "XenseRobotics · Data Collection Team Daily Report",
       note: "",
     });
@@ -92,7 +93,7 @@ describe("workbench mail draft", () => {
   test("saves and restores drafts per organization", () => {
     const storage = createMemoryStorage();
     const draft = {
-      sender: "ignored@example.com",
+      sender: " sender@qq.com ",
       recipient:
         " ops@xenserobotics.com; jay@xenserobotics.com,OPS@xenserobotics.com ",
       subject: " SMTP smoketest extra ",
@@ -102,7 +103,7 @@ describe("workbench mail draft", () => {
     const saved = saveWorkbenchMailDraft("TacVerse", draft, storage);
 
     expect(saved).toEqual({
-      sender: "1796262052@qq.com",
+      sender: "sender@qq.com",
       recipient: "ops@xenserobotics.com, jay@xenserobotics.com",
       subject: "SMTP smoketest extra",
       note: "Please review the flagged rows.",
@@ -113,6 +114,9 @@ describe("workbench mail draft", () => {
     );
     expect(storage.getItem(workbenchMailDraftStorageKey("TacVerse"))).toContain(
       '"org":"TacVerse"',
+    );
+    expect(storage.getItem(workbenchMailDraftStorageKey("TacVerse"))).toContain(
+      '"version":2',
     );
   });
 
@@ -132,15 +136,42 @@ describe("workbench mail draft", () => {
     );
 
     expect(readWorkbenchMailDraft("TacVerse", storage)).toEqual({
-      sender: "1796262052@qq.com",
+      sender: "",
       recipient: "legacy@example.com",
       subject: "Legacy subject",
       note: "",
     });
   });
 
+  test("migrates the old fixed sender and recipient without losing custom recipients", () => {
+    const storage = createMemoryStorage();
+    storage.setItem(
+      workbenchMailDraftStorageKey("TacVerse"),
+      JSON.stringify({
+        org: "TacVerse",
+        draft: {
+          sender: "1796262052@qq.com",
+          recipient:
+            "frank@xenserobotics.com, custom@example.com, JAY@xenserobotics.com",
+          subject: "Legacy subject",
+          note: "Keep this note",
+        },
+      }),
+    );
+
+    expect(readWorkbenchMailDraft("TacVerse", storage)).toEqual({
+      sender: "",
+      recipient: "jay@xenserobotics.com, custom@example.com",
+      subject: "Legacy subject",
+      note: "Keep this note",
+    });
+  });
+
   test("validates drafts and generated messages separately", () => {
-    const draft = createDefaultWorkbenchMailDraft();
+    const draft = {
+      ...createDefaultWorkbenchMailDraft(),
+      sender: "sender@qq.com",
+    };
     expect(validateWorkbenchMailDraft({ ...draft, recipient: " " })).toBe(
       "收件人不能为空。",
     );
@@ -167,6 +198,33 @@ describe("workbench mail draft", () => {
     expect(validateWorkbenchMailMessage({ ...message, htmlBody: " " })).toBe(
       "HTML 正文不能为空。",
     );
+  });
+  test("strictly resolves QQ and 163 senders", () => {
+    expect(resolveWorkbenchMailSender(" sender@qq.com ")).toEqual({
+      ok: true,
+      config: {
+        sender: "sender@qq.com",
+        provider: "qq",
+        host: "smtp.qq.com",
+        port: 465,
+      },
+    });
+    expect(resolveWorkbenchMailSender("operator@163.COM")).toEqual({
+      ok: true,
+      config: {
+        sender: "operator@163.COM",
+        provider: "163",
+        host: "smtp.163.com",
+        port: 465,
+      },
+    });
+    expect(resolveWorkbenchMailSender(" ").ok).toBeFalse();
+    expect(resolveWorkbenchMailSender("person@xenserobotics.com")).toEqual({
+      ok: false,
+      error: "严禁使用飞书邮箱作为发件人。",
+    });
+    expect(resolveWorkbenchMailSender("sender@qq.com.evil").ok).toBeFalse();
+    expect(resolveWorkbenchMailSender("sender@example.com").ok).toBeFalse();
   });
 
   test("parses, deduplicates, and normalizes multiple recipients", () => {

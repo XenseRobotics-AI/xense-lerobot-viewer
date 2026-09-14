@@ -20,7 +20,8 @@ describe("Workbench Hub category UI contract", () => {
     ]) {
       expect(parent).toContain(`t("${key}")`);
     }
-    expect(parent).toContain('workbenchView !== "checks"');
+    expect(parent).toContain('workbenchView === "grouping"');
+    expect(parent).toContain('workbenchView === "dataset-statistics"');
     expect(parent).toContain('name="workbenchHubCategory"');
     expect(parent).toContain('type="checkbox"');
     expect(parent).not.toContain('type="radio"');

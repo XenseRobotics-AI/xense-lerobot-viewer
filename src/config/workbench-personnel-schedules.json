@@ -84,11 +84,6 @@
           "email": "jay@xenserobotics.com"
         },
         {
-          "id": "anonymous",
-          "displayName": "匿名",
-          "email": "jay@xenserobotics.com"
-        },
-        {
           "id": "person-18",
           "displayName": "yanair-A2",
           "email": "jay@xenserobotics.com"
@@ -97,6 +92,106 @@
           "id": "person-19",
           "displayName": "yanair-B2",
           "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-1",
+          "displayName": "任金研",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-20",
+          "displayName": "黄鑫勇",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-21",
+          "displayName": "魏睿婕",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-22",
+          "displayName": "宋佳琪",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-23",
+          "displayName": "王浩然",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-24",
+          "displayName": "王宇恒",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-26",
+          "displayName": "金毅南",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-27",
+          "displayName": "吴可锐",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-28",
+          "displayName": "张欣怡",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-29",
+          "displayName": "刘梦瑶",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-30",
+          "displayName": "罗芳",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-31",
+          "displayName": "孙梦琪",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-32",
+          "displayName": "龚美淇",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-33",
+          "displayName": "徐紫月",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-34",
+          "displayName": "徐文妍",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-35",
+          "displayName": "马丽",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-25",
+          "displayName": "王媛婷",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-36",
+          "displayName": "陆晓云",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-37",
+          "displayName": "於克阳",
+          "email": "jay@xenserobotics.com"
+        },
+        {
+          "id": "person-38",
+          "displayName": "陈玉凤",
+          "email": "jay@xenserobotics.com"
         }
       ],
       "schedules": {
@@ -104,6 +199,7 @@
         "2026-09-02": [
           {
             "workstation": "A2",
+            "collectorCount": 2,
             "members": [
               {
                 "personId": "person-18",
@@ -113,11 +209,11 @@
                 "personId": "person-12",
                 "creditFactor": 1
               }
-            ],
-            "collectorCount": 2
+            ]
           },
           {
             "workstation": "A5",
+            "collectorCount": 2,
             "members": [
               {
                 "personId": "person-2",
@@ -127,11 +223,11 @@
                 "personId": "person-13",
                 "creditFactor": 1
               }
-            ],
-            "collectorCount": 2
+            ]
           },
           {
             "workstation": "B2",
+            "collectorCount": 2,
             "members": [
               {
                 "personId": "person-3",
@@ -141,11 +237,11 @@
                 "personId": "person-19",
                 "creditFactor": 1
               }
-            ],
-            "collectorCount": 2
+            ]
           },
           {
             "workstation": "B5",
+            "collectorCount": 2,
             "members": [
               {
                 "personId": "person-4",
@@ -155,11 +251,11 @@
                 "personId": "person-14",
                 "creditFactor": 1
               }
-            ],
-            "collectorCount": 2
+            ]
           },
           {
             "workstation": "D1",
+            "collectorCount": 2,
             "members": [
               {
                 "personId": "person-5",
@@ -169,11 +265,11 @@
                 "personId": "person-15",
                 "creditFactor": 1
               }
-            ],
-            "collectorCount": 2
+            ]
           },
           {
             "workstation": "D4",
+            "collectorCount": 2,
             "members": [
               {
                 "personId": "person-6",
@@ -183,11 +279,11 @@
                 "personId": "person-16",
                 "creditFactor": 1
               }
-            ],
-            "collectorCount": 2
+            ]
           },
           {
             "workstation": "D5",
+            "collectorCount": 2,
             "members": [
               {
                 "personId": "person-7",
@@ -197,11 +293,11 @@
                 "personId": "person-17",
                 "creditFactor": 1
               }
-            ],
-            "collectorCount": 2
+            ]
           },
           {
             "workstation": "E1",
+            "collectorCount": 2,
             "members": [
               {
                 "personId": "person-8",
@@ -211,11 +307,11 @@
                 "personId": "person-10",
                 "creditFactor": 1
               }
-            ],
-            "collectorCount": 2
+            ]
           },
           {
             "workstation": "E4",
+            "collectorCount": 2,
             "members": [
               {
                 "personId": "person-9",
@@ -225,12 +321,153 @@
                 "personId": "person-11",
                 "creditFactor": 1
               }
-            ],
-            "collectorCount": 2
+            ]
+          }
+        ],
+        "2026-09-10": [
+          {
+            "workstation": "A1",
+            "collectorCount": 2,
+            "members": [
+              {
+                "personId": "person-1",
+                "creditFactor": 1
+              },
+              {
+                "personId": "person-20",
+                "creditFactor": 1
+              }
+            ]
+          },
+          {
+            "workstation": "A2",
+            "collectorCount": 2,
+            "members": [
+              {
+                "personId": "person-23",
+                "creditFactor": 1
+              },
+              {
+                "personId": "person-24",
+                "creditFactor": 1
+              }
+            ]
+          },
+          {
+            "workstation": "A5",
+            "collectorCount": 2,
+            "members": [
+              {
+                "personId": "person-21",
+                "creditFactor": 1
+              },
+              {
+                "personId": "person-22",
+                "creditFactor": 1
+              }
+            ]
+          },
+          {
+            "workstation": "B2",
+            "collectorCount": 2,
+            "members": [
+              {
+                "personId": "person-35",
+                "creditFactor": 1
+              },
+              {
+                "personId": "person-26",
+                "creditFactor": 1
+              }
+            ]
+          },
+          {
+            "workstation": "B5",
+            "collectorCount": 2,
+            "members": [
+              {
+                "personId": "person-27",
+                "creditFactor": 1
+              },
+              {
+                "personId": "person-28",
+                "creditFactor": 1
+              }
+            ]
+          },
+          {
+            "workstation": "D1",
+            "collectorCount": 2,
+            "members": [
+              {
+                "personId": "person-29",
+                "creditFactor": 1
+              },
+              {
+                "personId": "person-30",
+                "creditFactor": 1
+              }
+            ]
+          },
+          {
+            "workstation": "D4",
+            "collectorCount": 2,
+            "members": [
+              {
+                "personId": "person-31",
+                "creditFactor": 1
+              },
+              {
+                "personId": "person-32",
+                "creditFactor": 1
+              }
+            ]
+          },
+          {
+            "workstation": "D5",
+            "collectorCount": 2,
+            "members": [
+              {
+                "personId": "person-37",
+                "creditFactor": 1
+              },
+              {
+                "personId": "person-38",
+                "creditFactor": 1
+              }
+            ]
+          },
+          {
+            "workstation": "E1",
+            "collectorCount": 2,
+            "members": [
+              {
+                "personId": "person-33",
+                "creditFactor": 1
+              },
+              {
+                "personId": "person-34",
+                "creditFactor": 1
+              }
+            ]
+          },
+          {
+            "workstation": "E4",
+            "collectorCount": 2,
+            "members": [
+              {
+                "personId": "person-25",
+                "creditFactor": 1
+              },
+              {
+                "personId": "person-36",
+                "creditFactor": 1
+              }
+            ]
           }
         ]
       },
-      "updatedAt": "2026-09-04T04:50:25.288Z"
+      "updatedAt": "2026-09-10T06:12:58.151Z"
     }
   }
 }

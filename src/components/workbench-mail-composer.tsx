@@ -16,6 +16,7 @@ import {
   type WorkbenchMailDraft,
   type WorkbenchMailMessage,
 } from "@/lib/workbench-mail-draft";
+import { validateWorkbenchMailSender } from "@/lib/workbench-mail-sender";
 
 export type WorkbenchMailRecipientGroup = {
   id: string;
@@ -40,7 +41,6 @@ type WorkbenchMailSmokeTestResponse = {
 type WorkbenchSmtpPasswordResponse = {
   message?: string;
   error?: string;
-  passwordFile?: string;
 };
 
 export default function WorkbenchMailComposer({
@@ -208,6 +208,11 @@ export default function WorkbenchMailComposer({
   }, [dashboardInput, organization]);
 
   const handleSaveSmtpPassword = useCallback(async () => {
+    const senderError = validateWorkbenchMailSender(draft.sender);
+    if (senderError) {
+      setPasswordStatus({ kind: "error", message: senderError });
+      return;
+    }
     const password = smtpPassword.trim();
     if (!password) {
       setPasswordStatus({
@@ -225,7 +230,7 @@ export default function WorkbenchMailComposer({
         headers: {
           "content-type": "application/json",
         },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ sender: draft.sender, password }),
       });
       const payload = (await response
         .json()
@@ -249,7 +254,7 @@ export default function WorkbenchMailComposer({
     } finally {
       setPasswordSaving(false);
     }
-  }, [smtpPassword, t]);
+  }, [draft.sender, smtpPassword, t]);
 
   const handleSend = useCallback(async () => {
     const error = validateWorkbenchMailDraft(draft);
@@ -267,18 +272,6 @@ export default function WorkbenchMailComposer({
       return;
     }
     try {
-      const next = saveWorkbenchMailDraft(
-        organization,
-        draft,
-        window.localStorage,
-      );
-      setDraft(next);
-      const nextMessage: WorkbenchMailMessage = {
-        ...message,
-        sender: next.sender,
-        recipient: next.recipient,
-        subject: next.subject,
-      };
       const response = await fetch("/api/workbench/mail-smoke-test", {
         method: "POST",
         headers: {
@@ -286,7 +279,7 @@ export default function WorkbenchMailComposer({
         },
         body: JSON.stringify({
           org: organization,
-          message: nextMessage,
+          message,
         }),
       });
       const payload = (await response
@@ -298,6 +291,12 @@ export default function WorkbenchMailComposer({
             t("workbench.sendFailed", { status: response.status }),
         );
       }
+      const next = saveWorkbenchMailDraft(
+        organization,
+        draft,
+        window.localStorage,
+      );
+      setDraft(next);
       setStatus({
         kind: "info",
         message: payload.message ?? t("workbench.sent"),
@@ -382,9 +381,14 @@ export default function WorkbenchMailComposer({
           <label className="mb-1 block text-[10px] uppercase tracking-[0.14em] text-slate-500">
             {t("workbench.sender")}
           </label>
-          <div className="rounded-md border border-white/10 bg-[var(--surface-0)] px-3 py-2 text-sm text-slate-300 break-all">
-            {draft.sender}
-          </div>
+          <input
+            type="email"
+            value={draft.sender}
+            onChange={(event) => updateDraft({ sender: event.target.value })}
+            placeholder={t("workbench.senderPlaceholder")}
+            autoComplete="email"
+            className="w-full rounded-md border border-white/10 bg-[var(--surface-0)] px-3 py-2 text-slate-100 focus:border-cyan-400 focus:outline-none"
+          />
         </div>
         <label className="block">
           <span className="mb-1 block text-[10px] uppercase tracking-[0.14em] text-slate-500">

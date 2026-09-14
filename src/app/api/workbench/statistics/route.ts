@@ -3,15 +3,11 @@ import { readCorpusHistory } from "@/lib/corpus-history-store";
 import { readDatasetTasks } from "@/lib/dataset-quality-loader";
 import { readRawHfCatalog, type HfCatalogEntry } from "@/lib/hf-catalog-cache";
 import { discoverLocalDatasets } from "@/lib/local-datasets-discovery";
-import {
-  defaultWorkbenchWorkstationMappings,
-  readWorkbenchWorkstationMappings,
-} from "@/lib/workbench-config-store";
+import { readWorkbenchConfiguration } from "@/lib/workbench-configuration-store";
 import {
   defaultWorkbenchRewardRules,
   readWorkbenchRewardRules,
 } from "@/lib/workbench-reward-store";
-import { readWorkbenchPersonnelConfig } from "@/lib/workbench-personnel-store";
 import { readWorkbenchTacFlowScoreLedger } from "@/lib/workbench-score-ledger";
 import type { WorkbenchDatasetScore } from "@/types/workbench-score.types";
 import { type DateEvidence } from "@/lib/dataset-facets";
@@ -55,6 +51,10 @@ import {
   isWorkbenchReplayDatasetPath,
   workbenchReplayDatasetRank,
 } from "@/utils/workbenchReplayDatasets";
+import {
+  legacyPersonnelConfigFromConfiguration,
+  workbenchMappingsFromConfiguration,
+} from "@/utils/workbenchConfiguration";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -87,11 +87,6 @@ type WorkbenchDatasetSummary = Awaited<
 
 export type WorkbenchStatisticsResponseFilter =
   WorkbenchStatisticsFilterSummary;
-
-type NormalizedWorkbenchMappings = {
-  mappings: Record<string, string>;
-  legacyMappings: Record<string, string>;
-};
 
 function metadataFromCatalogEntry(
   entry: HfCatalogEntry | undefined,
@@ -264,53 +259,6 @@ function applyCatalogMetadata(
   };
 }
 
-function normalizeWorkbenchMappingsForResponse(
-  rawMappings: Record<string, string>,
-  datasets: readonly WorkbenchDatasetSummary[],
-): NormalizedWorkbenchMappings {
-  const collectorSerials = new Set(
-    datasets
-      .map((dataset) => dataset.collectorSerialNumber?.trim())
-      .filter(Boolean) as string[],
-  );
-  const robotIds = new Set(
-    datasets
-      .map((dataset) => dataset.robotId?.trim())
-      .filter(Boolean) as string[],
-  );
-  const leftSnToIdentity = new Map<string, string>();
-  for (const dataset of datasets) {
-    const leftSn = dataset.leftGripperSn?.trim();
-    const identity = getWorkbenchDatasetIdentity(dataset);
-    if (leftSn && identity) {
-      leftSnToIdentity.set(leftSn, identity);
-    }
-  }
-
-  const normalized = new Map<string, string>();
-  const legacy = new Map<string, string>();
-  for (const [key, value] of Object.entries(rawMappings)) {
-    const identity =
-      collectorSerials.has(key) || robotIds.has(key)
-        ? key
-        : (leftSnToIdentity.get(key) ?? null);
-    if (identity) {
-      normalized.set(identity, value);
-      if (identity !== key || !collectorSerials.has(key)) {
-        legacy.set(key, value);
-      }
-      continue;
-    }
-    normalized.set(key, value);
-    legacy.set(key, value);
-  }
-
-  return {
-    mappings: Object.fromEntries(normalized.entries()),
-    legacyMappings: Object.fromEntries(legacy.entries()),
-  };
-}
-
 type WorkbenchHubScope = {
   entries: Map<string, { entry: HfCatalogEntry; rank: number }>;
   refreshedAt: string | null;
@@ -453,15 +401,33 @@ export async function GET(request: Request): Promise<Response> {
     const filteredDatasets =
       filterWorkbenchStatisticsDatasets(hubScopedDatasets);
     const datasets = filteredDatasets.included;
-    const workstationMappings = await readWorkbenchWorkstationMappings(
+    const configuration = await readWorkbenchConfiguration(
       organization,
       discovery.root,
+      organizationDatasets,
     );
+    const derivedMappings = workbenchMappingsFromConfiguration(
+      configuration.config,
+    );
+    const workstationMappings = {
+      org: organization,
+      mappings: derivedMappings.mappings,
+      legacyMappings: derivedMappings.legacyMappings,
+      source:
+        configuration.source === "stored"
+          ? "stored"
+          : (configuration.legacySource ?? "defaults"),
+      updatedAt: configuration.updatedAt,
+    };
     const rewardRules = await readWorkbenchRewardRules(
       organization,
       discovery.root,
     );
-    const personnelConfig = await readWorkbenchPersonnelConfig(organization);
+    const personnelConfig = legacyPersonnelConfigFromConfiguration(
+      organization,
+      configuration.config,
+      configuration.updatedAt,
+    );
     let scoreEntries = new Map<string, WorkbenchDatasetScore>();
     try {
       const ledger = await readWorkbenchTacFlowScoreLedger(
@@ -581,14 +547,6 @@ export async function GET(request: Request): Promise<Response> {
       if (repoId) locallyMatchedRepoIds.add(repoId);
     }
 
-    const normalizedStoredMappings = normalizeWorkbenchMappingsForResponse(
-      workstationMappings.mappings,
-      workbenchDatasets,
-    );
-    const normalizedDefaultMappings = normalizeWorkbenchMappingsForResponse(
-      defaultWorkbenchWorkstationMappings(organization),
-      workbenchDatasets,
-    );
     return Response.json({
       datasets: workbenchDatasets,
       categoryFilter,
@@ -604,11 +562,10 @@ export async function GET(request: Request): Promise<Response> {
       delta,
       workstationMappings: {
         ...workstationMappings,
-        mappings: normalizedStoredMappings.mappings,
-        legacyMappings: normalizedStoredMappings.legacyMappings,
-        defaults: normalizedDefaultMappings.mappings,
-        legacyDefaults: normalizedDefaultMappings.legacyMappings,
+        defaults: workstationMappings.mappings,
+        legacyDefaults: workstationMappings.legacyMappings,
       },
+      configuration,
       rewardRules,
       rewardRuleDefaults: defaultWorkbenchRewardRules(organization),
       personnelConfig,

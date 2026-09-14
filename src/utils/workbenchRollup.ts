@@ -292,8 +292,8 @@ export function getWorkbenchLeftSnWorkstation(
 
 /**
  * Return the most stable identity available for workstation statistics.
- * XUMI collector serials are dataset-level hardware identities and therefore
- * take precedence over robot_id and the legacy left-gripper serial.
+ * Configured robot_id is the canonical identity. Collector serial and the
+ * legacy left-gripper alias are fallbacks for older or partial metadata.
  */
 export function getWorkbenchDatasetIdentity(
   dataset: Pick<
@@ -302,8 +302,8 @@ export function getWorkbenchDatasetIdentity(
   >,
 ): string | null {
   for (const value of [
-    dataset.collectorSerialNumber,
     dataset.robotId,
+    dataset.collectorSerialNumber,
     dataset.leftGripperSn,
   ]) {
     const normalized = value?.trim();
@@ -318,16 +318,16 @@ export function getWorkbenchDatasetIdentitySource(
     "collectorSerialNumber" | "robotId" | "leftGripperSn"
   >,
 ): "collector" | "robot_id" | "left_gripper_sn" | null {
-  if (dataset.collectorSerialNumber?.trim()) return "collector";
   if (dataset.robotId?.trim()) return "robot_id";
+  if (dataset.collectorSerialNumber?.trim()) return "collector";
   if (dataset.leftGripperSn?.trim()) return "left_gripper_sn";
   return null;
 }
 
 /**
- * Resolve a dataset's workstation using collector serial, robot_id, then the
- * legacy left-gripper serial-number mapping. The latter is required for older
- * or partially migrated metadata.
+ * Resolve a dataset's workstation using configured robot_id, then collector
+ * serial, then the legacy left-gripper alias. The latter remains available for
+ * older or partially migrated metadata.
  */
 export function getWorkbenchDatasetWorkstation(
   dataset: Pick<
@@ -351,8 +351,8 @@ export function getWorkbenchDatasetWorkstation(
   };
 
   return (
-    lookup(dataset.collectorSerialNumber, robotMappings) ??
     lookup(dataset.robotId, robotMappings) ??
+    lookup(dataset.collectorSerialNumber, robotMappings) ??
     lookup(dataset.leftGripperSn, legacyMappings) ??
     lookup(dataset.leftGripperSn, robotMappings) ??
     null

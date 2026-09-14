@@ -57,6 +57,7 @@ class BuildMessageTest(unittest.TestCase):
             os.environ,
             {
                 "SMTP_PASSWORD": "qq-auth-code",
+                "SMTP_FROM_ADDRESS": "sender@qq.com",
                 "SMTP_TO_ADDRESS": "one@example.com",
             },
             clear=True,
@@ -67,7 +68,8 @@ class BuildMessageTest(unittest.TestCase):
         self.assertEqual(config["host"], "smtp.qq.com")
         self.assertEqual(config["port"], 465)
         self.assertTrue(config["use_ssl"])
-        self.assertEqual(config["from_address"], "1796262052@qq.com")
+        self.assertEqual(config["from_address"], "sender@qq.com")
+        self.assertEqual(config["username"], "sender@qq.com")
 
     def test_loads_163_preset_with_mailbox_and_authorization_code(self) -> None:
         with patch.dict(
@@ -100,6 +102,21 @@ class BuildMessageTest(unittest.TestCase):
         ):
             with self.assertRaises(SMTP_SMOKE_TEST.ConfigError):
                 SMTP_SMOKE_TEST.load_config()
+
+    def test_rejects_a_sender_from_the_wrong_provider_domain(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "SMTP_PROVIDER": "qq",
+                "SMTP_PASSWORD": "qq-auth-code",
+                "SMTP_FROM_ADDRESS": "operator@163.com",
+                "SMTP_TO_ADDRESS": "one@example.com",
+            },
+            clear=True,
+        ):
+            with self.assertRaises(SMTP_SMOKE_TEST.ConfigError):
+                SMTP_SMOKE_TEST.load_config()
+
 
     def test_keeps_custom_submission_ports_non_ssl_by_default(self) -> None:
         with patch.dict(

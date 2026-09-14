@@ -5,14 +5,13 @@ Run this from a Python interpreter inside the `lerobot` mamba environment.
 
 Required environment variables:
   SMTP_PASSWORD or SMTP_PASSWORD_FILE
+  SMTP_FROM_ADDRESS=<QQ or 163 mailbox>
 
 Optional environment variables:
   SMTP_PROVIDER=qq
   SMTP_HOST=smtp.qq.com
   SMTP_PORT=465
-  SMTP_FROM_ADDRESS=1796262052@qq.com
-  SMTP_TO_ADDRESS=frank@xenserobotics.com
-  SMTP_USERNAME=<defaults to SMTP_FROM_ADDRESS>
+  SMTP_TO_ADDRESS=jay@xenserobotics.com
   SMTP_SUBJECT=SMTP smoketest
   SMTP_TEXT_BODY=SMTP smoke test from xense-lerobot-viewer.
   SMTP_HTML_BODY=<p>SMTP smoke test from xense-lerobot-viewer.</p>
@@ -38,8 +37,7 @@ from email.utils import formatdate, getaddresses, make_msgid
 from pathlib import Path
 from typing import Any
 
-DEFAULT_FROM_ADDRESS = "1796262052@qq.com"
-DEFAULT_TO_ADDRESS = "frank@xenserobotics.com"
+DEFAULT_TO_ADDRESS = "jay@xenserobotics.com"
 DEFAULT_SUBJECT = "SMTP smoketest"
 DEFAULT_TEXT_BODY = "SMTP smoke test from xense-lerobot-viewer."
 DEFAULT_HTML_BODY = (
@@ -55,13 +53,11 @@ SMTP_PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
     "qq": {
         "host": "smtp.qq.com",
         "port": 465,
-        "from_address": DEFAULT_FROM_ADDRESS,
         "use_ssl": True,
     },
     "163": {
         "host": "smtp.163.com",
         "port": 465,
-        "from_address": None,
         "use_ssl": True,
     },
 }
@@ -100,6 +96,18 @@ def get_provider() -> str:
     if provider not in SMTP_PROVIDER_PRESETS:
         raise ConfigError("SMTP_PROVIDER must be one of qq or 163")
     return provider
+
+
+def validate_sender_address(from_address: str, provider: str) -> str:
+    parts = from_address.rsplit("@", 1)
+    if len(parts) != 2 or not parts[0]:
+        raise ConfigError("SMTP_FROM_ADDRESS must be a valid email address")
+    expected_domain = "qq.com" if provider == "qq" else "163.com"
+    if parts[1].lower() != expected_domain:
+        raise ConfigError(
+            f"SMTP_FROM_ADDRESS must use @{expected_domain} when SMTP_PROVIDER={provider}"
+        )
+    return from_address
 
 
 def get_password() -> str:
@@ -204,15 +212,9 @@ def build_message(
 def load_config() -> dict[str, Any]:
     provider = get_provider()
     preset = SMTP_PROVIDER_PRESETS[provider]
-    from_address = os.environ.get("SMTP_FROM_ADDRESS", "").strip()
-    if not from_address:
-        default_from_address = preset["from_address"]
-        if default_from_address is None:
-            raise ConfigError(
-                "missing required env var: SMTP_FROM_ADDRESS "
-                "(required when SMTP_PROVIDER=163)"
-            )
-        from_address = default_from_address
+    from_address = validate_sender_address(
+        get_required_env("SMTP_FROM_ADDRESS"), provider
+    )
     to_addresses = parse_recipient_addresses(
         get_optional_env("SMTP_TO_ADDRESS", DEFAULT_TO_ADDRESS)
     )
@@ -222,7 +224,7 @@ def load_config() -> dict[str, Any]:
     html_body = get_optional_env("SMTP_HTML_BODY", DEFAULT_HTML_BODY)
     host = get_optional_env("SMTP_HOST", preset["host"])
     port = parse_port(get_optional_env("SMTP_PORT", str(preset["port"])))
-    username = get_optional_env("SMTP_USERNAME", from_address)
+    username = from_address
     password = get_password()
     timeout = parse_timeout()
     use_ssl = parse_bool_env("SMTP_USE_SSL", default=port == 465)

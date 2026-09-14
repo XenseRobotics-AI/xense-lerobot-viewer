@@ -10,7 +10,6 @@ import {
   workbenchDayKey,
   workbenchDatasetSuffixDay,
   workbenchDatasetRangeContributions,
-  getWorkbenchDatasetIdentity,
   getWorkbenchDatasetWorkstation,
   type WorkbenchDailyAddition,
   type WorkbenchRollupDataset,
@@ -27,6 +26,11 @@ import type {
   WorkbenchDatasetScore,
   WorkbenchQualitySettlement,
 } from "@/types/workbench-score.types";
+import type { WorkbenchConfigurationV2 } from "@/types/workbench-configuration.types";
+import {
+  resolveWorkbenchPersonRole,
+  resolveWorkbenchStaffing,
+} from "@/utils/workbenchConfiguration";
 
 const DAY_MS = 86_400_000;
 
@@ -89,10 +93,83 @@ function roundHours(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
+type WorkbenchPersonnelRollupConfig =
+  | Pick<WorkbenchPersonnelConfig, "people" | "schedules">
+  | WorkbenchConfigurationV2;
+
+function isUnifiedConfiguration(
+  config: WorkbenchPersonnelRollupConfig,
+): config is WorkbenchConfigurationV2 {
+  return "version" in config && config.version === 2;
+}
+
+function collectionAssignmentsForDay(
+  config: WorkbenchPersonnelRollupConfig,
+  day: string,
+): WorkbenchPersonnelScheduleAssignment[] {
+  if (!isUnifiedConfiguration(config)) {
+    return resolveWorkbenchPersonnelSchedule(config.schedules, day).assignments;
+  }
+  return config.workstations.flatMap((workstation) => {
+    const effective = resolveWorkbenchStaffing(config, workstation.id, day);
+    if (effective.status !== "active") return [];
+    return [
+      {
+        workstation: workstation.name,
+        collectorCount: effective.originalCollectors ?? undefined,
+        members: effective.members
+          .filter((member) => {
+            const person = config.people.find(
+              (entry) => entry.id === member.personId,
+            );
+            return (
+              person &&
+              resolveWorkbenchPersonRole(person, day) === "data_collector"
+            );
+          })
+          .map((member) => ({
+            personId: member.personId,
+            creditFactor: member.qualityWeight,
+          })),
+      },
+    ];
+  });
+}
+
+function qualityMembersForDay(
+  config: WorkbenchPersonnelRollupConfig,
+  workstation: string,
+  day: string,
+): WorkbenchPersonnelScheduleAssignment["members"] {
+  if (!isUnifiedConfiguration(config)) {
+    return (
+      resolveWorkbenchPersonnelSchedule(config.schedules, day).assignments.find(
+        (entry) => entry.workstation === workstation,
+      )?.members ?? []
+    );
+  }
+  const station = config.workstations.find(
+    (entry) => entry.name === workstation || entry.id === workstation,
+  );
+  if (!station) return [];
+  const effective = resolveWorkbenchStaffing(config, station.id, day);
+  if (effective.status !== "active") return [];
+  return effective.members.flatMap((member) => {
+    const person = config.people.find((entry) => entry.id === member.personId);
+    if (
+      !person ||
+      resolveWorkbenchPersonRole(person, day) !== "data_quality_inspector"
+    ) {
+      return [];
+    }
+    return [{ personId: member.personId, creditFactor: member.qualityWeight }];
+  });
+}
+
 export function computeWorkbenchPersonnelRollup(
   datasets: readonly WorkbenchRollupDataset[],
   workstationMappings: Readonly<Record<string, string>>,
-  personnelConfig: Pick<WorkbenchPersonnelConfig, "people" | "schedules">,
+  personnelConfig: WorkbenchPersonnelRollupConfig,
   range: WorkbenchRollupDateRange,
   rewardRules: WorkbenchRewardRulesConfig,
   datasetScores: ReadonlyMap<string, WorkbenchDatasetScore> = new Map(),
@@ -150,24 +227,18 @@ export function computeWorkbenchPersonnelRollup(
   const workstationRollups = new Map<string, MutableWorkstation>();
 
   for (const day of daysInRange(range)) {
-    const schedule = resolveWorkbenchPersonnelSchedule(
-      personnelConfig.schedules,
-      day,
-    );
+    const dayAssignments = collectionAssignmentsForDay(personnelConfig, day);
     const assignmentsByWorkstation = new Map(
-      schedule.assignments.map((assignment) => [
-        assignment.workstation,
-        assignment,
-      ]),
+      dayAssignments.map((assignment) => [assignment.workstation, assignment]),
     );
 
-    for (const assignment of schedule.assignments) {
+    for (const assignment of dayAssignments) {
       const mappedCollectorCount = assignment.members.length;
       const configuredCollectorCount = assignment.collectorCount;
       const collectorCount =
         typeof configuredCollectorCount === "number" &&
         Number.isInteger(configuredCollectorCount) &&
-        configuredCollectorCount > 0 &&
+        configuredCollectorCount >= 0 &&
         configuredCollectorCount >= mappedCollectorCount
           ? configuredCollectorCount
           : mappedCollectorCount;
@@ -192,7 +263,10 @@ export function computeWorkbenchPersonnelRollup(
         workstationRollup.memberShareSums.set(
           person.id,
           (workstationRollup.memberShareSums.get(person.id) ?? 0) +
-            1 / collectorCount,
+            collectorCount >
+            0
+            ? 1 / collectorCount
+            : 0,
         );
         const row = rows.get(person.id) ?? {
           personId: person.id,
@@ -207,12 +281,30 @@ export function computeWorkbenchPersonnelRollup(
         row.workstations.add(assignment.workstation);
         row.scheduledDays.add(day);
         row.hours +=
-          (workstationHours.get([day, assignment.workstation].join("\u0000")) ??
-            0) / collectorCount;
-        row.targetHours += rewardRules.dailyTargetHours / collectorCount;
+          collectorCount > 0
+            ? (workstationHours.get(
+                [day, assignment.workstation].join("\u0000"),
+              ) ?? 0) / collectorCount
+            : 0;
+        row.targetHours +=
+          collectorCount > 0
+            ? rewardRules.dailyTargetHours / collectorCount
+            : 0;
         rows.set(person.id, row);
       }
       workstationRollups.set(workstationKey, workstationRollup);
+      const workstationDayHours = workstationHours.get(workstationDayKey) ?? 0;
+      const attributedFraction =
+        collectorCount > 0
+          ? Math.min(1, mappedCollectorCount / collectorCount)
+          : 0;
+      const unfilledHours = workstationDayHours * (1 - attributedFraction);
+      if (unfilledHours > 0) {
+        unattributed.set(
+          workstationDayKey,
+          (unattributed.get(workstationDayKey) ?? 0) + unfilledHours,
+        );
+      }
     }
 
     for (const [key, hours] of workstationHours) {
@@ -257,6 +349,26 @@ export function computeWorkbenchPersonnelRollup(
       (range.endDate && datasetDay >= range.endDate)
     )
       continue;
+    if (isUnifiedConfiguration(personnelConfig)) {
+      const pool =
+        score.status === "scored" && score.grade
+          ? roundWorkbenchMoney(
+              qualityBonusForGrade(
+                score.grade,
+                rewardRules.qualityBonusByGrade,
+              ),
+            )
+          : 0;
+      qualitySettlements.push({
+        datasetPath,
+        grade: score.grade,
+        pool,
+        allocated: false,
+        status: "unassigned",
+        allocations: {},
+      });
+      continue;
+    }
     if (score.status !== "scored" || !score.grade) {
       qualitySettlements.push({
         datasetPath,
@@ -268,18 +380,16 @@ export function computeWorkbenchPersonnelRollup(
       });
       continue;
     }
-    const key = getWorkbenchDatasetIdentity(dataset);
-    const workstation = key ? workstationMappings[key]?.trim() : "";
-    const assignment = resolveWorkbenchPersonnelSchedule(
-      personnelConfig.schedules,
-      datasetDay,
-    ).assignments.find((entry) => entry.workstation === workstation);
+    const workstation =
+      getWorkbenchDatasetWorkstation(dataset, [workstationMappings]) ?? "";
     const pool = roundWorkbenchMoney(
       qualityBonusForGrade(score.grade, rewardRules.qualityBonusByGrade),
     );
-    const members =
-      assignment?.members.filter((member) => peopleById.has(member.personId)) ??
-      [];
+    const members = qualityMembersForDay(
+      personnelConfig,
+      workstation,
+      datasetDay,
+    ).filter((member) => peopleById.has(member.personId));
     if (members.length === 0 || !workstation) {
       qualitySettlements.push({
         datasetPath,
@@ -303,6 +413,21 @@ export function computeWorkbenchPersonnelRollup(
         member.personId,
         (qualityByPerson.get(member.personId) ?? 0) + cents[index],
       );
+      if (!rows.has(member.personId)) {
+        const person = peopleById.get(member.personId);
+        if (person) {
+          rows.set(member.personId, {
+            personId: person.id,
+            personnel: person.displayName,
+            email: person.email,
+            workstations: new Set([workstation]),
+            scheduledDays: new Set([datasetDay]),
+            hours: 0,
+            targetHours: 0,
+            durationBonus: 0,
+          });
+        }
+      }
     });
     qualitySettlements.push({
       datasetPath,

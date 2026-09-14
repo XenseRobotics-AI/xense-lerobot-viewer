@@ -4,8 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { POST } from "@/app/api/workbench/mail-smoke-test/route";
+import {
+  workbenchSmtpPasswordFilePath,
+  writeWorkbenchSmtpPassword,
+} from "@/lib/workbench-mail-runtime";
 
 const previousEnv = {
+  LOCAL_DATASET_ROOT: process.env.LOCAL_DATASET_ROOT,
   PYTHON_BIN: process.env.PYTHON_BIN,
   PYTHONPATH: process.env.PYTHONPATH,
   PYTHONHOME: process.env.PYTHONHOME,
@@ -39,6 +44,9 @@ beforeEach(async () => {
   delete process.env.SMTP_FROM_ADDRESS;
   delete process.env.SMTP_USERNAME;
   process.env.PYTHONPATH = "/tmp/should-not-leak";
+  process.env.LOCAL_DATASET_ROOT = tempDir;
+  await writeWorkbenchSmtpPassword("qq-code", "qq", tempDir);
+  await writeWorkbenchSmtpPassword("163-code", "163", tempDir);
 });
 
 afterEach(async () => {
@@ -83,7 +91,7 @@ describe("Workbench mail smoke-test route", () => {
         {
           org: "TacVerse",
           message: {
-            sender: "ignored@example.com",
+            sender: "sender@qq.com",
             recipient: "frank@xenserobotics.com",
             subject: "SMTP smoketest",
             textBody: "Plain report",
@@ -126,7 +134,7 @@ console.log(JSON.stringify({
       postRequest({
         org: " TacVerse ",
         message: {
-          sender: "spoof@example.com",
+          sender: "sender@qq.com",
           recipient:
             " frank@xenserobotics.com; jay@xenserobotics.com,FRANK@xenserobotics.com ",
           subject: " SMTP smoketest ",
@@ -143,20 +151,23 @@ console.log(JSON.stringify({
     expect(response.status).toBe(200);
     expect(payload.message).toBe("SMTP smoke test sent.");
     expect(payload.result).toMatchObject({
-      from: "1796262052@qq.com",
-      username: "1796262052@qq.com",
+      from: "sender@qq.com",
+      username: "sender@qq.com",
       to: "frank@xenserobotics.com, jay@xenserobotics.com",
       subject: "SMTP smoketest",
       textBody: "Plain report",
       htmlBody: "<!doctype html><html><body>HTML report</body></html>",
-      passwordFile: "/tmp/qq_smtp_password",
+      passwordFile: path.join(
+        tempDir,
+        ".xense-viewer/secrets/smtp-qq-authorization-code",
+      ),
       pythonPath: null,
     });
   });
 
-  test("passes the 163 provider and configured sender to SMTP", async () => {
-    process.env.SMTP_PROVIDER = "163";
-    process.env.SMTP_FROM_ADDRESS = "operator@163.com";
+  test("derives the 163 provider and sender settings from the request", async () => {
+    process.env.SMTP_PROVIDER = "qq";
+    process.env.SMTP_FROM_ADDRESS = "environment@qq.com";
     await writeFakePython(`
 console.log(JSON.stringify({
   type: "result",
@@ -173,7 +184,7 @@ console.log(JSON.stringify({
       postRequest({
         org: "TacVerse",
         message: {
-          sender: "ignored@example.com",
+          sender: "operator@163.com",
           recipient: "frank@xenserobotics.com",
           subject: "SMTP smoketest",
           textBody: "Plain report",
@@ -190,8 +201,55 @@ console.log(JSON.stringify({
       provider: "163",
       from: "operator@163.com",
       username: "operator@163.com",
-      passwordFile: "/tmp/163_smtp_password",
+      passwordFile: path.join(
+        tempDir,
+        ".xense-viewer/secrets/smtp-163-authorization-code",
+      ),
     });
+  });
+
+  test("rejects disallowed sender domains before SMTP", async () => {
+    for (const sender of [
+      "person@xenserobotics.com",
+      "person@example.com",
+      "person@qq.com.evil",
+    ]) {
+      const response = await POST(
+        postRequest({
+          org: "TacVerse",
+          message: {
+            sender,
+            recipient: "jay@xenserobotics.com",
+            subject: "SMTP smoketest",
+            textBody: "Plain report",
+            htmlBody: "<html><body>Report</body></html>",
+          },
+        }),
+      );
+      expect(response.status).toBe(400);
+    }
+  });
+
+  test("returns a clear configuration error when the provider code is missing", async () => {
+    await fs.unlink(workbenchSmtpPasswordFilePath("qq", tempDir));
+    const response = await POST(
+      postRequest({
+        org: "TacVerse",
+        message: {
+          sender: "sender@qq.com",
+          recipient: "jay@xenserobotics.com",
+          subject: "SMTP smoketest",
+          textBody: "Plain report",
+          htmlBody: "<html><body>Report</body></html>",
+        },
+      }),
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      stage: "config",
+      code: "SMTP_AUTHORIZATION_CODE_MISSING",
+      error: expect.stringContaining("Missing QQ SMTP authorization code"),
+    });
+    expect(response.status).toBe(500);
   });
 
   test("returns script stage and code on SMTP failures", async () => {
@@ -209,7 +267,7 @@ process.exit(3);
       postRequest({
         org: "TacVerse",
         message: {
-          sender: "ignored@example.com",
+          sender: "sender@qq.com",
           recipient: "frank@xenserobotics.com",
           subject: "SMTP smoketest",
           textBody: "Plain report",
@@ -233,7 +291,7 @@ process.exit(3);
       postRequest({
         org: "TacVerse",
         message: {
-          sender: "ignored@example.com",
+          sender: "sender@qq.com",
           recipient: "frank@xenserobotics.com",
           subject: "SMTP smoketest",
           textBody: "Plain report",

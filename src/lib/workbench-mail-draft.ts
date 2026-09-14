@@ -1,7 +1,9 @@
 import { formatBytes } from "@/utils/byteSize";
+import { validateWorkbenchMailSender } from "@/lib/workbench-mail-sender";
 
-export const WORKBENCH_MAIL_SENDER = "1796262052@qq.com";
-const WORKBENCH_MAIL_RECIPIENT = "frank@xenserobotics.com";
+const WORKBENCH_MAIL_RECIPIENT = "jay@xenserobotics.com";
+const LEGACY_WORKBENCH_MAIL_RECIPIENT = "frank@xenserobotics.com";
+const WORKBENCH_MAIL_DRAFT_VERSION = 2;
 const STORAGE_PREFIX = "xense-workbench-mail-draft";
 const MAIL_ADDRESS_PATTERN = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/u;
 const WORKBENCH_MAIL_AUTO_SUBJECT_PATTERN =
@@ -78,6 +80,7 @@ export type WorkbenchDashboardMailInput = {
 };
 
 type WorkbenchMailDraftRecord = {
+  version: number;
   org: string;
   draft: WorkbenchMailDraft;
   updatedAt: string;
@@ -592,17 +595,38 @@ function createWorkbenchDashboardHtml(
 </html>`;
 }
 
-function normalizeDraft(input: unknown): WorkbenchMailDraft | null {
+function migrateLegacyRecipients(value: string): string {
+  return normalizeWorkbenchMailRecipients(
+    parseWorkbenchMailRecipients(value)
+      .map((recipient) =>
+        recipient.toLowerCase() === LEGACY_WORKBENCH_MAIL_RECIPIENT
+          ? WORKBENCH_MAIL_RECIPIENT
+          : recipient,
+      )
+      .join(", "),
+  );
+}
+
+function normalizeDraft(
+  input: unknown,
+  options: { legacy: boolean },
+): WorkbenchMailDraft | null {
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
   const raw = input as Record<string, unknown>;
-  const recipient =
+  let recipient =
     typeof raw.recipient === "string"
       ? normalizeWorkbenchMailRecipients(raw.recipient)
       : "";
+  if (options.legacy) recipient = migrateLegacyRecipients(recipient);
   const subject = cleanText(raw.subject);
   if (!recipient || !subject) return null;
+  const rawSender = typeof raw.sender === "string" ? raw.sender.trim() : "";
+  const sender =
+    !options.legacy && validateWorkbenchMailSender(rawSender) === null
+      ? rawSender
+      : "";
   return {
-    sender: WORKBENCH_MAIL_SENDER,
+    sender,
     recipient,
     subject,
     // Legacy drafts used `body` for generated Markdown. It is deliberately not
@@ -619,7 +643,9 @@ function normalizeStoredRecord(
   const raw = input as Record<string, unknown>;
   const recordOrg = cleanText(raw.org);
   if (recordOrg && recordOrg !== normalizeOrg(org)) return null;
-  return normalizeDraft(raw.draft);
+  return normalizeDraft(raw.draft, {
+    legacy: raw.version !== WORKBENCH_MAIL_DRAFT_VERSION,
+  });
 }
 
 export function createDefaultWorkbenchMailDraft(
@@ -629,7 +655,7 @@ export function createDefaultWorkbenchMailDraft(
   } = {},
 ): WorkbenchMailDraft {
   return {
-    sender: WORKBENCH_MAIL_SENDER,
+    sender: "",
     recipient: WORKBENCH_MAIL_RECIPIENT,
     subject: formatWorkbenchMailSubject(input),
     note: "",
@@ -670,6 +696,8 @@ export function createWorkbenchDashboardMail(
 export function validateWorkbenchMailDraft(
   draft: WorkbenchMailDraft,
 ): string | null {
+  const senderError = validateWorkbenchMailSender(draft.sender);
+  if (senderError) return senderError;
   const recipientError = validateWorkbenchMailRecipients(draft.recipient);
   if (recipientError) return recipientError;
   if (!draft.subject.trim()) return "主题不能为空。";
@@ -679,6 +707,8 @@ export function validateWorkbenchMailDraft(
 export function validateWorkbenchMailMessage(
   message: WorkbenchMailMessage,
 ): string | null {
+  const senderError = validateWorkbenchMailSender(message.sender);
+  if (senderError) return senderError;
   const recipientError = validateWorkbenchMailRecipients(message.recipient);
   if (recipientError) return recipientError;
   if (!message.subject.trim()) return "主题不能为空。";
@@ -720,12 +750,13 @@ export function saveWorkbenchMailDraft(
   if (validationError) throw new Error(validationError);
   const normalizedOrg = normalizeOrg(org);
   const normalizedDraft: WorkbenchMailDraft = {
-    sender: WORKBENCH_MAIL_SENDER,
+    sender: draft.sender.trim(),
     recipient: normalizeWorkbenchMailRecipients(draft.recipient),
     subject: draft.subject.trim(),
     note: draft.note,
   };
   const record: WorkbenchMailDraftRecord = {
+    version: WORKBENCH_MAIL_DRAFT_VERSION,
     org: normalizedOrg,
     draft: normalizedDraft,
     updatedAt: new Date().toISOString(),
