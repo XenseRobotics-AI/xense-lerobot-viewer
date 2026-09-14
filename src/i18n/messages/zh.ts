@@ -849,6 +849,10 @@ export const zh: Record<MessageKey, string> = {
   "chart.threeDRotationAxes": "播放点坐标系：X 红色 · Y 绿色 · Z 蓝色",
   "chart.split": "拆分图表",
   "chart.combine": "合并显示",
+  "chart.gripperOnly": "仅夹爪开合",
+  "chart.gripperOnlyHint":
+    "隐藏夹爪开合以外的所有曲线，便于与视频中的夹取动作对照",
+  "chart.noGripper": "该数据集的特征中没有夹爪数据",
 
   // ── client-side failures rendered verbatim by the calling panel ─────────
   "err.doctorRequest": "Doctor 请求失败（{status}）。",
