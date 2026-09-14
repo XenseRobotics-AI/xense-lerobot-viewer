@@ -879,6 +879,10 @@ export const en = {
   "chart.threeDRotationAxes": "Playback frame: X red · Y green · Z blue",
   "chart.split": "Split charts",
   "chart.combine": "Combine all",
+  "chart.gripperOnly": "Gripper only",
+  "chart.gripperOnlyHint":
+    "Hide every series but the gripper opening, so it can be read against the video",
+  "chart.noGripper": "No gripper series among this dataset's features",
 
   // ── client-side failures rendered verbatim by the calling panel ─────────
   "err.doctorRequest": "Doctor request failed ({status}).",

@@ -467,6 +467,7 @@ Every user-facing panel is translated (625 keys). To extend: add keys to both di
 | `src/utils/datasetRoute.ts`                                       | `local:` repoId wrapper, base64url encode, route ↔ repoId conversion                                                                                               |
 | `src/utils/stringFormatting.ts`                                   | `buildV3DataPath`, `buildV3VideoPath`, `buildV3EpisodesMetadataPath`, padding helpers                                                                              |
 | `src/utils/parquetUtils.ts`                                       | `fetchParquetFile`, `readParquetAsObjects`, `formatStringWithVars`                                                                                                 |
+| `src/utils/gripperSeries.ts`                                      | Pure gripper-series selection behind the Episodes chart `Gripper only` filter                                                                                      |
 | `src/utils/dataProcessing.ts`                                     | Chart grouping pipeline: `buildSuffixGroupsMap` → `computeGroupStats` → `groupByScale` → `flattenScaleGroups` → `processChartDataGroups`                           |
 | `src/utils/typeGuards.ts`                                         | `bigIntToNumber`, `isNumeric`, `isValidTaskIndex`, etc.                                                                                                            |
 | `src/utils/constants.ts`                                          | `PADDING`, `EXCLUDED_COLUMNS`, `CHART_CONFIG`, `THRESHOLDS`                                                                                                        |
@@ -499,6 +500,30 @@ playback); `TimeControlsContext` (`seek`, `subscribe`, `setIsPlaying`,
 
 Series keys use `" | "` as delimiter (e.g. `observation.state | 0`).
 `groupRowBySuffix` groups by **suffix**: if two different prefixes share suffix `"0"` (e.g. `observation.state | 0` and `action | 0`), they are merged under `result["0"] = { "observation.state": ..., "action": ... }`. A series with a unique suffix stays flat with its full original key.
+
+### Gripper-only filter
+
+The chart toolbar's `Gripper only` toggle, beside `Combine all`, collapses the
+scale-grouped grid to a single chart holding nothing but the `*_gripper.pos`
+series — video, playback bar and playhead left in place. Scale grouping is the
+right default for reading a whole episode and the wrong one for "did the gripper
+close when the footage shows it closing": on a real TacCap capture the opening
+series shares a chart with `left_tcp.r5`/`r6` purely because they happen to span
+the same range.
+
+`src/utils/gripperSeries.ts` is the whole of it, pure and unit-tested.
+`isGripperFeature` matches a whole **token** of the feature name, so `gripper`,
+`gripper.pos`, `left_gripper.pos` and `right_gripper.position` all read without
+re-enumerating the `.pos` / `.position` / `.q` value suffixes that
+`autoMatchJoints` and `findGripperKey` each tolerate separately.
+`selectGripperSeriesRows` handles both key shapes `groupRowBySuffix` emits and
+merges gripper series that landed in different scale groups into one chart.
+
+The focus is **derived, not an effect**: velocity groups carry no gripper series,
+so a `useEffect` clearing the flag on a mode switch would paint one empty chart
+in the frame before it ran. A dataset whose features are numbered rather than
+named (`observation.state | 7`) says nothing about which dimension is the
+gripper, so the button is disabled with that as its reason.
 
 ## Testing
 

@@ -31,6 +31,7 @@ export type { VideoInfo, AdjacentEpisodeVideos } from "./video.types";
 export type {
   ChartDataPoint,
   ChartDataGroup,
+  ChartSeriesRow,
   SeriesColumn,
   GroupStats,
 } from "./chart.types";
