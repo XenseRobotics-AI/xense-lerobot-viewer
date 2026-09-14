@@ -68,7 +68,7 @@ afterEach(async () => {
 });
 
 describe("Workbench statistics route", () => {
-  test("matches bucketed local paths to their unbucketed Hub repo ids", async () => {
+  test("matches bucketed local paths and keeps local recording totals", async () => {
     await writeDataset("TacVerse/released/example-0902", {
       total_episodes: 1,
       total_frames: 3_600,
@@ -109,13 +109,66 @@ describe("Workbench statistics route", () => {
     expect(payload.datasets).toEqual([
       expect.objectContaining({
         relativePath: "TacVerse/released/example-0902",
-        total_episodes: 12,
+        total_episodes: 1,
         uploader: "alice",
         lastModified: "2026-09-02T12:00:00Z",
       }),
     ]);
   });
 
+  test("falls back to Hub totals only when local info fields are missing", async () => {
+    await writeDataset("TacVerse/missing-local-fields-0903", {
+      robot_type: undefined,
+      total_episodes: undefined,
+      total_frames: undefined,
+      total_tasks: undefined,
+      fps: undefined,
+    });
+    const cacheDir = path.join(root, ".xense-viewer", "hf-catalog");
+    await fs.mkdir(cacheDir, { recursive: true });
+    await fs.writeFile(
+      path.join(cacheDir, "TacVerse.json"),
+      JSON.stringify({
+        org: "TacVerse",
+        datasets: [
+          {
+            repoId: "TacVerse/missing-local-fields-0903",
+            robotType: "bi_taccap_gripper",
+            totalEpisodes: 8,
+            totalFrames: 28_800,
+            totalTasks: 2,
+            fps: 10,
+            durationHours: 0.8,
+            lastModified: "2026-09-03T12:00:00Z",
+          },
+        ],
+      }),
+    );
+
+    const response = await GET(
+      new Request("http://localhost/api/workbench/statistics?org=TacVerse"),
+    );
+    const payload = (await response.json()) as {
+      datasets: Array<{
+        robot_type: string | null;
+        total_episodes: number;
+        total_frames: number;
+        total_tasks: number;
+        fps: number;
+        durationHours: number;
+      }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.datasets[0]).toMatchObject({
+      robot_type: "bi_taccap_gripper",
+      total_episodes: 8,
+      total_frames: 28_800,
+      total_tasks: 2,
+      fps: 10,
+      durationHours: 0.8,
+    });
+  });
   test("restores 0905 hardware identity and workstation mapping", async () => {
     const repoId = "TacVerse/taccap-g1-operate-shoe-box-0905";
     await writeDataset(
@@ -333,6 +386,7 @@ describe("Workbench statistics route", () => {
             totalFrames: 54_000,
             fps: 30,
             durationHours: 0.5,
+            storageBytes: 1234,
             lastModified: "2026-08-17T10:00:00Z",
           },
           {
@@ -487,10 +541,14 @@ describe("Workbench statistics route", () => {
     const metadataOnly = payload.datasets.find(
       (dataset) => dataset.relativePath === "TacVerse/metadata-only-0818",
     );
+    const older = payload.datasets.find(
+      (dataset) => dataset.relativePath === "TacVerse/older-0817",
+    );
+    expect(older).toMatchObject({ hubStorageBytes: 1234 });
     expect(newer).toMatchObject({
-      total_episodes: 25,
-      total_frames: 90_000,
-      fps: 30,
+      total_episodes: 5,
+      total_frames: 18_000,
+      fps: 10,
       lastModified: "2026-08-18T10:00:00Z",
       uploader: "alice",
       uploaderDisplayName: "Alice",
@@ -499,9 +557,9 @@ describe("Workbench statistics route", () => {
       dailyAdditions: [
         {
           day: "2026-08-18",
-          episodes: 25,
-          frames: 90_000,
-          hours: 0.833,
+          episodes: 5,
+          frames: 18_000,
+          hours: 0.5,
         },
       ],
       hf: {
@@ -517,9 +575,9 @@ describe("Workbench statistics route", () => {
       dailyAdditions: [],
     });
     expect(payload.datasets[2]).toMatchObject({
-      total_episodes: 11,
-      total_frames: 54_000,
-      fps: 30,
+      total_episodes: 1,
+      total_frames: 3_600,
+      fps: 10,
       lastModified: "2026-08-17T10:00:00Z",
       uploader: "XR-Bot3",
       uploaderDisplayName: "洪锐",

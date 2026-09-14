@@ -64,6 +64,7 @@ type WorkbenchDatasetMetadata = {
   uploader: string | null;
   uploaderDisplayName: string | null;
   durationHours: number | null;
+  hubStorageBytes: number | null;
 };
 
 type WorkbenchDatasetSummary = Awaited<
@@ -75,6 +76,7 @@ type WorkbenchDatasetSummary = Awaited<
   uploader?: string | null;
   uploaderDisplayName?: string | null;
   durationHours?: number | null;
+  hubStorageBytes?: number | null;
   dailyAdditions?: WorkbenchDailyAddition[];
   tacflowScore?: WorkbenchDatasetScore;
   source?: WorkbenchDatasetSourceKey;
@@ -106,6 +108,12 @@ function metadataFromCatalogEntry(
       typeof entry?.durationHours === "number" &&
       Number.isFinite(entry.durationHours)
         ? entry.durationHours
+        : null,
+    hubStorageBytes:
+      typeof entry?.storageBytes === "number" &&
+      Number.isFinite(entry.storageBytes) &&
+      entry.storageBytes >= 0
+        ? entry.storageBytes
         : null,
   };
 }
@@ -169,6 +177,24 @@ function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+/**
+ * The Workbench scans local datasets, so local info.json is the authoritative
+ * source for recorded totals. The Hub catalog can lag while a dataset is
+ * still being uploaded; use it only when local metadata is unavailable.
+ */
+function localNumberOrRemote(
+  dataset: Awaited<
+    ReturnType<typeof discoverLocalDatasets>
+  >["datasets"][number],
+  field: "total_episodes" | "total_frames" | "total_tasks" | "fps",
+  remoteValue: unknown,
+): number | null {
+  const localFieldExists = dataset.localInfoFields?.has(field) ?? true;
+  const local = localFieldExists ? asNumber(dataset[field]) : null;
+  if (local !== null) return local;
+  return asNumber(remoteValue);
+}
+
 function nonNegativeCount(value: number | null | undefined): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.trunc(value)
@@ -185,11 +211,27 @@ function datasetHours(
   >["datasets"][number],
   remote: HfCatalogEntry | undefined,
 ): number {
+  const localFrames = asNumber(dataset.total_frames);
+  const localFps = asNumber(dataset.fps);
+  if (
+    localFrames !== null &&
+    localFrames > 0 &&
+    localFps !== null &&
+    localFps > 0
+  ) {
+    return localFrames / localFps / 3600;
+  }
   const durationHours = asNumber(remote?.durationHours);
   if (durationHours !== null && durationHours >= 0) return durationHours;
-  const frames = asNumber(remote?.totalFrames) ?? dataset.total_frames;
-  const fps = asNumber(remote?.fps) ?? dataset.fps;
-  return frames > 0 && fps > 0 ? frames / fps / 3600 : 0;
+  const frames = localNumberOrRemote(
+    dataset,
+    "total_frames",
+    remote?.totalFrames,
+  );
+  const fps = localNumberOrRemote(dataset, "fps", remote?.fps);
+  return frames !== null && frames > 0 && fps !== null && fps > 0
+    ? frames / fps / 3600
+    : 0;
 }
 
 function dailyAdditionsForDataset(
@@ -208,10 +250,10 @@ function dailyAdditionsForDataset(
     {
       day: suffixDay,
       episodes: nonNegativeCount(
-        asNumber(remote?.totalEpisodes) ?? dataset.total_episodes,
+        localNumberOrRemote(dataset, "total_episodes", remote?.totalEpisodes),
       ),
       frames: nonNegativeCount(
-        asNumber(remote?.totalFrames) ?? dataset.total_frames,
+        localNumberOrRemote(dataset, "total_frames", remote?.totalFrames),
       ),
       hours: roundHours(datasetHours(dataset, remote)),
     },
@@ -241,15 +283,17 @@ function applyCatalogMetadata(
     capturedFrom,
     capturedTo,
     codebase_version: dataset.codebase_version,
-    robot_type:
-      typeof remote?.robotType === "string"
-        ? remote.robotType
-        : dataset.robot_type,
-    total_episodes: asNumber(remote?.totalEpisodes) ?? dataset.total_episodes,
-    total_frames: asNumber(remote?.totalFrames) ?? dataset.total_frames,
-    total_tasks: asNumber(remote?.totalTasks) ?? dataset.total_tasks,
-    fps: asNumber(remote?.fps) ?? dataset.fps,
-    durationHours: asNumber(remote?.durationHours),
+    robot_type: dataset.robot_type ?? remote?.robotType ?? null,
+    total_episodes:
+      localNumberOrRemote(dataset, "total_episodes", remote?.totalEpisodes) ??
+      0,
+    total_frames:
+      localNumberOrRemote(dataset, "total_frames", remote?.totalFrames) ?? 0,
+    total_tasks:
+      localNumberOrRemote(dataset, "total_tasks", remote?.totalTasks) ?? 0,
+    fps: localNumberOrRemote(dataset, "fps", remote?.fps) ?? 0,
+    durationHours: datasetHours(dataset, remote),
+    hubStorageBytes: metadata.hubStorageBytes,
     tasks: dataset.tasks,
     hf: metadata,
     lastModified: metadata.lastModified,
@@ -455,6 +499,10 @@ export async function GET(request: Request): Promise<Response> {
             path.join(discovery.root, ...dataset.relativePath.split("/")),
           ),
         };
+        Object.defineProperty(withTasks, "localInfoFields", {
+          value: dataset.localInfoFields,
+          enumerable: false,
+        });
         return applyCatalogMetadata(
           withTasks,
           remote,
@@ -506,6 +554,10 @@ export async function GET(request: Request): Promise<Response> {
           path.join(discovery.root, ...replayCandidate.relativePath.split("/")),
         ),
       };
+      Object.defineProperty(withTasks, "localInfoFields", {
+        value: replayCandidate.localInfoFields,
+        enumerable: false,
+      });
       displayReplayDataset = applyCatalogMetadata(
         withTasks,
         remote,

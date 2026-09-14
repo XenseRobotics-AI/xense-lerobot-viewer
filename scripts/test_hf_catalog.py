@@ -10,6 +10,66 @@ import hf_catalog
 
 
 class CatalogEntryTest(unittest.TestCase):
+    def test_storage_falls_back_to_repository_detail_when_listing_omits_it(self) -> None:
+        item = types.SimpleNamespace(
+            id="TacVerse/example",
+            sha="same-sha",
+            createdAt=None,
+            lastModified=None,
+            downloads=0,
+        )
+
+        class Api:
+            def dataset_info(self, **kwargs):
+                self.kwargs = kwargs
+                return types.SimpleNamespace(used_storage=1234)
+
+        with tempfile.TemporaryDirectory() as root:
+            entry = hf_catalog.build_entry(
+                Api(),
+                item,
+                Path(root),
+                "token",
+                None,
+                False,
+            )
+        self.assertEqual(entry["storageBytes"], 1234)
+
+    def test_storage_detail_failure_keeps_ordinary_catalog_metadata(self) -> None:
+        item = types.SimpleNamespace(
+            id="TacVerse/example",
+            sha="same-sha",
+            createdAt=None,
+            lastModified="2026-09-03T12:00:00Z",
+            downloads=7,
+        )
+
+        class Api:
+            def dataset_info(self, **_kwargs):
+                raise RuntimeError("detail unavailable")
+
+            def list_repo_commits(self, **_kwargs):
+                return []
+
+        with tempfile.TemporaryDirectory() as root, patch.object(
+            hf_catalog,
+            "read_downloaded_info",
+            return_value={"total_episodes": 8, "total_frames": 28800, "fps": 10},
+        ):
+            entry = hf_catalog.build_entry(
+                Api(),
+                item,
+                Path(root),
+                "token",
+                None,
+                False,
+            )
+
+        self.assertEqual(entry["metadataState"], "ok")
+        self.assertEqual(entry["downloads"], 7)
+        self.assertEqual(entry["totalEpisodes"], 8)
+        self.assertIsNone(entry["storageBytes"])
+
     def test_same_sha_cache_hit_backfills_listing_fields(self) -> None:
         item = types.SimpleNamespace(
             id="TacVerse/example",

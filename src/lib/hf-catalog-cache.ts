@@ -30,6 +30,7 @@ export type HfCatalogEntry = {
   createdAt?: string | null;
   lastModified?: string | null;
   downloads?: number | null;
+  storageBytes?: number | null;
   sha?: string | null;
   totalEpisodes?: number | null;
   totalFrames?: number | null;

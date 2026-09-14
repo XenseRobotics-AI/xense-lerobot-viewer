@@ -87,6 +87,10 @@ export type LocalDatasetSummary = {
   total_frames: number;
   total_tasks?: number;
   fps: number;
+  /** Internal presence flags; non-enumerable and omitted from API payloads. */
+  localInfoFields?: ReadonlySet<
+    "robot_type" | "total_episodes" | "total_frames" | "total_tasks" | "fps"
+  >;
   /** Bytes on disk for the whole dataset directory. See `directorySizeBytes`. */
   sizeBytes: number;
   thumbnailVideoUrl: string | null;
@@ -428,7 +432,7 @@ async function walkForDatasets(
         ? `/api/local-datasets/${encodedPath}/${thumbnailPath}`
         : null;
 
-      found.push({
+      const summary: LocalDatasetSummary = {
         relativePath,
         encodedPath,
         codebase_version: info.codebase_version,
@@ -445,7 +449,22 @@ async function walkForDatasets(
         integrity,
         tags,
         facets,
+      };
+      Object.defineProperty(summary, "localInfoFields", {
+        value: new Set(
+          [
+            "robot_type",
+            "total_episodes",
+            "total_frames",
+            "total_tasks",
+            "fps",
+          ].filter((field) =>
+            Object.prototype.hasOwnProperty.call(info, field),
+          ),
+        ),
+        enumerable: false,
       });
+      found.push(summary);
       return;
     }
     // Root itself looks like a dataset (no valid URL for it) — skip recording

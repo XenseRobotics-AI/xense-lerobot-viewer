@@ -84,6 +84,27 @@ describe("Workbench Hub category UI contract", () => {
     expect(displayReward).toBeGreaterThan(displayAvg);
   });
 
+  test("shares production-hour and storage helpers across overview, display, and mail", async () => {
+    const grouping = await source("workbench-grouping-panel.tsx");
+    expect(grouping).toContain(
+      "const organizationTotalHours = computeWorkbenchProductionHours(",
+    );
+    expect(grouping).toContain(
+      "() => computeWorkbenchProductionHours(mailRollupDatasets)",
+    );
+    expect(grouping).toContain(
+      "const selectedStorageBytes = computeWorkbenchSelectedStorageBytes(",
+    );
+    expect(grouping).toContain(
+      "const mailSelectedStorageBytes = useMemo(\n    () =>\n      computeWorkbenchSelectedStorageBytes(",
+    );
+    expect(grouping).toContain(
+      "organizationTotalHours: mailOrganizationTotalHours",
+    );
+    expect(grouping).toContain("storageBytes: mailSelectedStorageBytes");
+    expect(grouping).toContain("organizationTotalHours,");
+    expect(grouping).toContain("storageBytes: selectedStorageBytes");
+  });
   test("calculates workstation rewards only after source rows are aggregated", async () => {
     const grouping = await source("workbench-grouping-panel.tsx");
     const sourceRowsStart = grouping.indexOf(
