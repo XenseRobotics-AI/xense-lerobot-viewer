@@ -8,8 +8,13 @@ export type TacverseIssuesStatus = "ok" | "warn" | "fail";
 export type TacverseDatasetSort = "updated" | "created";
 export type TacverseDatasetRowType = "dataset" | "folder" | "child";
 export type TacverseMetricsState = "ok" | "partial" | "unavailable";
+export type TacverseDatasetStatisticsSource = "huggingface" | "modelscope";
+export type TacverseDatasetStatisticsSourceSelection =
+  | TacverseDatasetStatisticsSource
+  | "both";
 
 export type TacverseDatasetStatisticsRow = {
+  source?: TacverseDatasetStatisticsSource;
   rowType: TacverseDatasetRowType;
   repoId: string;
   hubRepoId: string;
@@ -33,13 +38,21 @@ export type TacverseDatasetStatisticsRow = {
 
 export type TacverseDatasetStatisticsResponse = {
   organization: "TacVerse";
+  source: TacverseDatasetStatisticsSourceSelection;
   refreshedAt: string | null;
+  refreshedAtBySource?: Partial<
+    Record<TacverseDatasetStatisticsSource, string | null>
+  >;
   categoryFilter: TacverseHubCategorySelection;
   hubTotal: number;
   categoryTotal: number;
   categoryCounts: TacverseHubCategoryCounts;
   datasets: TacverseDatasetStatisticsRow[];
-  catalogFailures?: Array<{ repoId?: string; error?: string }>;
+  catalogFailures?: Array<{
+    repoId?: string;
+    error?: string;
+    source?: TacverseDatasetStatisticsSource;
+  }>;
   error?: string;
 };
 

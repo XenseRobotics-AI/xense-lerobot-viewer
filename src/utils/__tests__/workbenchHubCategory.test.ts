@@ -24,6 +24,11 @@ describe("TacVerse Hub categories", () => {
     ["TacVerse/xtac-umi-g1", {}, "xtac-umi-g1"],
     ["TacVerse/xtac-umi-g1-open", {}, "xtac-umi-g1"],
     ["TacVerse/xtac-umi-g1-open-9999", {}, "xtac-umi-g1"],
+    [
+      "TacVerse/modelscope/xtac-umi-g1-install-wire-harness-260915",
+      { robotType: "xtac_umi_g1" },
+      "xtac-umi-g1",
+    ],
     ["TacVerse/not-xtac-umi-g1-open", {}, "other"],
     ["TacVerse/taccap-g1-insert-hook-assembly", {}, "other"],
     ["TacVerse/taccap-g1-press-remote-buttons", {}, "other"],
@@ -78,6 +83,12 @@ describe("TacVerse Hub categories", () => {
   test("shares the real-calendar MMDD rule with the existing source classifier", () => {
     expect(hasValidWorkbenchMonthDaySuffix("task-0430")).toBe(true);
     expect(hasValidWorkbenchMonthDaySuffix("task-0431")).toBe(false);
+    expect(
+      hasValidWorkbenchMonthDaySuffix(
+        "xtac-umi-g1-install-wire-harness-260915",
+      ),
+    ).toBe(true);
+    expect(hasValidWorkbenchMonthDaySuffix("task-991331")).toBe(false);
     expect(workbenchDatasetSourceKey("TacVerse/taccap-g1-task-0430")).toBe(
       "taccap-g1",
     );
@@ -109,6 +120,14 @@ describe("TacVerse Hub categories", () => {
         folders,
       ),
     ).toBeNull();
+    expect(
+      hubRepoIdForLocalDatasetPath(
+        "TacVerse/not-folder/child-a",
+        "TacVerse",
+        folders,
+        new Set(["TacVerse/not-folder/child-a"]),
+      ),
+    ).toBe("TacVerse/not-folder/child-a");
   });
 
   test("round-trips multi-category URL state in stable order", () => {

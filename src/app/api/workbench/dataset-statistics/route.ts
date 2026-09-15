@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readRawHfCatalog, type HfCatalogEntry } from "@/lib/hf-catalog-cache";
+import { readRawModelScopeCatalog } from "@/lib/modelscope-catalog-cache";
 import {
   discoverLocalDatasets,
   type LocalDatasetSummary,
@@ -11,6 +12,7 @@ import {
   runDatasetChecks,
 } from "@/utils/datasetQualityChecks";
 import {
+  canonicalHubDatasetPath,
   canonicalTacverseRepoId,
   classifyTacverseHubRepository,
   countTacverseHubCategories,
@@ -25,6 +27,8 @@ import {
 import type {
   TacverseDatasetStatisticsResponse,
   TacverseDatasetStatisticsRow,
+  TacverseDatasetStatisticsSource,
+  TacverseDatasetStatisticsSourceSelection,
   TacverseIssuesStatus,
   TacverseLocalStatus,
   TacverseMetricsState,
@@ -34,6 +38,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const ORGANIZATION = "TacVerse" as const;
+const CATALOG_SOURCES: readonly TacverseDatasetStatisticsSource[] = [
+  "huggingface",
+  "modelscope",
+];
 
 function finiteNonNegative(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
@@ -57,11 +65,24 @@ function safeChildPath(value: unknown): string | null {
     : null;
 }
 
-function hubUrl(repoId: string, childPath: string | null = null): string {
-  const encodedRepo = repoId.split("/").map(encodeURIComponent).join("/");
-  if (!childPath) return `https://huggingface.co/datasets/${encodedRepo}`;
+function hubUrl(
+  source: TacverseDatasetStatisticsSource,
+  repoId: string,
+  childPath: string | null = null,
+  remoteRepoId: string | null = null,
+): string {
+  const encodedRepo = (remoteRepoId ?? repoId)
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/");
+  const base =
+    source === "modelscope"
+      ? `https://modelscope.cn/datasets/${encodedRepo}`
+      : `https://huggingface.co/datasets/${encodedRepo}`;
+  if (!childPath) return base;
   const encodedPath = childPath.split("/").map(encodeURIComponent).join("/");
-  return `https://huggingface.co/datasets/${encodedRepo}/tree/main/${encodedPath}`;
+  const branch = source === "modelscope" ? "master" : "main";
+  return `${base}/tree/${branch}/${encodedPath}`;
 }
 
 function categoryInput(
@@ -98,6 +119,7 @@ function localRank(dataset: LocalDatasetSummary): number {
 function localDatasetsByRepo(
   datasets: readonly LocalDatasetSummary[],
   folders: ReadonlySet<string>,
+  datasetRepoIds: ReadonlySet<string>,
 ): Map<string, LocalDatasetSummary> {
   const output = new Map<string, LocalDatasetSummary>();
   for (const dataset of datasets) {
@@ -105,6 +127,7 @@ function localDatasetsByRepo(
       dataset.relativePath,
       ORGANIZATION,
       folders,
+      datasetRepoIds,
     );
     if (!repoId) continue;
     const current = output.get(repoId);
@@ -186,15 +209,22 @@ function issuesStatus(
 
 function rowFromCatalog(
   entry: HfCatalogEntry & { repoId: string },
+  source: TacverseDatasetStatisticsSource,
   localByRepo: ReadonlyMap<string, LocalDatasetSummary>,
   localByPath: ReadonlyMap<string, LocalDatasetSummary>,
   directCopyExists: boolean,
 ): TacverseDatasetStatisticsRow {
   const classification = classifyTacverseHubRepository(categoryInput(entry));
+  const remoteRepoId =
+    source === "modelscope"
+      ? (stringOrNull(entry.hubRepoId) ?? entry.repoId)
+      : entry.repoId;
+  const remotePath =
+    source === "modelscope" ? stringOrNull(entry.hubPath) : null;
   const base = {
-    hubRepoId: entry.repoId,
-    hubPath: null,
-    hubUrl: hubUrl(entry.repoId),
+    hubRepoId: remoteRepoId,
+    hubPath: remotePath,
+    hubUrl: hubUrl(source, entry.repoId, remotePath, remoteRepoId),
     name: entry.repoId.slice(`${ORGANIZATION}/`.length),
     createdAt: stringOrNull(entry.createdAt),
     lastModified: stringOrNull(entry.lastModified),
@@ -213,11 +243,17 @@ function rowFromCatalog(
       );
       return [
         {
+          source,
           rowType: "child" as const,
           repoId: `${entry.repoId}/${childPath}`,
           hubRepoId: entry.repoId,
           hubPath: childPath,
-          hubUrl: hubUrl(entry.repoId, childPath),
+          hubUrl: hubUrl(
+            source,
+            entry.repoId,
+            childPath,
+            stringOrNull(entry.hubRepoId),
+          ),
           name: childPath,
           robotType: null,
           robotTypes: [],
@@ -238,6 +274,7 @@ function rowFromCatalog(
     });
     const status = localStatus(localByRepo.get(entry.repoId), directCopyExists);
     return {
+      source,
       rowType: "folder",
       repoId: entry.repoId,
       ...base,
@@ -268,6 +305,7 @@ function rowFromCatalog(
   const status = localStatus(localByRepo.get(entry.repoId), directCopyExists);
   const robotType = stringOrNull(entry.robotType);
   return {
+    source,
     rowType: "dataset",
     repoId: entry.repoId,
     ...base,
@@ -301,6 +339,56 @@ function categoryFromRequest(
     : { ok: false };
 }
 
+function sourceFromRequest(
+  request: Request,
+):
+  | { ok: true; value: TacverseDatasetStatisticsSourceSelection }
+  | { ok: false } {
+  const value = request.url
+    ? new URL(request.url).searchParams.get("source")
+    : null;
+  if (!value || value === "huggingface" || value === "hf") {
+    return { ok: true, value: "huggingface" };
+  }
+  if (value === "modelscope" || value === "ms") {
+    return { ok: true, value: "modelscope" };
+  }
+  if (value === "both") return { ok: true, value: "both" };
+  return { ok: false };
+}
+
+async function readCatalog(
+  root: string,
+  source: TacverseDatasetStatisticsSource,
+) {
+  try {
+    return source === "modelscope"
+      ? await readRawModelScopeCatalog(root, ORGANIZATION)
+      : await readRawHfCatalog(root, ORGANIZATION);
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function selectedCatalogSources(
+  selection: TacverseDatasetStatisticsSourceSelection,
+): readonly TacverseDatasetStatisticsSource[] {
+  return selection === "both" ? CATALOG_SOURCES : [selection];
+}
+
+function latestTimestamp(
+  values: readonly (string | null | undefined)[],
+): string | null {
+  return (
+    values
+      .filter(
+        (value): value is string => typeof value === "string" && Boolean(value),
+      )
+      .sort((left, right) => Date.parse(right) - Date.parse(left))[0] ?? null
+  );
+}
+
 export async function GET(request: Request): Promise<Response> {
   const category = categoryFromRequest(request);
   if (!category.ok) {
@@ -312,17 +400,45 @@ export async function GET(request: Request): Promise<Response> {
       { status: 400, headers: { "cache-control": "no-store" } },
     );
   }
+  const source = sourceFromRequest(request);
+  if (!source.ok) {
+    return Response.json(
+      {
+        error: "source must be one of: huggingface, modelscope, both.",
+      },
+      { status: 400, headers: { "cache-control": "no-store" } },
+    );
+  }
 
   try {
     const discovery = await discoverLocalDatasets();
-    let catalog;
-    try {
-      catalog = await readRawHfCatalog(discovery.root, ORGANIZATION);
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+    const catalogs = (
+      await Promise.all(
+        selectedCatalogSources(source.value).map(async (catalogSource) => ({
+          source: catalogSource,
+          catalog: await readCatalog(discovery.root, catalogSource),
+        })),
+      )
+    ).filter(
+      (
+        item,
+      ): item is {
+        source: TacverseDatasetStatisticsSource;
+        catalog: NonNullable<typeof item.catalog>;
+      } => item.catalog !== null,
+    );
+
+    if (catalogs.length === 0) {
       const empty: TacverseDatasetStatisticsResponse = {
         organization: ORGANIZATION,
+        source: source.value,
         refreshedAt: null,
+        refreshedAtBySource: Object.fromEntries(
+          selectedCatalogSources(source.value).map((catalogSource) => [
+            catalogSource,
+            null,
+          ]),
+        ),
         categoryFilter: category.value,
         hubTotal: 0,
         categoryTotal: 0,
@@ -334,43 +450,90 @@ export async function GET(request: Request): Promise<Response> {
       });
     }
 
-    const catalogEntries = (
-      Array.isArray(catalog.datasets) ? catalog.datasets : []
-    ).filter(
-      (entry): entry is HfCatalogEntry & { repoId: string } =>
-        canonicalTacverseRepoId(stringOrNull(entry.repoId) ?? "") !== null,
+    const catalogEntries = catalogs.map(
+      ({ source: catalogSource, catalog }) => ({
+        source: catalogSource,
+        entries: (Array.isArray(catalog.datasets)
+          ? catalog.datasets
+          : []
+        ).flatMap((entry) => {
+          const rawRepoId = stringOrNull(entry.repoId) ?? "";
+          const repoId =
+            catalogSource === "modelscope"
+              ? canonicalHubDatasetPath(rawRepoId, ORGANIZATION)
+              : canonicalTacverseRepoId(rawRepoId);
+          return repoId ? [{ ...entry, repoId }] : [];
+        }),
+      }),
     );
-    const categoryCounts = countTacverseHubCategories(
-      catalogEntries.map(categoryInput),
+    const categoryCounts = { ...EMPTY_TACVERSE_HUB_CATEGORY_COUNTS };
+    for (const { entries } of catalogEntries) {
+      const counts = countTacverseHubCategories(entries.map(categoryInput));
+      for (const key of Object.keys(categoryCounts) as Array<
+        keyof typeof categoryCounts
+      >) {
+        categoryCounts[key] += counts[key];
+      }
+    }
+    const categoryEntries = catalogEntries.flatMap(
+      ({ source: catalogSource, entries }) =>
+        entries
+          .filter((entry) =>
+            matchesTacverseHubCategory(categoryInput(entry), category.value),
+          )
+          .map((entry) => ({ source: catalogSource, entry })),
     );
-    const categoryEntries = catalogEntries.filter((entry) =>
-      matchesTacverseHubCategory(categoryInput(entry), category.value),
+    const folders = new Set(
+      catalogEntries.flatMap(({ entries }) => [...folderRepoIds(entries)]),
     );
-    const folders = folderRepoIds(catalogEntries);
-    const localByRepo = localDatasetsByRepo(discovery.datasets, folders);
+    const datasetRepoIds = new Set(
+      catalogEntries.flatMap(({ entries }) =>
+        entries.map((entry) => entry.repoId),
+      ),
+    );
+    const localByRepo = localDatasetsByRepo(
+      discovery.datasets,
+      folders,
+      datasetRepoIds,
+    );
     const localByPath = new Map(
       discovery.datasets.map((dataset) => [dataset.relativePath, dataset]),
     );
     const directNames = await directLocalRepoNames(discovery.root);
-    const datasets = categoryEntries.map((entry) =>
+    const datasets = categoryEntries.map(({ source: catalogSource, entry }) =>
       rowFromCatalog(
         entry,
+        catalogSource,
         localByRepo,
         localByPath,
         directNames.has(entry.repoId.slice(`${ORGANIZATION}/`.length)),
       ),
     );
+    const refreshedAtBySource = Object.fromEntries(
+      catalogs.map(({ source: catalogSource, catalog }) => [
+        catalogSource,
+        stringOrNull(catalog.refreshedAt),
+      ]),
+    ) as Partial<Record<TacverseDatasetStatisticsSource, string | null>>;
+    const failures = catalogs.flatMap(({ source: catalogSource, catalog }) =>
+      (Array.isArray(catalog.failures) ? catalog.failures : []).map(
+        (failure) => ({ ...failure, source: catalogSource }),
+      ),
+    );
     const payload: TacverseDatasetStatisticsResponse = {
       organization: ORGANIZATION,
-      refreshedAt: stringOrNull(catalog.refreshedAt),
+      source: source.value,
+      refreshedAt: latestTimestamp(Object.values(refreshedAtBySource)),
+      refreshedAtBySource,
       categoryFilter: category.value,
-      hubTotal: catalogEntries.length,
+      hubTotal: catalogEntries.reduce(
+        (total, { entries }) => total + entries.length,
+        0,
+      ),
       categoryTotal: categoryEntries.length,
       categoryCounts,
       datasets,
-      catalogFailures: Array.isArray(catalog.failures)
-        ? (catalog.failures as Array<{ repoId?: string; error?: string }>)
-        : [],
+      catalogFailures: failures,
     };
     return Response.json(payload, {
       headers: { "cache-control": "no-store" },

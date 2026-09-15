@@ -60,6 +60,9 @@ describe("workbenchTaskPrefix", () => {
     expect(workbenchTaskPrefix("TacVerse/taccap-g1-place-cup-0817")).toBe(
       "taccap-g1-place-cup",
     );
+    expect(
+      workbenchTaskPrefix("TacVerse/xtac-umi-g1-install-wire-harness-260915"),
+    ).toBe("xtac-umi-g1-install-wire-harness");
   });
 
   test("keeps a task without a date suffix", () => {
@@ -89,6 +92,12 @@ describe("workbench dataset date suffix", () => {
         "2026-08-27T10:00:00Z",
       ),
     ).toBe(true);
+    expect(
+      workbenchDatasetSuffixDay(
+        "TacVerse/xtac-umi-g1-install-wire-harness-260915",
+        "2025-09-16T10:00:00Z",
+      ),
+    ).toBe("2026-09-15");
   });
 
   test("rejects repair outputs and invalid date suffixes", () => {
@@ -100,6 +109,9 @@ describe("workbench dataset date suffix", () => {
     ).toBeNull();
     expect(
       hasWorkbenchDatasetDateSuffix("TacVerse/taccap-g1-bad-date-1399"),
+    ).toBe(false);
+    expect(
+      hasWorkbenchDatasetDateSuffix("TacVerse/xtac-umi-g1-bad-date-991331"),
     ).toBe(false);
   });
 });
@@ -513,7 +525,7 @@ describe("Workbench overview metrics", () => {
           durationHours: 32,
         }),
       ]),
-    ).toBe(3.25);
+    ).toBe(7.25);
   });
 
   test("prefers the largest selected Hub storage value and falls back locally", () => {
@@ -626,6 +638,53 @@ describe("workbench source repo ids", () => {
 });
 
 describe("date-aware workbench rollups", () => {
+  test("treats a YYMMDD suffix as its explicit 2026 capture day", () => {
+    const item = dataset("TacVerse/xtac-umi-g1-install-wire-harness-260915", {
+      total_episodes: 12,
+      total_frames: 43_200,
+      fps: 10,
+      robot_type: "xtac_umi_g1",
+      lastModified: "2025-01-01T00:00:00Z",
+      facets: {
+        capturedFrom: "2026-09-15",
+        capturedTo: "2026-09-15",
+        dateEvidence: "name",
+      },
+    });
+    const range = {
+      startDate: "2026-09-15",
+      endDate: "2026-09-16",
+    };
+
+    expect(computeWorkbenchRollup([item], "source", range)).toEqual([
+      expect.objectContaining({
+        group: "TacVerse/xtac-umi-g1",
+        count: 1,
+        episodes: 12,
+        frames: 43_200,
+        hours: 1.2,
+      }),
+    ]);
+    expect(computeWorkbenchTimeline([item], range).rows).toEqual([
+      expect.objectContaining({
+        day: "2026-09-15",
+        datasets: 1,
+        episodes: 12,
+        frames: 43_200,
+        hours: 1.2,
+      }),
+    ]);
+    expect(computeWorkbenchAdditionRollup([item], "source", range)).toEqual([
+      expect.objectContaining({
+        group: "TacVerse/xtac-umi-g1",
+        count: 1,
+        episodes: 12,
+        frames: 43_200,
+        hours: 1.2,
+      }),
+    ]);
+  });
+
   test("filters grouped totals to the half-open date range", () => {
     const rows = computeWorkbenchRollup(
       [
@@ -818,6 +877,11 @@ describe("workbench source classification", () => {
     expect(workbenchDatasetSourceKey("TacVerse/xtac-umi-g1-open-0826")).toBe(
       "xtac-umi-g1",
     );
+    expect(
+      workbenchDatasetSourceKey(
+        "TacVerse/xtac-umi-g1-install-wire-harness-260915",
+      ),
+    ).toBe("xtac-umi-g1");
     expect(
       workbenchDatasetSourceKey("TacVerse/taccap-g1-insert-hook-assembly"),
     ).toBe("tacflow");

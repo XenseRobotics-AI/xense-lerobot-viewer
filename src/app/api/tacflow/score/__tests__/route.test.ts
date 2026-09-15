@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import type { TacFlowScoreStreamEvent } from "@/lib/tacflow/scoring";
+import {
+  fsMockModule,
+  readFileMock,
+  TACFLOW_TEST_DATASET_ROOT,
+} from "@/app/api/tacflow/__tests__/fs-mock";
 
 type SpawnCall = {
   command: string;
@@ -17,22 +22,21 @@ class FakeChild extends EventEmitter {
   kill = mock(() => true);
 }
 
-const DATASET_ROOT = "/home/xense/.cache/huggingface/lerobot";
+const DATASET_ROOT = TACFLOW_TEST_DATASET_ROOT;
 const DEFAULT_DATASET_RELATIVE = "TacVerse/taccap-g1-fold-garment-0819";
 const DEFAULT_DATASET = `${DATASET_ROOT}/${DEFAULT_DATASET_RELATIVE}`;
-const DEFAULT_INFO_JSON = `${DEFAULT_DATASET}/meta/info.json`;
 const DOCTOR_BEFORE_JSON = `${DEFAULT_DATASET}/.tacflow/doctor-before.json`;
 const OTHER_DATASET_RELATIVE = "TacVerse/taccap-g1-hang-shirt-0903";
 const OTHER_DATASET = `${DATASET_ROOT}/${OTHER_DATASET_RELATIVE}`;
-const OTHER_INFO_JSON = `${OTHER_DATASET}/meta/info.json`;
 const OTHER_DOCTOR_BEFORE_JSON = `${OTHER_DATASET}/.tacflow/doctor-before.json`;
+const MISSING_DOCTOR_DATASET_RELATIVE = "TacVerse/tacflow-missing-doctor-0903";
+const MISSING_DOCTOR_BEFORE_JSON = `${DATASET_ROOT}/${MISSING_DOCTOR_DATASET_RELATIVE}/.tacflow/doctor-before.json`;
+const INVALID_DOCTOR_DATASET_RELATIVE = "TacVerse/tacflow-invalid-doctor-0903";
 
 let spawnCalls: SpawnCall[] = [];
 let nextExitCode: number | null = 0;
 let nextStdout = "Pre-repair / Doctor checks\n";
 let nextStderr = "";
-let files = new Map<string, string>();
-
 const spawnMock = mock(
   (
     command: string,
@@ -50,24 +54,11 @@ const spawnMock = mock(
   },
 );
 
-const readFileMock = mock(async (filePath: string) => {
-  const content = files.get(String(filePath));
-  if (content === undefined) {
-    const error = new Error(`ENOENT: no such file, open '${filePath}'`);
-    (error as Error & { code?: string }).code = "ENOENT";
-    throw error;
-  }
-  return content;
-});
-
 mock.module("node:child_process", () => ({
   spawn: spawnMock,
 }));
 
-mock.module("node:fs/promises", () => ({
-  default: { readFile: readFileMock },
-  readFile: readFileMock,
-}));
+mock.module("node:fs/promises", () => fsMockModule);
 
 async function routePost() {
   const mod = await import("@/app/api/tacflow/score/route");
@@ -94,38 +85,11 @@ async function readEvents(
     .map((line) => JSON.parse(line) as TacFlowScoreStreamEvent);
 }
 
-function doctorReport(): string {
-  return JSON.stringify({
-    schema: "tacflow.doctor/1",
-    overall_severity: "WARN",
-    checks: [
-      {
-        id: "metadata",
-        name: "Metadata",
-        severity: "PASS",
-        messages: [{ severity: "PASS", message: "metadata ok" }],
-        findings: [],
-      },
-      {
-        id: "per_episode",
-        name: "Per-Episode Summary",
-        severity: "WARN",
-        messages: [{ severity: "WARN", message: "Episode 1 action jump" }],
-        findings: [{ kind: "action_jump", episode: 1 }],
-      },
-    ],
-  });
-}
-
 beforeEach(() => {
   spawnCalls = [];
   nextExitCode = 0;
   nextStdout = "Pre-repair / Doctor checks\n";
   nextStderr = "";
-  files = new Map([
-    [DEFAULT_INFO_JSON, "{}"],
-    [DOCTOR_BEFORE_JSON, doctorReport()],
-  ]);
   spawnMock.mockClear();
   readFileMock.mockClear();
 });
@@ -134,7 +98,6 @@ afterEach(() => {
   nextExitCode = 0;
   nextStdout = "";
   nextStderr = "";
-  files = new Map();
 });
 
 describe("TacFlow score route", () => {
@@ -183,10 +146,6 @@ describe("TacFlow score route", () => {
 
   test("uses the selected local dataset path", async () => {
     const POST = await routePost();
-    files = new Map([
-      [OTHER_INFO_JSON, "{}"],
-      [OTHER_DOCTOR_BEFORE_JSON, doctorReport()],
-    ]);
 
     const response = await POST(
       postRequest({ datasetPath: OTHER_DATASET_RELATIVE }) as never,
@@ -257,9 +216,10 @@ describe("TacFlow score route", () => {
     nextExitCode = 2;
     nextStdout = "";
     nextStderr = "first warning\nlast failure\n";
-    files = new Map([[DEFAULT_INFO_JSON, "{}"]]);
 
-    const response = await POST(postRequest() as never);
+    const response = await POST(
+      postRequest({ datasetPath: MISSING_DOCTOR_DATASET_RELATIVE }) as never,
+    );
     const events = await readEvents(response);
     const result = events.find((event) => event.type === "result");
     const error = events.find((event) => event.type === "error");
@@ -274,15 +234,16 @@ describe("TacFlow score route", () => {
     });
     expect(error).toMatchObject({
       type: "error",
-      error: expect.stringContaining("Unable to read doctor-before.json"),
+      error: expect.stringContaining(MISSING_DOCTOR_BEFORE_JSON),
     });
   });
 
   test("returns an error when doctor-before.json is missing", async () => {
     const POST = await routePost();
-    files = new Map([[DEFAULT_INFO_JSON, "{}"]]);
 
-    const response = await POST(postRequest() as never);
+    const response = await POST(
+      postRequest({ datasetPath: MISSING_DOCTOR_DATASET_RELATIVE }) as never,
+    );
     const events = await readEvents(response);
 
     expect(
@@ -296,12 +257,10 @@ describe("TacFlow score route", () => {
 
   test("returns an error when doctor-before.json is invalid", async () => {
     const POST = await routePost();
-    files = new Map([
-      [DEFAULT_INFO_JSON, "{}"],
-      [DOCTOR_BEFORE_JSON, "{"],
-    ]);
 
-    const response = await POST(postRequest() as never);
+    const response = await POST(
+      postRequest({ datasetPath: INVALID_DOCTOR_DATASET_RELATIVE }) as never,
+    );
     const events = await readEvents(response);
 
     expect(

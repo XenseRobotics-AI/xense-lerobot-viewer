@@ -49,7 +49,15 @@ describe("Workbench Hub category UI contract", () => {
     );
     expect(grouping).toContain('"&category="');
     expect(grouping).toContain("categoryRangeCheckPendingRef");
-    expect(grouping).toContain("categoryTotal - hubScope.localMatchedTotal");
+    expect(grouping).toContain("hubScope.remoteStatisticsTotal");
+  });
+
+  test("keeps ModelScope credentials in the local Workbench configuration", async () => {
+    const configuration = await source("workbench-configuration-editor.tsx");
+    expect(configuration).toContain(
+      "WorkbenchModelScopeCredentials organization={organization}",
+    );
+    expect(configuration).toContain("workbench-modelscope-credentials");
   });
 
   test("keeps Rule, Avg / ep, and final Reward aligned across UI, CSV, and fullscreen", async () => {

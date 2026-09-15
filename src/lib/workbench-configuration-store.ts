@@ -24,7 +24,7 @@ const STORE_DIR = ".xense-viewer";
 const WORKBENCH_DIR = "workbench";
 const CONFIG_SCHEMA = "xense.workbench.configuration/2";
 
-type DatasetDeviceEvidence = {
+export type WorkbenchDatasetDeviceEvidence = {
   robotId?: string | null;
   collectorSerialNumber?: string | null;
   leftGripperSn?: string | null;
@@ -100,7 +100,7 @@ function normalizeRevision(value: string): string {
 }
 
 function datasetDiagnostics(
-  datasets: readonly DatasetDeviceEvidence[],
+  datasets: readonly WorkbenchDatasetDeviceEvidence[],
   config: WorkbenchConfigurationV2,
 ): WorkbenchConfigurationDiagnostic[] {
   const diagnostics: WorkbenchConfigurationDiagnostic[] = [];
@@ -137,7 +137,7 @@ function responseFor(
   config: WorkbenchConfigurationV2,
   source: WorkbenchConfigurationResponse["source"],
   updatedAt: string | null,
-  datasets: readonly DatasetDeviceEvidence[],
+  datasets: readonly WorkbenchDatasetDeviceEvidence[],
   legacySource: "stored" | "defaults" | null,
 ): WorkbenchConfigurationResponse {
   const observedDevices = observeWorkbenchDevices(datasets, config);
@@ -198,7 +198,7 @@ async function readStored(
 export async function readWorkbenchConfiguration(
   org: string,
   root = resolveLocalDatasetRoot(),
-  datasets: readonly DatasetDeviceEvidence[] = [],
+  datasets: readonly WorkbenchDatasetDeviceEvidence[] = [],
 ): Promise<WorkbenchConfigurationResponse> {
   const normalizedOrg = normalizeOrg(org);
   const stored = await readStored(normalizedOrg, root);
@@ -251,7 +251,7 @@ export async function writeWorkbenchConfiguration(
   input: unknown,
   expectedRevision: string,
   root = resolveLocalDatasetRoot(),
-  datasets: readonly DatasetDeviceEvidence[] = [],
+  datasets: readonly WorkbenchDatasetDeviceEvidence[] = [],
   updatedAtOverride?: string,
 ): Promise<WorkbenchConfigurationResponse> {
   const normalizedOrg = normalizeOrg(org);

@@ -44,6 +44,18 @@ async function writeDataset(
   }
 }
 
+async function writeCatalog(
+  source: "hf-catalog" | "modelscope-catalog",
+  catalog: Record<string, unknown>,
+): Promise<void> {
+  const cacheDir = path.join(root, ".xense-viewer", source);
+  await fs.mkdir(cacheDir, { recursive: true });
+  await fs.writeFile(
+    path.join(cacheDir, "TacVerse.json"),
+    JSON.stringify(catalog),
+  );
+}
+
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "xense-workbench-route-"));
   process.env.LOCAL_DATASET_ROOT = root;
@@ -240,7 +252,7 @@ describe("Workbench statistics route", () => {
     });
   });
 
-  test("uses the unique XUMI collector serial when hardware.json is absent", async () => {
+  test("uses the unique XUMI collector serial as the device identity", async () => {
     const repoId = "TacVerse/xtac-umi-g1-operate-tape-measure-0909";
     await writeDataset(
       repoId,
@@ -255,15 +267,15 @@ describe("Workbench statistics route", () => {
         episodes: [
           {
             devices: {
-              collector: { serial_number: "TCGU01A31Z0004B" },
+              collector: { serial_number: "TCGU01A31Z0015B" },
               grippers: {
-                left: { serial_number: "TCGU01A28Z0095m" },
+                left: { serial_number: "TCGU01A28Z0069m" },
               },
             },
           },
           {
             devices: {
-              collector: { serial_number: "TCGU01A31Z0004B" },
+              collector: { serial_number: "TCGU01A31Z0015B" },
             },
           },
         ],
@@ -302,13 +314,13 @@ describe("Workbench statistics route", () => {
     expect(response.status).toBe(200);
     expect(payload.datasets).toHaveLength(1);
     expect(payload.datasets[0]).toMatchObject({
-      collectorSerialNumber: "TCGU01A31Z0004B",
+      collectorSerialNumber: "TCGU01A31Z0015B",
       robotId: null,
-      leftGripperSn: null,
+      leftGripperSn: "TCGU01A28Z0069m",
       dailyAdditions: [{ day: "2026-09-09" }],
     });
     expect(payload.workstationMappings.defaults).toMatchObject({
-      TCGU01A31Z0004B: "A5",
+      TCGU01A31Z0015B: "A5",
     });
   });
 
@@ -936,6 +948,329 @@ describe("Workbench statistics route", () => {
       datasets: [],
     });
   });
+
+  test("loads ModelScope metadata for Workbench grouping statistics", async () => {
+    await writeDataset("TacVerse/taccap-g1-modelscope-0906", {
+      total_episodes: undefined,
+      total_frames: undefined,
+      fps: undefined,
+    });
+    await writeCatalog("modelscope-catalog", {
+      org: "TacVerse",
+      refreshedAt: "2026-09-06T08:00:00Z",
+      datasets: [
+        {
+          repoId: "TacVerse/taccap-g1-modelscope-0906",
+          totalEpisodes: 12,
+          totalFrames: 43_200,
+          fps: 10,
+          durationHours: 1.2,
+          lastModified: "2026-09-06T08:00:00Z",
+        },
+      ],
+    });
+
+    const response = await GET(
+      new Request(
+        "http://localhost/api/workbench/statistics?org=TacVerse&source=modelscope",
+      ),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      source: "modelscope",
+      refreshedAt: "2026-09-06T08:00:00Z",
+      refreshedAtBySource: { modelscope: "2026-09-06T08:00:00Z" },
+      hubTotal: 1,
+      categoryTotal: 1,
+      localMatchedTotal: 1,
+    });
+    expect(payload.datasets).toEqual([
+      expect.objectContaining({
+        relativePath: "TacVerse/taccap-g1-modelscope-0906",
+        total_episodes: 12,
+        total_frames: 43_200,
+        durationHours: 1.2,
+        lastModified: "2026-09-06T08:00:00Z",
+      }),
+    ]);
+  });
+
+  test("uses ModelScope meta/info.json statistics without local dataset payloads", async () => {
+    const datasets = [
+      ["xtac-umi-g1-install-wire-harness-260915", 383, 548_820, 30],
+      ["xtac-umi-g1-operate-tape-measure-260915", 318, 455_760, 30],
+      ["xtac-umi-g1-press-rubber-plug-260915", 221, 331_500, 30],
+    ] as const;
+    await writeCatalog("modelscope-catalog", {
+      org: "TacVerse",
+      hubRepoId: "XenseRobotics/TacVerse",
+      refreshedAt: "2026-09-15T16:00:00Z",
+      datasets: datasets.map(([name, totalEpisodes, totalFrames, fps]) => ({
+        repoId: `TacVerse/${name}`,
+        hubRepoId: "XenseRobotics/TacVerse",
+        hubPath: name,
+        totalEpisodes,
+        totalFrames,
+        fps,
+        durationHours: totalFrames / fps / 3600,
+        robotType: "xtac_umi_g1",
+        collectorSerialNumber: "TCGU01A31Z0015B",
+      })),
+    });
+
+    const response = await GET(
+      new Request(
+        "http://localhost/api/workbench/statistics?org=TacVerse&source=modelscope",
+      ),
+    );
+    const payload = (await response.json()) as {
+      datasets: Array<{
+        relativePath: string;
+        total_episodes: number;
+        total_frames: number;
+        capturedFrom: string | null;
+        remoteOnly?: boolean;
+        dailyAdditions: Array<{
+          day: string;
+          episodes: number;
+          frames: number;
+        }>;
+      }>;
+      hubTotal: number;
+      categoryTotal: number;
+      localMatchedTotal: number;
+      remoteStatisticsTotal: number;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      hubTotal: 3,
+      categoryTotal: 3,
+      localMatchedTotal: 0,
+      remoteStatisticsTotal: 3,
+    });
+    expect(payload.datasets).toHaveLength(3);
+    for (const [name, totalEpisodes, totalFrames] of datasets) {
+      const row = payload.datasets.find(
+        (dataset) => dataset.relativePath === `TacVerse/${name}`,
+      );
+      expect(row).toBeDefined();
+      expect(row).toMatchObject({
+        total_episodes: totalEpisodes,
+        total_frames: totalFrames,
+        capturedFrom: "2026-09-15",
+        collectorSerialNumber: "TCGU01A31Z0015B",
+        remoteOnly: true,
+        dailyAdditions: [
+          {
+            day: "2026-09-15",
+            episodes: totalEpisodes,
+            frames: totalFrames,
+          },
+        ],
+      });
+    }
+  });
+
+  test("matches nested ModelScope paths and uses explicit YYMMDD dates", async () => {
+    const datasetPath =
+      "TacVerse/collection/xtac-umi-g1-install-wire-harness-260915";
+    await writeDataset(
+      datasetPath,
+      {
+        robot_type: "xtac_umi_g1",
+        total_episodes: undefined,
+        total_frames: undefined,
+        fps: undefined,
+      },
+      null,
+    );
+    const datasetDir = path.join(root, ...datasetPath.split("/"));
+    await fs.writeFile(
+      path.join(datasetDir, "meta", "xumi_collection_devices.json"),
+      JSON.stringify({
+        version: 1,
+        episodes: [
+          {
+            devices: {
+              collector: { serial_number: "TCGU01A31Z0015B" },
+              grippers: {
+                left: { serial_number: "TCGU01A28Z0069m" },
+              },
+            },
+          },
+        ],
+      }),
+    );
+    await writeCatalog("modelscope-catalog", {
+      org: "TacVerse",
+      hubRepoId: "XenseRobotics/TacVerse",
+      refreshedAt: "2026-09-15T08:00:00Z",
+      datasets: [
+        {
+          repoId: datasetPath,
+          hubRepoId: "XenseRobotics/TacVerse",
+          hubPath: "collection/xtac-umi-g1-install-wire-harness-260915",
+          totalEpisodes: 12,
+          totalFrames: 43_200,
+          fps: 10,
+          durationHours: 1.2,
+          robotType: "xtac_umi_g1",
+        },
+      ],
+    });
+
+    const response = await GET(
+      new Request(
+        "http://localhost/api/workbench/statistics?org=TacVerse&source=modelscope",
+      ),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      source: "modelscope",
+      hubTotal: 1,
+      categoryTotal: 1,
+      localMatchedTotal: 1,
+    });
+    expect(payload.datasets).toEqual([
+      expect.objectContaining({
+        relativePath: datasetPath,
+        total_episodes: 12,
+        total_frames: 43_200,
+        durationHours: 1.2,
+        source: "xtac-umi-g1",
+        collectorSerialNumber: "TCGU01A31Z0015B",
+        leftGripperSn: "TCGU01A28Z0069m",
+        robotId: null,
+        capturedFrom: "2026-09-15",
+        capturedTo: "2026-09-15",
+        dailyAdditions: [
+          {
+            day: "2026-09-15",
+            episodes: 12,
+            frames: 43_200,
+            hours: 1.2,
+          },
+        ],
+      }),
+    ]);
+  });
+
+  test("includes dated datasets without hardware identity in daily statistics", async () => {
+    const datasetPath = "TacVerse/xtac-umi-g1-press-rubber-plug-260915";
+    await writeDataset(datasetPath, {
+      robot_type: "xtac_umi_g1",
+      total_episodes: 8,
+      total_frames: 28_800,
+      fps: 10,
+    });
+    await writeCatalog("modelscope-catalog", {
+      org: "TacVerse",
+      hubRepoId: "XenseRobotics/TacVerse",
+      refreshedAt: "2026-09-15T08:00:00Z",
+      datasets: [
+        {
+          repoId: datasetPath,
+          hubRepoId: "XenseRobotics/TacVerse",
+          hubPath: "xtac-umi-g1-press-rubber-plug-260915",
+          totalEpisodes: 8,
+          totalFrames: 28_800,
+          fps: 10,
+          durationHours: 0.8,
+          robotType: "xtac_umi_g1",
+        },
+      ],
+    });
+
+    const response = await GET(
+      new Request(
+        "http://localhost/api/workbench/statistics?org=TacVerse&source=modelscope",
+      ),
+    );
+    const payload = await response.json();
+
+    expect(payload.datasets).toEqual([
+      expect.objectContaining({
+        relativePath: datasetPath,
+        robotId: null,
+        collectorSerialNumber: null,
+        leftGripperSn: null,
+        capturedFrom: "2026-09-15",
+        capturedTo: "2026-09-15",
+        dailyAdditions: [
+          {
+            day: "2026-09-15",
+            episodes: 8,
+            frames: 28_800,
+            hours: 0.8,
+          },
+        ],
+      }),
+    ]);
+  });
+
+  test("deduplicates local Workbench rows when both Hub catalogs contain a repo", async () => {
+    await writeDataset("TacVerse/taccap-g1-both-0907", {
+      total_episodes: undefined,
+      total_frames: undefined,
+      fps: undefined,
+    });
+    await writeDataset("TacVerse/released/taccap-g1-both-0907", {
+      total_episodes: undefined,
+      total_frames: undefined,
+      fps: undefined,
+    });
+    await writeCatalog("hf-catalog", {
+      org: "TacVerse",
+      refreshedAt: "2026-09-07T08:00:00Z",
+      datasets: [
+        {
+          repoId: "TacVerse/taccap-g1-both-0907",
+          uploader: "hf-owner",
+        },
+      ],
+    });
+    await writeCatalog("modelscope-catalog", {
+      org: "TacVerse",
+      refreshedAt: "2026-09-07T09:00:00Z",
+      datasets: [
+        {
+          repoId: "TacVerse/taccap-g1-both-0907",
+          totalEpisodes: 20,
+          totalFrames: 72_000,
+          fps: 10,
+          uploader: "ms-owner",
+        },
+      ],
+    });
+
+    const response = await GET(
+      new Request(
+        "http://localhost/api/workbench/statistics?org=TacVerse&source=both",
+      ),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload).toMatchObject({
+      source: "both",
+      refreshedAt: "2026-09-07T09:00:00Z",
+      hubTotal: 2,
+      categoryTotal: 2,
+      localMatchedTotal: 1,
+    });
+    expect(payload.datasets).toHaveLength(1);
+    expect(payload.datasets[0]).toMatchObject({
+      total_episodes: 20,
+      total_frames: 72_000,
+      uploader: "hf-owner",
+    });
+  });
+
   test("excludes Folder repositories and children from Workbench aggregation", async () => {
     await writeDataset("TacVerse/sampledata/child-a");
     await writeDataset("TacVerse/sampledata/child-b");

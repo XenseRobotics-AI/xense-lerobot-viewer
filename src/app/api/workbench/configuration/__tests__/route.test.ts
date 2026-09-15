@@ -26,6 +26,17 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
+async function writeModelScopeCatalog(
+  datasets: Array<Record<string, unknown>>,
+): Promise<void> {
+  const directory = path.join(root, ".xense-viewer", "modelscope-catalog");
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(
+    path.join(directory, "TacVerse.json"),
+    JSON.stringify({ org: "TacVerse", datasets }),
+  );
+}
+
 function request(
   config: WorkbenchConfigurationV2,
   revision: string | null,
@@ -47,6 +58,49 @@ function request(
 }
 
 describe("Workbench configuration route", () => {
+  test("discovers remote ModelScope collector serials alongside local datasets", async () => {
+    await writeModelScopeCatalog([
+      {
+        repoId: "TacVerse/xtac-umi-g1-install-wire-harness-260915",
+        collectorSerialNumber: "TCGU01A31Z0015B",
+      },
+      {
+        repoId: "TacVerse/xtac-umi-g1-operate-tape-measure-260915",
+        collectorSerialNumber: "TCGU01A31Z0016B",
+      },
+      {
+        repoId: "TacVerse/xtac-umi-g1-press-rubber-plug-260915",
+        collectorSerialNumber: "TCGU01A31Z0017B",
+      },
+    ]);
+
+    const response = await GET(
+      new Request("http://localhost/api/workbench/configuration?org=TacVerse"),
+    );
+    const payload = (await response.json()) as WorkbenchConfigurationResponse;
+
+    expect(response.status).toBe(200);
+    expect(payload.observedDevices).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "collector_sn",
+          identifier: "TCGU01A31Z0015B",
+          datasetCount: 1,
+        }),
+        expect.objectContaining({
+          source: "collector_sn",
+          identifier: "TCGU01A31Z0016B",
+          datasetCount: 1,
+        }),
+        expect.objectContaining({
+          source: "collector_sn",
+          identifier: "TCGU01A31Z0017B",
+          datasetCount: 1,
+        }),
+      ]),
+    );
+  });
+
   test("migrates in memory, requires a revision, atomically saves, and rejects stale drafts", async () => {
     const first = await GET(
       new Request("http://localhost/api/workbench/configuration?org=OtherOrg"),

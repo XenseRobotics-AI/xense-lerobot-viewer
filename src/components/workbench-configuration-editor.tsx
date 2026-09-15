@@ -24,6 +24,7 @@ import {
   workbenchStaffingWorkstations,
   WorkbenchConfigurationValidationError,
 } from "@/utils/workbenchConfiguration";
+import WorkbenchModelScopeCredentials from "@/components/workbench-modelscope-credentials";
 
 type Tab = "devices" | "people" | "staffing";
 
@@ -120,6 +121,12 @@ export default function WorkbenchConfigurationEditor({
   useEffect(() => {
     if (!loaded) void load(true);
   }, [load, loaded]);
+
+  useEffect(() => {
+    if (!initial || dirty) return;
+    setLoaded(initial);
+    setDraft(cloneConfig(initial.config));
+  }, [dirty, initial]);
 
   useEffect(() => {
     const preventLoss = (event: BeforeUnloadEvent) => {
@@ -318,6 +325,8 @@ export default function WorkbenchConfigurationEditor({
           </button>
         </div>
       </div>
+
+      <WorkbenchModelScopeCredentials organization={organization} />
 
       <div className="mt-4 flex gap-1 border-b border-white/10" role="tablist">
         {(["devices", "people", "staffing"] as const).map((value) => (

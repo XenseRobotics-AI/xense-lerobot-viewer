@@ -8,6 +8,7 @@ import {
   readDatasetCollectorSerialNumber,
   readDatasetHardwareRobotId,
   readDatasetHardwareValue,
+  readDatasetXumiDeviceInfo,
 } from "@/lib/local-datasets-discovery";
 import { addLocation } from "@/lib/dataset-locations-store";
 import { decodeLocalDatasetPath } from "@/utils/datasetRoute";
@@ -131,6 +132,58 @@ describe("readDatasetCollectorSerialNumber", () => {
         episodes: [{ devices: { collector: { serial_number: null } } }],
       }),
     ).toBeNull();
+  });
+});
+
+describe("readDatasetXumiDeviceInfo", () => {
+  test("reads the collector identity and left gripper from XUMI devices", () => {
+    expect(
+      readDatasetXumiDeviceInfo({
+        episodes: [
+          {
+            devices: {
+              collector: { serial_number: "TCGU01A31Z0015B" },
+              grippers: {
+                left: { serial_number: "TCGU01A28Z0069m" },
+              },
+            },
+          },
+        ],
+      }),
+    ).toEqual({
+      collectorSerialNumber: "TCGU01A31Z0015B",
+      robotId: null,
+      leftGripperSn: "TCGU01A28Z0069m",
+    });
+  });
+
+  test("supports devices.robot and gripper_sn aliases from the latest episode", () => {
+    expect(
+      readDatasetXumiDeviceInfo({
+        episodes: [
+          {
+            devices: {
+              robot: { id: "xtac_umi_g1_3" },
+              grippers: {
+                left: { serial_number: "old-left-gripper" },
+              },
+            },
+          },
+          {
+            devices: {
+              robot: { serial_number: "xtac_umi_g1_4" },
+              grippers: {
+                left: { gripper_sn: "new-left-gripper" },
+              },
+            },
+          },
+        ],
+      }),
+    ).toEqual({
+      collectorSerialNumber: null,
+      robotId: "xtac_umi_g1_4",
+      leftGripperSn: "new-left-gripper",
+    });
   });
 });
 describe("directorySizeBytes", () => {

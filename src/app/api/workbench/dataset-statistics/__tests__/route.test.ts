@@ -36,6 +36,17 @@ async function writeCatalog(value: Record<string, unknown>): Promise<void> {
   );
 }
 
+async function writeModelScopeCatalog(
+  value: Record<string, unknown>,
+): Promise<void> {
+  const directory = path.join(root, ".xense-viewer", "modelscope-catalog");
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(
+    path.join(directory, "TacVerse.json"),
+    JSON.stringify(value),
+  );
+}
+
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "tacverse-statistics-route-"));
   process.env.LOCAL_DATASET_ROOT = root;
@@ -153,7 +164,9 @@ describe("TacVerse dataset statistics route", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       organization: "TacVerse",
+      source: "huggingface",
       refreshedAt: null,
+      refreshedAtBySource: { huggingface: null },
       categoryFilter: [],
       hubTotal: 0,
       categoryTotal: 0,
@@ -373,5 +386,77 @@ describe("TacVerse dataset statistics route", () => {
       categoryWarning: null,
       episodes: null,
     });
+  });
+
+  test("reads ModelScope catalogs and can combine both Hub sources", async () => {
+    await writeLocalDataset("TacVerse/taccap-g1-valid-task-0905");
+    await writeCatalog({
+      org: "TacVerse",
+      refreshedAt: "2026-09-05T08:00:00Z",
+      datasets: [
+        {
+          repoId: "TacVerse/taccap-g1-valid-task-0905",
+          totalEpisodes: 12,
+          totalFrames: 43_200,
+          fps: 30,
+          downloads: 17,
+        },
+      ],
+    });
+    await writeModelScopeCatalog({
+      org: "TacVerse",
+      refreshedAt: "2026-09-06T08:00:00Z",
+      datasets: [
+        {
+          repoId: "TacVerse/taccap-g1-valid-task-0905",
+          hubRepoId: "XenseRobotics/TacVerse",
+          hubPath: "taccap-g1-valid-task-0905",
+          totalEpisodes: 15,
+          totalFrames: 54_000,
+          fps: 30,
+          downloads: 23,
+        },
+      ],
+    });
+
+    const modelscopeResponse = await GET(
+      new Request(
+        "http://localhost/api/workbench/dataset-statistics?source=modelscope",
+      ),
+    );
+    const modelscope = await modelscopeResponse.json();
+    expect(modelscope).toMatchObject({
+      source: "modelscope",
+      refreshedAt: "2026-09-06T08:00:00Z",
+      hubTotal: 1,
+      categoryTotal: 1,
+    });
+    expect(modelscope.datasets[0]).toMatchObject({
+      source: "modelscope",
+      episodes: 15,
+      frames: 54_000,
+      hubRepoId: "XenseRobotics/TacVerse",
+      hubPath: "taccap-g1-valid-task-0905",
+      hubUrl:
+        "https://modelscope.cn/datasets/XenseRobotics/TacVerse/tree/master/taccap-g1-valid-task-0905",
+      localStatus: "downloaded",
+    });
+
+    const bothResponse = await GET(
+      new Request(
+        "http://localhost/api/workbench/dataset-statistics?source=both",
+      ),
+    );
+    const both = await bothResponse.json();
+    expect(both).toMatchObject({
+      source: "both",
+      refreshedAt: "2026-09-06T08:00:00Z",
+      hubTotal: 2,
+      categoryTotal: 2,
+    });
+    expect(both.datasets.map((row: { source: string }) => row.source)).toEqual([
+      "huggingface",
+      "modelscope",
+    ]);
   });
 });

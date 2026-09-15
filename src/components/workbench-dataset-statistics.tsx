@@ -17,6 +17,7 @@ import {
   type TacverseDatasetSort,
   type TacverseDatasetStatisticsResponse,
   type TacverseDatasetStatisticsRow,
+  type TacverseDatasetStatisticsSourceSelection,
   type TacverseLocalStatus,
 } from "@/utils/tacverseDatasetStatistics";
 
@@ -90,9 +91,15 @@ function localBadge(status: TacverseLocalStatus, t: ReturnType<typeof useT>) {
 
 export default function WorkbenchDatasetStatistics({
   categoryFilter = EMPTY_TACVERSE_HUB_CATEGORY_SELECTION,
+  statisticsSource = "huggingface",
+  onStatisticsSourceChange,
   refreshToken = 0,
 }: {
   categoryFilter?: TacverseHubCategorySelection;
+  statisticsSource?: TacverseDatasetStatisticsSourceSelection;
+  onStatisticsSourceChange?: (
+    source: TacverseDatasetStatisticsSourceSelection,
+  ) => void;
   refreshToken?: number;
 }) {
   const t = useT();
@@ -105,6 +112,8 @@ export default function WorkbenchDatasetStatistics({
   const [query, setQuery] = useState("");
   const [issuesOnly, setIssuesOnly] = useState(false);
   const [sort, setSort] = useState<TacverseDatasetSort>("updated");
+  const [catalogRefreshing, setCatalogRefreshing] = useState(false);
+  const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(
     () => new Set(),
@@ -124,7 +133,9 @@ export default function WorkbenchDatasetStatistics({
       "/api/workbench/dataset-statistics?category=" +
         encodeURIComponent(
           serializeTacverseHubCategorySelection(categoryFilter),
-        ),
+        ) +
+        "&source=" +
+        encodeURIComponent(statisticsSource),
       {
         cache: "no-store",
         signal: controller.signal,
@@ -160,7 +171,84 @@ export default function WorkbenchDatasetStatistics({
       });
 
     return () => controller.abort();
-  }, [categoryFilter, refreshToken, retryToken, t]);
+  }, [
+    categoryFilter,
+    catalogRefreshToken,
+    refreshToken,
+    retryToken,
+    statisticsSource,
+    t,
+  ]);
+
+  const refreshCatalog = async () => {
+    setCatalogRefreshing(true);
+    setError(null);
+    const sources =
+      statisticsSource === "both"
+        ? (["huggingface", "modelscope"] as const)
+        : ([statisticsSource] as const);
+    try {
+      for (const source of sources) {
+        const response = await fetch(
+          source === "modelscope"
+            ? "/api/modelscope/catalog"
+            : "/api/hf/catalog",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(
+              source === "modelscope" ? {} : { org: "TacVerse" },
+            ),
+            cache: "no-store",
+          },
+        );
+        if (!response.ok) {
+          const result = (await response.json().catch(() => ({}))) as {
+            error?: string;
+          };
+          throw new Error(
+            result.error ||
+              `${t("workbench.statisticsRefreshFailed")} (${response.status})`,
+          );
+        }
+        if (!response.body) {
+          throw new Error(t("workbench.statisticsStreamMissing"));
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split(/\r?\n/u);
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const event = JSON.parse(line) as { type?: string; error?: string };
+            if (event.type === "error") {
+              throw new Error(
+                event.error || t("workbench.statisticsRefreshFailedFallback"),
+              );
+            }
+          }
+        }
+        if (buffer.trim()) {
+          const event = JSON.parse(buffer) as { type?: string; error?: string };
+          if (event.type === "error") {
+            throw new Error(
+              event.error || t("workbench.statisticsRefreshFailedFallback"),
+            );
+          }
+        }
+      }
+      setCatalogRefreshToken((value) => value + 1);
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setCatalogRefreshing(false);
+    }
+  };
 
   const summary = useMemo(
     () =>
@@ -254,20 +342,50 @@ export default function WorkbenchDatasetStatistics({
               : ` · ${t("workbench.notRefreshed")}`}
           </p>
         </div>
-        <label className="flex items-center gap-2 text-[10px] text-slate-500">
-          {t("workbench.sort")}
-          <select
-            value={sort}
-            onChange={(event) =>
-              setSort(event.target.value as TacverseDatasetSort)
-            }
-            aria-label={t("workbench.sortTacVerse")}
-            className="rounded-md border border-white/10 bg-[var(--surface-1)] px-2 py-1.5 text-xs text-slate-200 focus:border-cyan-400 focus:outline-none"
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 text-[10px] text-slate-500">
+            {t("workbench.statisticsSource")}
+            <select
+              value={statisticsSource}
+              onChange={(event) =>
+                onStatisticsSourceChange?.(
+                  event.target
+                    .value as TacverseDatasetStatisticsSourceSelection,
+                )
+              }
+              aria-label={t("workbench.statisticsSource")}
+              className="rounded-md border border-white/10 bg-[var(--surface-1)] px-2 py-1.5 text-xs text-slate-200 focus:border-cyan-400 focus:outline-none"
+            >
+              <option value="huggingface">{t("workbench.huggingFace")}</option>
+              <option value="modelscope">{t("workbench.modelScope")}</option>
+              <option value="both">{t("workbench.bothSources")}</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => void refreshCatalog()}
+            disabled={catalogRefreshing}
+            className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-2.5 py-1.5 text-[10px] text-cyan-100 transition-colors hover:border-cyan-300/60 hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <option value="updated">{t("workbench.recentlyUpdated")}</option>
-            <option value="created">{t("workbench.recentlyCreated")}</option>
-          </select>
-        </label>
+            {catalogRefreshing
+              ? t("workbench.refreshingStatistics")
+              : t("workbench.refreshStatistics")}
+          </button>
+          <label className="flex items-center gap-2 text-[10px] text-slate-500">
+            {t("workbench.sort")}
+            <select
+              value={sort}
+              onChange={(event) =>
+                setSort(event.target.value as TacverseDatasetSort)
+              }
+              aria-label={t("workbench.sortTacVerse")}
+              className="rounded-md border border-white/10 bg-[var(--surface-1)] px-2 py-1.5 text-xs text-slate-200 focus:border-cyan-400 focus:outline-none"
+            >
+              <option value="updated">{t("workbench.recentlyUpdated")}</option>
+              <option value="created">{t("workbench.recentlyCreated")}</option>
+            </select>
+          </label>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
@@ -350,11 +468,14 @@ export default function WorkbenchDatasetStatistics({
       )}
 
       <div className="mt-3 max-h-[34rem] overflow-auto rounded-md border border-white/10">
-        <table className="w-full min-w-[1080px] border-collapse text-left text-xs">
+        <table className="w-full min-w-[1180px] border-collapse text-left text-xs">
           <thead className="sticky top-0 z-10 bg-[var(--surface-2)] text-[10px] uppercase tracking-wider text-slate-400">
             <tr>
               <th className="px-3 py-2.5 font-medium">
                 {t("workbench.dataset")}
+              </th>
+              <th className="px-3 py-2.5 font-medium">
+                {t("workbench.statisticsSource")}
               </th>
               <th className="px-3 py-2.5 font-medium">robot_type</th>
               <th className="px-3 py-2.5 font-medium">
@@ -394,6 +515,7 @@ export default function WorkbenchDatasetStatistics({
                     ? (item.hours * 3600) / item.episodes
                     : null;
                 const mixedRobotTypes = item.robotTypes.length > 1;
+                const itemKey = `${item.source ?? "huggingface"}:${item.repoId}`;
                 return (
                   <>
                     <td className="max-w-[24rem] px-3 py-2.5">
@@ -407,22 +529,21 @@ export default function WorkbenchDatasetStatistics({
                         {!child && item.rowType === "folder" && (
                           <button
                             type="button"
-                            aria-expanded={expandedFolders.has(item.repoId)}
+                            aria-expanded={expandedFolders.has(itemKey)}
                             aria-label={t("workbench.toggleChildren", {
                               repo: item.repoId,
                             })}
                             onClick={() =>
                               setExpandedFolders((current) => {
                                 const next = new Set(current);
-                                if (next.has(item.repoId))
-                                  next.delete(item.repoId);
-                                else next.add(item.repoId);
+                                if (next.has(itemKey)) next.delete(itemKey);
+                                else next.add(itemKey);
                                 return next;
                               })
                             }
                             className="mt-0.5 w-4 shrink-0 text-cyan-300"
                           >
-                            {expandedFolders.has(item.repoId) ? "▾" : "▸"}
+                            {expandedFolders.has(itemKey) ? "▾" : "▸"}
                           </button>
                         )}
                         <div className="min-w-0">
@@ -471,6 +592,11 @@ export default function WorkbenchDatasetStatistics({
                         </div>
                       </div>
                     </td>
+                    <td className="px-3 py-2.5 text-slate-400">
+                      {item.source === "modelscope"
+                        ? t("workbench.modelScope")
+                        : t("workbench.huggingFace")}
+                    </td>
                     <td
                       className="px-3 py-2.5 text-slate-400"
                       title={
@@ -516,14 +642,15 @@ export default function WorkbenchDatasetStatistics({
                   </>
                 );
               };
+              const rowKey = `${row.source ?? "huggingface"}:${row.repoId}`;
               return (
-                <Fragment key={row.repoId}>
+                <Fragment key={rowKey}>
                   <tr className="hover:bg-white/[0.025]">{renderCells(row)}</tr>
                   {row.rowType === "folder" &&
-                    expandedFolders.has(row.repoId) &&
+                    expandedFolders.has(rowKey) &&
                     row.children.map((child) => (
                       <tr
-                        key={child.repoId}
+                        key={`${child.source ?? row.source ?? "huggingface"}:${child.repoId}`}
                         className="bg-cyan-400/[0.025] hover:bg-cyan-400/[0.05]"
                       >
                         {renderCells(child, true)}

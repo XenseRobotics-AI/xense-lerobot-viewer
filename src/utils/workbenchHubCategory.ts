@@ -62,19 +62,44 @@ function pathSegments(value: string): string[] {
   return value.split(/[\\/]+/u).filter(Boolean);
 }
 
-/** True when the final path segment ends in a real 2026 MMDD date. */
-export function hasValidWorkbenchMonthDaySuffix(value: string): boolean {
+export type WorkbenchDateSuffix = {
+  year: number | null;
+  month: number;
+  day: number;
+};
+
+/**
+ * Parse the date suffixes used by the corpus:
+ * - `-MMDD` uses the catalog/update year as its year;
+ * - `-YYMMDD` carries the two-digit year explicitly (`260915` -> 2026-09-15).
+ */
+export function parseWorkbenchDateSuffix(
+  value: string,
+): WorkbenchDateSuffix | null {
   const leaf = pathSegments(value).at(-1) ?? "";
-  const match = /-(\d{2})(\d{2})$/u.exec(leaf);
-  if (!match) return false;
-  const month = Number(match[1]);
-  const day = Number(match[2]);
-  const candidate = new Date(Date.UTC(2026, month - 1, day));
-  return (
-    candidate.getUTCFullYear() === 2026 &&
-    candidate.getUTCMonth() === month - 1 &&
-    candidate.getUTCDate() === day
-  );
+  const explicit = /-(\d{2})(\d{2})(\d{2})$/u.exec(leaf);
+  const monthDay = /-(\d{2})(\d{2})$/u.exec(leaf);
+  const match = explicit ?? monthDay;
+  if (!match) return null;
+
+  const year = explicit ? 2000 + Number(match[1]) : null;
+  const month = Number(explicit ? match[2] : match[1]);
+  const day = Number(explicit ? match[3] : match[2]);
+  const validationYear = year ?? 2026;
+  const candidate = new Date(Date.UTC(validationYear, month - 1, day));
+  if (
+    candidate.getUTCFullYear() !== validationYear ||
+    candidate.getUTCMonth() !== month - 1 ||
+    candidate.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return { year, month, day };
+}
+
+/** True when the final path segment ends in a real corpus date. */
+export function hasValidWorkbenchMonthDaySuffix(value: string): boolean {
+  return parseWorkbenchDateSuffix(value) !== null;
 }
 
 /** Accept only canonical `<organization>/<name>` Hub repository ids. */
@@ -85,6 +110,25 @@ export function canonicalHubRepoId(
   const value = repoId.trim();
   const segments = value.split("/");
   if (segments.length !== 2 || segments[0] !== organization || !segments[1]) {
+    return null;
+  }
+  return value;
+}
+
+/** Accept canonical Hub dataset paths with one or more path segments. */
+export function canonicalHubDatasetPath(
+  repoId: string,
+  organization: string,
+): string | null {
+  const value = repoId.trim();
+  const segments = value.split("/");
+  if (
+    segments.length < 2 ||
+    segments[0] !== organization ||
+    !segments
+      .slice(1)
+      .every((segment) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(segment))
+  ) {
     return null;
   }
   return value;
@@ -106,9 +150,10 @@ function isFolderLayout(input: TacverseHubClassificationInput): boolean {
 export function classifyTacverseHubRepository(
   input: TacverseHubClassificationInput,
 ): TacverseHubClassification {
-  const canonical = canonicalTacverseRepoId(input.repoId);
+  const canonical = canonicalHubDatasetPath(input.repoId, "TacVerse");
   if (!canonical) return { category: "other", warning: null };
-  const name = canonical.slice("TacVerse/".length);
+  if (bucketOf(canonical) !== null) return { category: "other", warning: null };
+  const name = pathSegments(canonical).at(-1) ?? "";
 
   if (isFolderLayout(input)) return { category: "folder", warning: null };
   if (WORKBENCH_TACFLOW_DATASET_NAMES.has(name)) {
@@ -254,16 +299,20 @@ export function hubRepoIdForLocalDatasetPath(
   relativePath: string,
   organization = "TacVerse",
   folderRepoIds: ReadonlySet<string> = new Set(),
+  datasetRepoIds: ReadonlySet<string> = new Set(),
 ): string | null {
   const segments = pathSegments(relativePath);
   if (segments[0] !== organization) return null;
   if (segments.length === 2) return `${organization}/${segments[1]}`;
+  const nestedRepo = `${organization}/${segments.slice(1).join("/")}`;
+  if (datasetRepoIds.has(nestedRepo)) return nestedRepo;
   if (segments.length >= 3 && bucketOf(relativePath) !== null) {
     return `${organization}/${segments.at(-1)}`;
   }
   if (segments.length === 3) {
     const parent = `${organization}/${segments[1]}`;
-    return folderRepoIds.has(parent) ? parent : null;
+    if (folderRepoIds.has(parent)) return parent;
+    return null;
   }
   return null;
 }

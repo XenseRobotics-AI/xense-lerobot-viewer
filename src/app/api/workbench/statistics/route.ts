@@ -3,9 +3,15 @@ import { readCorpusHistory } from "@/lib/corpus-history-store";
 import { readDatasetTasks } from "@/lib/dataset-quality-loader";
 import { readRawHfCatalog, type HfCatalogEntry } from "@/lib/hf-catalog-cache";
 import {
+  readModelScopeDeviceEvidence,
+  readRawModelScopeCatalog,
+} from "@/lib/modelscope-catalog-cache";
+import {
   discoverLocalDatasets,
   hasLocalDatasetInfoField,
 } from "@/lib/local-datasets-discovery";
+import { EMPTY_TAGS } from "@/lib/dataset-tags";
+import { EMPTY_FACETS, type DatasetFacets } from "@/lib/dataset-facets";
 import { readWorkbenchConfiguration } from "@/lib/workbench-configuration-store";
 import {
   defaultWorkbenchRewardRules,
@@ -16,6 +22,7 @@ import type { WorkbenchDatasetScore } from "@/types/workbench-score.types";
 import { type DateEvidence } from "@/lib/dataset-facets";
 import { WORKBENCH_UPLOADER_NAMES } from "@/utils/workbenchUploaderNames";
 import {
+  canonicalHubDatasetPath,
   canonicalHubRepoId,
   classifyTacverseHubRepository,
   countTacverseHubCategories,
@@ -28,6 +35,7 @@ import {
   type TacverseHubCategorySelection,
   type TacverseHubClassificationInput,
 } from "@/utils/workbenchHubCategory";
+import { encodeLocalDatasetPath } from "@/utils/datasetRoute";
 import { computeCorpusStats } from "@/utils/corpusStats";
 import {
   computeDailyDelta,
@@ -42,10 +50,13 @@ import {
   workbenchDatasetSuffixDay,
   workbenchDatasetSourceKey,
   workbenchDatasetSourceLabel,
-  getWorkbenchDatasetIdentity,
   type WorkbenchDailyAddition,
   type WorkbenchDatasetSourceKey,
 } from "@/utils/workbenchRollup";
+import type {
+  TacverseDatasetStatisticsSource,
+  TacverseDatasetStatisticsSourceSelection,
+} from "@/utils/tacverseDatasetStatistics";
 import {
   filterWorkbenchStatisticsDatasets,
   type WorkbenchStatisticsFilterSummary,
@@ -88,10 +99,16 @@ type WorkbenchDatasetSummary = Awaited<
   dateEvidence?: DateEvidence;
   capturedFrom?: string | null;
   capturedTo?: string | null;
+  /** True when this row is backed by Hub metadata but not a local download. */
+  remoteOnly?: boolean;
 };
 
 export type WorkbenchStatisticsResponseFilter =
   WorkbenchStatisticsFilterSummary;
+
+type LocalDataset = Awaited<
+  ReturnType<typeof discoverLocalDatasets>
+>["datasets"][number];
 
 function metadataFromCatalogEntry(
   entry: HfCatalogEntry | undefined,
@@ -250,9 +267,7 @@ function datasetHours(
 }
 
 function dailyAdditionsForDataset(
-  dataset: Awaited<
-    ReturnType<typeof discoverLocalDatasets>
-  >["datasets"][number],
+  dataset: LocalDataset & { remoteOnly?: boolean },
   remote: HfCatalogEntry | undefined,
   localSource: Awaited<
     ReturnType<typeof discoverLocalDatasets>
@@ -262,8 +277,13 @@ function dailyAdditionsForDataset(
     dataset.relativePath,
     remote?.lastModified,
   );
-  if (!suffixDay) return [];
-  if (!getWorkbenchDatasetIdentity(dataset)) return [];
+  // A date suffix is enough to assign a real capture day, but a metadata-only
+  // directory without payload must not create production-day additions. A
+  // remote-only ModelScope row is the exception: its payload totals come from
+  // the repository's meta/info.json and are valid for statistics.
+  if (!suffixDay || (!dataset.integrity.hasData && !dataset.remoteOnly)) {
+    return [];
+  }
   return [
     {
       day: suffixDay,
@@ -350,7 +370,11 @@ function applyCatalogMetadata(
 
 type WorkbenchHubScope = {
   entries: Map<string, { entry: HfCatalogEntry; rank: number }>;
+  modelScopeEntries: Map<string, { entry: HfCatalogEntry; rank: number }>;
   refreshedAt: string | null;
+  refreshedAtBySource: Partial<
+    Record<TacverseDatasetStatisticsSource, string | null>
+  >;
   hubTotal: number;
   categoryTotal: number;
   categoryCounts: TacverseHubCategoryCounts;
@@ -368,60 +392,291 @@ function hubCategoryInput(
   };
 }
 
+function mergeCatalogEntries(
+  primary: HfCatalogEntry,
+  fallback: HfCatalogEntry,
+): HfCatalogEntry {
+  const merged: HfCatalogEntry = { ...fallback, ...primary };
+  const fallbackFields = [
+    "createdAt",
+    "lastModified",
+    "downloads",
+    "storageBytes",
+    "totalEpisodes",
+    "totalFrames",
+    "totalTasks",
+    "fps",
+    "durationHours",
+    "robotType",
+    "collectorSerialNumber",
+    "robotId",
+    "leftGripperSn",
+    "uploader",
+    "uploaderDisplayName",
+    "sha",
+  ] as const;
+  for (const field of fallbackFields) {
+    if (merged[field] == null && fallback[field] != null) {
+      Object.assign(merged, { [field]: fallback[field] });
+    }
+  }
+  if (
+    primary.metadataState === "error" &&
+    fallback.metadataState &&
+    fallback.metadataState !== "error"
+  ) {
+    merged.metadataState = fallback.metadataState;
+    if (!primary.metadataError) delete merged.metadataError;
+  }
+  return merged;
+}
+
 async function readCatalogByRepo(
   root: string,
   organization: string,
   category: TacverseHubCategorySelection,
+  sourceSelection: TacverseDatasetStatisticsSourceSelection,
 ): Promise<WorkbenchHubScope> {
-  try {
-    const catalog = await readRawHfCatalog(root, organization);
-    const rawEntries = Array.isArray(catalog.datasets) ? catalog.datasets : [];
-    const entries = rawEntries.flatMap((entry) => {
-      const repoId = canonicalHubRepoId(
-        String(entry.repoId ?? ""),
-        organization,
-      );
+  const sources: readonly TacverseDatasetStatisticsSource[] =
+    sourceSelection === "both"
+      ? ["huggingface", "modelscope"]
+      : [sourceSelection];
+  const catalogs = await Promise.all(
+    sources.map(async (source) => {
+      try {
+        const catalog =
+          source === "modelscope"
+            ? await readRawModelScopeCatalog(root, organization)
+            : await readRawHfCatalog(root, organization);
+        return { source, catalog };
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+          return { source, catalog: null };
+        }
+        throw error;
+      }
+    }),
+  );
+  const loadedCatalogs = catalogs.filter(
+    (
+      item,
+    ): item is {
+      source: TacverseDatasetStatisticsSource;
+      catalog: {
+        datasets?: HfCatalogEntry[];
+        refreshedAt?: string | null;
+      };
+    } => item.catalog !== null,
+  );
+  const categoryCounts = { ...EMPTY_TACVERSE_HUB_CATEGORY_COUNTS };
+  const folderRepoIds = new Set<string>();
+  const preferredEntries = new Map<
+    string,
+    { entry: HfCatalogEntry; rank: number }
+  >();
+  const modelScopeEntries = new Map<
+    string,
+    { entry: HfCatalogEntry; rank: number }
+  >();
+  const selectedRepoIds = new Set<string>();
+  let hubTotal = 0;
+  let categoryTotal = 0;
+
+  // HF is deliberately processed first so `both` keeps its metadata whenever
+  // the same repository exists in both catalogs.
+  for (const { source, catalog } of loadedCatalogs) {
+    const entries = (
+      Array.isArray(catalog.datasets) ? catalog.datasets : []
+    ).flatMap((entry) => {
+      const rawRepoId = String(entry.repoId ?? "");
+      const repoId =
+        source === "modelscope"
+          ? canonicalHubDatasetPath(rawRepoId, organization)
+          : canonicalHubRepoId(rawRepoId, organization);
       return repoId ? [{ ...entry, repoId }] : [];
     });
-    const categoryCounts = countTacverseHubCategories(
-      entries.map(hubCategoryInput),
-    );
-    const folderRepoIds = new Set(
-      entries
-        .filter(
-          (entry) =>
-            classifyTacverseHubRepository(hubCategoryInput(entry)).category ===
-            "folder",
-        )
-        .map((entry) => entry.repoId),
-    );
+    const counts = countTacverseHubCategories(entries.map(hubCategoryInput));
+    for (const key of Object.keys(categoryCounts) as Array<
+      keyof typeof categoryCounts
+    >) {
+      categoryCounts[key] += counts[key];
+    }
+    hubTotal += entries.length;
     const selectedEntries = entries.filter((entry) =>
       matchesTacverseHubCategory(hubCategoryInput(entry), category),
     );
-    return {
-      entries: new Map(
-        selectedEntries.map((entry, rank) => [entry.repoId, { entry, rank }]),
-      ),
-      refreshedAt:
-        typeof catalog.refreshedAt === "string" ? catalog.refreshedAt : null,
-      hubTotal: entries.length,
-      categoryTotal: selectedEntries.length,
-      categoryCounts,
-      folderRepoIds,
-    };
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return {
-        entries: new Map(),
-        refreshedAt: null,
-        hubTotal: 0,
-        categoryTotal: 0,
-        categoryCounts: EMPTY_TACVERSE_HUB_CATEGORY_COUNTS,
-        folderRepoIds: new Set(),
-      };
+    categoryTotal += selectedEntries.length;
+    for (const entry of entries) {
+      if (
+        classifyTacverseHubRepository(hubCategoryInput(entry)).category ===
+        "folder"
+      ) {
+        folderRepoIds.add(entry.repoId);
+      }
+      if (!preferredEntries.has(entry.repoId)) {
+        preferredEntries.set(entry.repoId, {
+          entry,
+          rank: preferredEntries.size,
+        });
+      } else {
+        const preferred = preferredEntries.get(entry.repoId);
+        if (preferred) {
+          preferred.entry = mergeCatalogEntries(preferred.entry, entry);
+        }
+      }
     }
-    throw error;
+    for (const entry of selectedEntries) selectedRepoIds.add(entry.repoId);
+    if (source === "modelscope") {
+      for (const entry of selectedEntries) {
+        const preferred = preferredEntries.get(entry.repoId);
+        if (preferred) modelScopeEntries.set(entry.repoId, preferred);
+      }
+    }
   }
+
+  return {
+    entries: new Map(
+      [...selectedRepoIds]
+        .map((repoId) => {
+          const preferred = preferredEntries.get(repoId);
+          return preferred ? [repoId, preferred] : null;
+        })
+        .filter(
+          (item): item is [string, { entry: HfCatalogEntry; rank: number }] =>
+            item !== null,
+        ),
+    ),
+    modelScopeEntries,
+    refreshedAt: latestCatalogTimestamp(
+      loadedCatalogs.map(({ catalog }) =>
+        typeof catalog.refreshedAt === "string" ? catalog.refreshedAt : null,
+      ),
+    ),
+    refreshedAtBySource: Object.fromEntries(
+      sources.map((source) => [
+        source,
+        loadedCatalogs.find((item) => item.source === source)?.catalog
+          .refreshedAt ?? null,
+      ]),
+    ) as Partial<Record<TacverseDatasetStatisticsSource, string | null>>,
+    hubTotal,
+    categoryTotal,
+    categoryCounts,
+    folderRepoIds,
+  };
+}
+
+function remoteDatasetFacets(relativePath: string): DatasetFacets {
+  const leaf =
+    relativePath
+      .split(/[\\/]+/u)
+      .filter(Boolean)
+      .at(-1) ?? "";
+  const explicit = /-(\d{2})(\d{2})(\d{2})$/u.exec(leaf);
+  const monthDay = /-(\d{2})(\d{2})$/u.exec(leaf);
+  const match = explicit ?? monthDay;
+  if (!match) return { ...EMPTY_FACETS };
+  const year = explicit ? 2000 + Number(match[1]) : 2026;
+  const month = Number(explicit ? match[2] : match[1]);
+  const day = Number(explicit ? match[3] : match[2]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return { ...EMPTY_FACETS };
+  }
+  const captureDay = date.toISOString().slice(0, 10);
+  return {
+    ...EMPTY_FACETS,
+    capturedFrom: captureDay,
+    capturedTo: captureDay,
+    dateEvidence: "name",
+  };
+}
+
+function remoteOnlyDataset(
+  entry: HfCatalogEntry,
+): LocalDataset & { remoteOnly: true } {
+  const relativePath = String(entry.repoId ?? "");
+  const totalEpisodes = asNumber(entry.totalEpisodes) ?? 0;
+  const totalFrames = asNumber(entry.totalFrames) ?? 0;
+  const totalTasks = asNumber(entry.totalTasks) ?? 0;
+  const fps = asNumber(entry.fps) ?? 0;
+  const facets = remoteDatasetFacets(relativePath);
+  return {
+    relativePath,
+    encodedPath: encodeLocalDatasetPath(relativePath),
+    codebase_version: "remote-meta",
+    robot_type: typeof entry.robotType === "string" ? entry.robotType : null,
+    collectorSerialNumber:
+      typeof entry.collectorSerialNumber === "string"
+        ? entry.collectorSerialNumber
+        : null,
+    robotId: typeof entry.robotId === "string" ? entry.robotId : null,
+    leftGripperSn:
+      typeof entry.leftGripperSn === "string" ? entry.leftGripperSn : null,
+    total_episodes: totalEpisodes,
+    total_frames: totalFrames,
+    total_tasks: totalTasks,
+    fps,
+    sizeBytes: 0,
+    thumbnailVideoUrl: null,
+    integrity: {
+      hasData: false,
+      hasVideos: false,
+      hasEpisodes: totalEpisodes > 0,
+      status: "incomplete",
+    },
+    tags: { ...EMPTY_TAGS },
+    facets,
+    remoteOnly: true,
+  };
+}
+
+function latestCatalogTimestamp(
+  values: readonly (string | null)[],
+): string | null {
+  return (
+    values
+      .filter((value): value is string => Boolean(value))
+      .sort((left, right) => Date.parse(right) - Date.parse(left))[0] ?? null
+  );
+}
+
+function localDatasetRank(dataset: LocalDataset): number {
+  if (dataset.integrity.status === "ok") return 0;
+  if (dataset.integrity.status === "empty") return 1;
+  return 2;
+}
+
+function dedupeLocalDatasetsByRepo(
+  datasets: readonly LocalDataset[],
+  organization: string,
+  folderRepoIds: ReadonlySet<string>,
+  datasetRepoIds: ReadonlySet<string>,
+): LocalDataset[] {
+  const byRepo = new Map<string, LocalDataset>();
+  for (const dataset of datasets) {
+    const repoId = hubRepoIdForLocalDatasetPath(
+      dataset.relativePath,
+      organization,
+      folderRepoIds,
+      datasetRepoIds,
+    );
+    if (!repoId) continue;
+    const current = byRepo.get(repoId);
+    if (
+      !current ||
+      localDatasetRank(dataset) < localDatasetRank(current) ||
+      (localDatasetRank(dataset) === localDatasetRank(current) &&
+        dataset.relativePath.localeCompare(current.relativePath) < 0)
+    ) {
+      byRepo.set(repoId, dataset);
+    }
+  }
+  return [...byRepo.values()];
 }
 
 function catalogEntryForLocalDataset(
@@ -429,11 +684,13 @@ function catalogEntryForLocalDataset(
   organization: string,
   relativePath: string,
   folderRepoIds: ReadonlySet<string>,
+  datasetRepoIds: ReadonlySet<string>,
 ): { entry: HfCatalogEntry; rank: number } | undefined {
   const repoId = hubRepoIdForLocalDatasetPath(
     relativePath,
     organization,
     folderRepoIds,
+    datasetRepoIds,
   );
   if (!repoId) return undefined;
   const matched = catalog.get(repoId);
@@ -467,33 +724,85 @@ export async function GET(request: Request): Promise<Response> {
       );
     }
     const categoryFilter = parseTacverseHubCategorySelection(requestedCategory);
+    const requestedSource = searchParams.get("source");
+    const source: TacverseDatasetStatisticsSourceSelection | null =
+      !requestedSource ||
+      requestedSource === "huggingface" ||
+      requestedSource === "hf"
+        ? "huggingface"
+        : requestedSource === "modelscope" || requestedSource === "ms"
+          ? "modelscope"
+          : requestedSource === "both"
+            ? "both"
+            : null;
+    if (!source) {
+      return Response.json(
+        {
+          error: "source must be one of: huggingface, modelscope, both.",
+        },
+        { status: 400 },
+      );
+    }
 
     const discovery = await discoverLocalDatasets();
     const hubScope = await readCatalogByRepo(
       discovery.root,
       organization,
       categoryFilter,
+      source,
     );
+    const catalogRepoIds = new Set(hubScope.entries.keys());
     const organizationDatasets = discovery.datasets.filter(
       (dataset) => getDatasetPrefix(dataset.relativePath) === organization,
     );
-    const hubScopedDatasets = organizationDatasets.filter((dataset) =>
+    const matchedDatasets = organizationDatasets.filter((dataset) =>
       Boolean(
         catalogEntryForLocalDataset(
           hubScope.entries,
           organization,
           dataset.relativePath,
           hubScope.folderRepoIds,
+          catalogRepoIds,
         ),
       ),
     );
-    const filteredDatasets =
-      filterWorkbenchStatisticsDatasets(hubScopedDatasets);
+    const hubScopedDatasets =
+      source === "both"
+        ? dedupeLocalDatasetsByRepo(
+            matchedDatasets,
+            organization,
+            hubScope.folderRepoIds,
+            catalogRepoIds,
+          )
+        : matchedDatasets;
+    const localRepoIds = new Set(
+      hubScopedDatasets
+        .map((dataset) =>
+          hubRepoIdForLocalDatasetPath(
+            dataset.relativePath,
+            organization,
+            hubScope.folderRepoIds,
+            catalogRepoIds,
+          ),
+        )
+        .filter((repoId): repoId is string => repoId !== null),
+    );
+    const modelScopeOnlyDatasets =
+      source === "huggingface"
+        ? []
+        : [...hubScope.modelScopeEntries.entries()]
+            .filter(([repoId]) => !localRepoIds.has(repoId))
+            .map(([, value]) => remoteOnlyDataset(value.entry));
+    const scopedDatasets = [...hubScopedDatasets, ...modelScopeOnlyDatasets];
+    const filteredDatasets = filterWorkbenchStatisticsDatasets(scopedDatasets);
     const datasets = filteredDatasets.included;
     const configuration = await readWorkbenchConfiguration(
       organization,
       discovery.root,
-      organizationDatasets,
+      [
+        ...organizationDatasets,
+        ...(await readModelScopeDeviceEvidence(discovery.root, organization)),
+      ],
     );
     const derivedMappings = workbenchMappingsFromConfiguration(
       configuration.config,
@@ -537,6 +846,7 @@ export async function GET(request: Request): Promise<Response> {
           organization,
           dataset.relativePath,
           hubScope.folderRepoIds,
+          catalogRepoIds,
         )?.entry;
         const withTasks = {
           ...dataset,
@@ -562,12 +872,14 @@ export async function GET(request: Request): Promise<Response> {
         organization,
         left.relativePath,
         hubScope.folderRepoIds,
+        catalogRepoIds,
       );
       const rightCatalog = catalogEntryForLocalDataset(
         catalog,
         organization,
         right.relativePath,
         hubScope.folderRepoIds,
+        catalogRepoIds,
       );
       if (leftCatalog && rightCatalog) {
         return (
@@ -589,6 +901,7 @@ export async function GET(request: Request): Promise<Response> {
         organization,
         replayCandidate.relativePath,
         hubScope.folderRepoIds,
+        catalogRepoIds,
       )?.entry;
       const withTasks = {
         ...replayCandidate,
@@ -630,22 +943,29 @@ export async function GET(request: Request): Promise<Response> {
 
     const locallyMatchedRepoIds = new Set<string>();
     for (const dataset of workbenchDatasets) {
+      if (dataset.remoteOnly) continue;
       const repoId = hubRepoIdForLocalDatasetPath(
         dataset.relativePath,
         organization,
         hubScope.folderRepoIds,
+        catalogRepoIds,
       );
       if (repoId) locallyMatchedRepoIds.add(repoId);
     }
 
     return Response.json({
       datasets: workbenchDatasets,
+      source,
       categoryFilter,
       refreshedAt: hubScope.refreshedAt,
+      refreshedAtBySource: hubScope.refreshedAtBySource,
       hubTotal: hubScope.hubTotal,
       categoryTotal: hubScope.categoryTotal,
       categoryCounts: hubScope.categoryCounts,
       localMatchedTotal: locallyMatchedRepoIds.size,
+      remoteStatisticsTotal: workbenchDatasets.filter(
+        (dataset) => dataset.remoteOnly,
+      ).length,
       displayReplayDataset,
       dataUpdatedAt: latestDataUpdatedAt(workbenchDatasets),
       statisticsFilter: filteredDatasets.summary,

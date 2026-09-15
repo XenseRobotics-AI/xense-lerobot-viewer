@@ -38,6 +38,9 @@ export type HfCatalogEntry = {
   fps?: number | null;
   durationHours?: number | null;
   robotType?: string | null;
+  collectorSerialNumber?: string | null;
+  robotId?: string | null;
+  leftGripperSn?: string | null;
   layout?: "dataset" | "folder";
   children?: HfCatalogFolderChild[];
   metadataState?: "ok" | "error" | "partial" | "unknown";

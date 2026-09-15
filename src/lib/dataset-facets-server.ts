@@ -49,7 +49,7 @@ function span(days: string[]): { from: string; to: string } | null {
  *    timezone, written per recording session. Only this one is a measurement.
  * 2. `meta/tacflow/sessions.json` names each source day-repo; the date comes
  *    from that name's suffix.
- * 3. The dataset directory's own `-MMDD` suffix.
+ * 3. The dataset directory's own `-MMDD` or `-YYMMDD` suffix.
  *
  * Falls through to `none` rather than guessing. A dataset with no evidence is
  * *not* assumed to predate the cutoff — 13.8% of the corpus lands here, and

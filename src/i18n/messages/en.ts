@@ -907,7 +907,7 @@ export const en = {
   "workbench.hubCatalogEmpty": "Hub catalog is empty.",
   "workbench.refreshStatisticsFirst": "Please refresh statistics first.",
   "workbench.hubScope":
-    "Hub scope: {category} repositories in this category, {total} total · Dated {dated} · XTac {xtac} · Merged {merged} · Folder {folder} · Other {other}. Local statistics matched {matched} repositories; {without} Hub repositories without eligible local data do not participate in grouped calculations.",
+    "Hub scope: {category} repositories in this category, {total} total · Dated {dated} · XTac {xtac} · Merged {merged} · Folder {folder} · Other {other}. Local statistics matched {matched} repositories, and {remote} use Hub meta/info.json statistics; {without} repositories still have no usable statistics.",
   "workbench.loadingDashboard": "Loading Workbench dashboard…",
   "workbench.backToCategories": "Back",
   "workbench.datasetsView": "Datasets",
@@ -1021,7 +1021,11 @@ export const en = {
   "workbench.metadataErrors":
     "{count} repositories had metadata errors and are retained with unavailable values.",
   "workbench.toggleChildren": "Toggle children for {repo}",
-  "workbench.openOnHub": "Open {repo} on Hugging Face",
+  "workbench.openOnHub": "Open {repo} on the Hub",
+  "workbench.statisticsSource": "Source",
+  "workbench.huggingFace": "Hugging Face",
+  "workbench.modelScope": "ModelScope",
+  "workbench.bothSources": "Both",
   "workbench.folderChildren": "Folder · {count} children",
   "workbench.partialValues":
     "Known values are aggregated; some child metadata is unavailable.",

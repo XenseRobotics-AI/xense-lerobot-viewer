@@ -16,9 +16,14 @@ describe("name_format", () => {
     });
     expect(result.status).toBe("ok");
     expect(result.message).toBe("符合命名规范");
+    expect(
+      checkDatasetNameFormat({
+        dataset_name: "TacVerse/taccap-g1-place-egg-into-egg-tray-260915",
+      }).status,
+    ).toBe("ok");
   });
 
-  test("rejects missing prefix, task, or four-digit date", () => {
+  test("rejects missing prefix, task, or date suffix", () => {
     for (const dataset_name of [
       "tacverse/taccap-g1-place-egg-into-egg-tray-0816",
       "TacVerse/taccap-g1-place-egg-into-egg-tray",

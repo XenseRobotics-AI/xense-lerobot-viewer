@@ -3,7 +3,10 @@ import type { DateEvidence, DatasetFacets } from "@/lib/dataset-facets";
 import { getDatasetPrefix } from "@/utils/datasetGrouping";
 import { WORKBENCH_UPLOADER_NAMES } from "@/utils/workbenchUploaderNames";
 import { isWorkbenchStatisticsExcludedDataset } from "@/utils/workbenchStatisticsFilter";
-import { hasValidWorkbenchMonthDaySuffix } from "@/utils/workbenchHubCategory";
+import {
+  hasValidWorkbenchMonthDaySuffix,
+  parseWorkbenchDateSuffix,
+} from "@/utils/workbenchHubCategory";
 
 export type WorkbenchRollupDimension =
   | "uploader"
@@ -421,10 +424,10 @@ export function getWorkbenchDefaultDateRange(
   return { startDate: dayKeyFromUtc(start.getTime()), endDate };
 }
 
-/** Workbench task grouping: leaf repo name with a trailing MMDD removed. */
+/** Workbench task grouping: leaf repo name with a trailing date suffix removed. */
 export function workbenchTaskPrefix(relativePath: string): string {
   const leaf = relativePath.split("/").filter(Boolean).at(-1) ?? relativePath;
-  return leaf.replace(/-\d{4}$/u, "") || leaf || "—";
+  return leaf.replace(/-(?:\d{6}|\d{4})$/u, "") || leaf || "—";
 }
 
 export function workbenchDatasetName(relativePath: string): string {
@@ -443,11 +446,11 @@ export function workbenchDatasetSuffixDay(
   lastModified?: string | null,
 ): string | null {
   const leaf = workbenchDatasetName(relativePath);
-  const match = /-(\d{2})(\d{2})$/u.exec(leaf);
-  if (!match) return null;
-  const year = suffixYear(lastModified);
-  const month = Number(match[1]);
-  const day = Number(match[2]);
+  const suffix = parseWorkbenchDateSuffix(leaf);
+  if (!suffix) return null;
+  const year = suffix.year ?? suffixYear(lastModified);
+  const month = suffix.month;
+  const day = suffix.day;
   const candidate = new Date(Date.UTC(year, month - 1, day));
   if (
     candidate.getUTCFullYear() !== year ||
@@ -505,17 +508,19 @@ const WORKBENCH_TACCAP_PRODUCTION_DATASET_NAMES = new Set([
 /**
  * Select the production corpus used by the overview total.
  *
- * Dated TacCap repositories are the primary production stream. The materialized
- * remove-and-place-paper repository has no date suffix, but its canonical name
- * and robot type identify it as the same production stream. Other unclassified
- * repositories remain out of this total until they have an explicit rule.
+ * Dated TacCap and XTac repositories are the production streams. The
+ * materialized remove-and-place-paper repository has no date suffix, but its
+ * canonical name and robot type identify it as the TacCap stream. Other
+ * unclassified repositories remain out of this total until they have an
+ * explicit rule.
  */
 export function isWorkbenchProductionDataset(
   dataset: WorkbenchRollupDataset,
 ): boolean {
   if (isWorkbenchStatisticsExcludedDataset(dataset.relativePath)) return false;
-  if (sourceKeyForDataset(dataset) === "taccap-g1") return true;
-  if (sourceKeyForDataset(dataset) !== "unclassified") return false;
+  const source = sourceKeyForDataset(dataset);
+  if (source === "taccap-g1" || source === "xtac-umi-g1") return true;
+  if (source !== "unclassified") return false;
   return (
     WORKBENCH_TACCAP_PRODUCTION_DATASET_NAMES.has(
       workbenchDatasetName(dataset.relativePath),

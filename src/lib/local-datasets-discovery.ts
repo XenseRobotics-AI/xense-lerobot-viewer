@@ -69,11 +69,6 @@ type LocalDatasetHardwareJson = {
   [key: string]: unknown;
 };
 
-type LocalDatasetXumiCollectionDevicesJson = {
-  episodes?: unknown[];
-  [key: string]: unknown;
-};
-
 export type LocalDatasetSummary = {
   relativePath: string;
   encodedPath: string;
@@ -163,6 +158,12 @@ function cleanString(value: unknown): string | null {
   return trimmed ? trimmed : null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 function extractRobotId(input: unknown): string | null {
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
   const parsed = input as LocalDatasetHardwareJson;
@@ -229,31 +230,11 @@ export function readDatasetHardwareRobotId(input: unknown): string | null {
 
 function extractCollectorSerialNumbers(input: unknown): Set<string> {
   const values = new Set<string>();
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    return values;
-  }
-  const parsed = input as LocalDatasetXumiCollectionDevicesJson;
-  if (!Array.isArray(parsed.episodes)) return values;
-
-  for (const episode of parsed.episodes) {
-    if (!episode || typeof episode !== "object" || Array.isArray(episode)) {
-      continue;
-    }
-    const devices = (episode as { devices?: unknown }).devices;
-    if (!devices || typeof devices !== "object" || Array.isArray(devices)) {
-      continue;
-    }
-    const collector = (devices as { collector?: unknown }).collector;
-    if (
-      !collector ||
-      typeof collector !== "object" ||
-      Array.isArray(collector)
-    ) {
-      continue;
-    }
-    const serialNumber = cleanString(
-      (collector as { serial_number?: unknown }).serial_number,
-    );
+  for (const episode of getXumiEpisodes(input)) {
+    const episodeRecord = asRecord(episode);
+    const devices = asRecord(episodeRecord?.devices) ?? episodeRecord;
+    const collector = asRecord(devices?.collector);
+    const serialNumber = cleanString(collector?.serial_number);
     if (serialNumber) values.add(serialNumber);
   }
   return values;
@@ -271,6 +252,72 @@ export function readDatasetCollectorSerialNumber(
   return values.size === 1 ? (values.values().next().value ?? null) : null;
 }
 
+function getXumiEpisodes(input: unknown): unknown[] {
+  const parsed = asRecord(input);
+  if (!parsed) return [];
+  return Array.isArray(parsed.episodes) && parsed.episodes.length > 0
+    ? parsed.episodes
+    : [parsed];
+}
+
+function extractXumiRobotId(input: unknown): string | null {
+  const record = asRecord(input);
+  if (!record) return null;
+
+  const direct = cleanString(record.robot_id);
+  if (direct) return direct;
+
+  const devices = asRecord(record.devices);
+  const devicesRobotId = cleanString(devices?.robot_id);
+  if (devicesRobotId) return devicesRobotId;
+
+  const robot = asRecord(devices?.robot) ?? asRecord(record.robot);
+  if (robot) {
+    return (
+      cleanString(robot.robot_id) ??
+      cleanString(robot.serial_number) ??
+      cleanString(robot.id)
+    );
+  }
+  return null;
+}
+
+function extractXumiLeftGripperSn(input: unknown): string | null {
+  const record = asRecord(input);
+  if (!record) return null;
+
+  const devices = asRecord(record.devices) ?? record;
+  const grippers = asRecord(devices.grippers) ?? asRecord(record.grippers);
+  const left = asRecord(grippers?.left);
+  if (!left) return null;
+  return cleanString(left.serial_number) ?? cleanString(left.gripper_sn);
+}
+
+/**
+ * XUMI exports all device identities in `meta/xumi_collection_devices.json`.
+ * Episode metadata can use either direct fields or nested `devices` fields;
+ * when an identity changes between episodes, the latest valid value is used
+ * for robot and gripper fields while collectors retain their unique-only rule.
+ */
+export function readDatasetXumiDeviceInfo(input: unknown): {
+  collectorSerialNumber: string | null;
+  robotId: string | null;
+  leftGripperSn: string | null;
+} {
+  const episodes = getXumiEpisodes(input);
+  let robotId: string | null = null;
+  let leftGripperSn: string | null = null;
+  for (const episode of episodes) {
+    robotId = extractXumiRobotId(episode) ?? robotId;
+    leftGripperSn = extractXumiLeftGripperSn(episode) ?? leftGripperSn;
+  }
+  return {
+    collectorSerialNumber: readDatasetCollectorSerialNumber(input),
+    robotId,
+    leftGripperSn,
+  };
+}
+
 async function readDatasetHardware(datasetDir: string): Promise<{
   collectorSerialNumber: string | null;
   robotId: string | null;
@@ -283,9 +330,14 @@ async function readDatasetHardware(datasetDir: string): Promise<{
     "xumi_collection_devices.json",
   );
   let collectorSerialNumber: string | null = null;
+  let xumiRobotId: string | null = null;
+  let xumiLeftGripperSn: string | null = null;
   try {
     const raw = await fs.readFile(collectionDevicesPath, "utf-8");
-    collectorSerialNumber = readDatasetCollectorSerialNumber(JSON.parse(raw));
+    const xumi = readDatasetXumiDeviceInfo(JSON.parse(raw));
+    collectorSerialNumber = xumi.collectorSerialNumber;
+    xumiRobotId = xumi.robotId;
+    xumiLeftGripperSn = xumi.leftGripperSn;
   } catch {
     // Older datasets do not have XUMI device metadata.
   }
@@ -294,14 +346,14 @@ async function readDatasetHardware(datasetDir: string): Promise<{
     const parsed = JSON.parse(raw);
     return {
       collectorSerialNumber,
-      robotId: extractRobotId(parsed),
-      leftGripperSn: readDatasetHardwareValue(parsed),
+      robotId: xumiRobotId ?? extractRobotId(parsed),
+      leftGripperSn: xumiLeftGripperSn ?? readDatasetHardwareValue(parsed),
     };
   } catch {
     return {
       collectorSerialNumber,
-      robotId: null,
-      leftGripperSn: null,
+      robotId: xumiRobotId,
+      leftGripperSn: xumiLeftGripperSn,
     };
   }
 }

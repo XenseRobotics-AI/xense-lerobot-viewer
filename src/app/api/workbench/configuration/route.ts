@@ -1,11 +1,13 @@
 import type { NextRequest } from "next/server";
 import { discoverLocalDatasets } from "@/lib/local-datasets-discovery";
+import { readModelScopeDeviceEvidence } from "@/lib/modelscope-catalog-cache";
 import {
   WorkbenchConfigurationConflictError,
   WorkbenchConfigurationValidationError,
   readWorkbenchConfiguration,
   writeWorkbenchConfiguration,
 } from "@/lib/workbench-configuration-store";
+import type { WorkbenchDatasetDeviceEvidence } from "@/lib/workbench-configuration-store";
 import { isSameOriginRequest, noStoreHeaders } from "@/lib/request-security";
 import { recordWorkbenchSharedEvent } from "@/lib/workbench-shared-sync";
 import { getDatasetPrefix } from "@/utils/datasetGrouping";
@@ -23,11 +25,21 @@ function organizationFromRequest(request: Request): string | null {
 
 async function organizationDatasets(org: string) {
   const discovery = await discoverLocalDatasets();
+  const modelScopeDevices = await readModelScopeDeviceEvidence(
+    discovery.root,
+    org,
+  );
+  const localDevices: WorkbenchDatasetDeviceEvidence[] = discovery.datasets
+    .filter((dataset) => getDatasetPrefix(dataset.relativePath) === org)
+    .map((dataset) => ({
+      relativePath: dataset.relativePath,
+      robotId: dataset.robotId,
+      collectorSerialNumber: dataset.collectorSerialNumber,
+      leftGripperSn: dataset.leftGripperSn,
+    }));
   return {
     root: discovery.root,
-    datasets: discovery.datasets.filter(
-      (dataset) => getDatasetPrefix(dataset.relativePath) === org,
-    ),
+    datasets: localDevices.concat(modelScopeDevices),
   };
 }
 

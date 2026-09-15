@@ -125,16 +125,27 @@ export function bucketOf(relativePath: string): CorpusBucket | null {
   return segment && BUCKETS.has(segment) ? (segment as CorpusBucket) : null;
 }
 
-/** `taccap-g1-wipe-mirror-0822` → `2026-08-22`. Null when there is no suffix. */
+/**
+ * `taccap-g1-wipe-mirror-0822` -> `2026-08-22`;
+ * `xtac-umi-g1-install-wire-harness-260915` -> `2026-09-15`.
+ */
 export function dateFromName(name: string): string | null {
-  const m = /-(\d{2})(\d{2})$/.exec(name);
+  const m = /-(?:(\d{2})(\d{2})(\d{2})|(\d{2})(\d{2}))$/.exec(name);
   if (!m) return null;
-  const [, mm, dd] = m;
+  const year = m[1] ? 2000 + Number(m[1]) : 2026;
+  const mm = m[1] ? m[2] : m[4];
+  const dd = m[1] ? m[3] : m[5];
   const month = Number(mm);
   const day = Number(dd);
-  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-  // The corpus is single-year; there is no year anywhere in the suffix.
-  return `2026-${mm}-${dd}`;
+  const candidate = new Date(Date.UTC(year, month - 1, day));
+  if (
+    candidate.getUTCFullYear() !== year ||
+    candidate.getUTCMonth() !== month - 1 ||
+    candidate.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return `${year}-${mm}-${dd}`;
 }
 
 /**

@@ -31,6 +31,10 @@ import {
   toggleTacverseHubCategorySelection,
   type TacverseHubCategory,
 } from "@/utils/workbenchHubCategory";
+import type {
+  TacverseDatasetStatisticsSource,
+  TacverseDatasetStatisticsSourceSelection,
+} from "@/utils/tacverseDatasetStatistics";
 
 type QualityCheckResult = {
   id: string;
@@ -289,6 +293,11 @@ export default function DatasetReviewPanel({
   const [statisticsProgressError, setStatisticsProgressError] = useState<
     string | null
   >(null);
+  const [statisticsSource, setStatisticsSource] =
+    useState<TacverseDatasetStatisticsSourceSelection>(() => {
+      const value = searchParams.get("workbenchStatisticsSource");
+      return value === "modelscope" || value === "both" ? value : "huggingface";
+    });
   const [hubCategoryFilter, setHubCategoryFilter] = useState<
     TacverseHubCategory[]
   >(() =>
@@ -307,6 +316,15 @@ export default function DatasetReviewPanel({
     else url.searchParams.set("workbenchHubCategory", serialized);
     window.history.replaceState(window.history.state, "", url);
   }, [hubCategoryFilter]);
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (statisticsSource === "huggingface") {
+      url.searchParams.delete("workbenchStatisticsSource");
+    } else {
+      url.searchParams.set("workbenchStatisticsSource", statisticsSource);
+    }
+    window.history.replaceState(window.history.state, "", url);
+  }, [statisticsSource]);
   useEffect(() => {
     const controller = new AbortController();
     setHfAccount(null);
@@ -381,6 +399,108 @@ export default function DatasetReviewPanel({
         ? t("workbench.warningChecks", { count: quality.aggregate.n_warn })
         : t("workbench.allChecksPassed")
     : null;
+
+  const refreshCatalogSource = async (
+    source: TacverseDatasetStatisticsSource,
+    controller: AbortController,
+    explicitToken: string,
+  ): Promise<number | null> => {
+    const isHuggingFace = source === "huggingface";
+    const response = await fetch(
+      isHuggingFace ? "/api/hf/catalog" : "/api/modelscope/catalog",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          isHuggingFace
+            ? {
+                org: statisticsOrganization,
+                endpoint: statisticsEndpoint,
+                ...(explicitToken ? { token: explicitToken } : {}),
+              }
+            : {},
+        ),
+        signal: controller.signal,
+        cache: "no-store",
+      },
+    );
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      throw new Error(
+        payload.error ||
+          t("workbench.statisticsRefreshFailedStatus", {
+            status: response.status,
+          }),
+      );
+    }
+    if (!response.body) {
+      throw new Error(t("workbench.statisticsStreamMissing"));
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let refreshError: string | null = null;
+    let catalogCount: number | null = null;
+    const handleCatalogLine = (line: string) => {
+      if (!line.trim()) return;
+      try {
+        const event = JSON.parse(line) as {
+          type?: string;
+          error?: string;
+          progress?: {
+            index?: number;
+            total?: number;
+            percent?: number;
+            repoId?: string;
+          };
+          result?: { datasets?: unknown[] };
+        };
+        if (event.type === "progress" && event.progress) {
+          const progress = event.progress;
+          const total =
+            typeof progress.total === "number" ? progress.total : undefined;
+          const index =
+            typeof progress.index === "number" ? progress.index : undefined;
+          setStatisticsProgress({
+            phase: "catalog",
+            index,
+            total,
+            percent:
+              typeof progress.percent === "number"
+                ? progress.percent
+                : total && index
+                  ? Math.round((index / total) * 100)
+                  : undefined,
+            repoId:
+              typeof progress.repoId === "string" ? progress.repoId : undefined,
+          });
+        }
+        if (event.type === "error" && !refreshError) {
+          refreshError =
+            event.error || t("workbench.statisticsRefreshFailedFallback");
+        }
+        if (event.type === "result" && Array.isArray(event.result?.datasets)) {
+          catalogCount = event.result.datasets.length;
+        }
+      } catch {
+        // Progress lines are best-effort; final API errors are handled above.
+      }
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/u);
+      buffer = lines.pop() ?? "";
+      for (const line of lines) handleCatalogLine(line);
+    }
+    handleCatalogLine(buffer);
+    if (refreshError) throw new Error(refreshError);
+    return catalogCount;
+  };
+
   const refreshStatistics = async () => {
     if (!statisticsOrganization) {
       setStatisticsRefreshError(t("workbench.organizationRequired"));
@@ -397,120 +517,45 @@ export default function DatasetReviewPanel({
     setStatisticsProgressError(null);
     setStatisticsProgress({ phase: "catalog", percent: 0 });
     try {
-      const response = await fetch("/api/hf/catalog", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          org: statisticsOrganization,
-          endpoint: statisticsEndpoint,
-          ...(explicitToken ? { token: explicitToken } : {}),
-        }),
-        signal: controller.signal,
-        cache: "no-store",
-      });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as {
-          error?: string;
-        };
-        throw new Error(
-          payload.error ||
-            t("workbench.statisticsRefreshFailedStatus", {
-              status: response.status,
-            }),
+      const sources: readonly TacverseDatasetStatisticsSource[] =
+        statisticsSource === "both"
+          ? ["huggingface", "modelscope"]
+          : [statisticsSource];
+      const catalogCounts: number[] = [];
+      let syncResult: Awaited<ReturnType<typeof runSync>> | null = null;
+      for (const source of sources) {
+        const catalogCount = await refreshCatalogSource(
+          source,
+          controller,
+          explicitToken,
         );
-      }
-      if (!response.body) {
-        throw new Error(t("workbench.statisticsStreamMissing"));
-      }
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let refreshError: string | null = null;
-      let catalogCount: number | null = null;
-      const handleCatalogLine = (line: string) => {
-        if (!line.trim()) return;
-        try {
-          const event = JSON.parse(line) as {
-            type?: string;
-            error?: string;
-            progress?: {
-              index?: number;
-              total?: number;
-              percent?: number;
-              repoId?: string;
-            };
-            result?: { datasets?: unknown[] };
-          };
-          if (event.type === "progress" && event.progress) {
-            const progress = event.progress;
-            const total =
-              typeof progress.total === "number" ? progress.total : undefined;
-            const index =
-              typeof progress.index === "number" ? progress.index : undefined;
-            setStatisticsProgress({
-              phase: "catalog",
-              index,
-              total,
-              percent:
-                typeof progress.percent === "number"
-                  ? progress.percent
-                  : total && index
-                    ? Math.round((index / total) * 100)
-                    : undefined,
-              repoId:
-                typeof progress.repoId === "string"
-                  ? progress.repoId
-                  : undefined,
-            });
-          }
-          if (event.type === "error" && !refreshError) {
-            refreshError =
-              event.error || t("workbench.statisticsRefreshFailedFallback");
-          }
-          if (
-            event.type === "result" &&
-            Array.isArray(event.result?.datasets)
-          ) {
-            catalogCount = event.result.datasets.length;
-          }
-        } catch {
-          // Progress lines are best-effort; final API errors are handled above.
+        if (catalogCount !== null) catalogCounts.push(catalogCount);
+        if (source === "huggingface") {
+          setStatisticsProgress({ phase: "stats", percent: 0 });
+          syncResult = await runSync(
+            statisticsOrganization,
+            (progress) => {
+              setStatisticsProgress({
+                phase: progress.phase === "complete" ? "complete" : "stats",
+                index: progress.index,
+                total: progress.total,
+                percent: progress.percent,
+                repo: progress.repo,
+                filesDone: progress.filesDone,
+                filesTotal: progress.filesTotal,
+                bytes: progress.bytes,
+                bytesPerSecond: progress.bytesPerSecond,
+              });
+            },
+            {
+              signal: controller.signal,
+              metadataOnly: true,
+              endpoint: statisticsEndpoint,
+              ...(explicitToken ? { token: explicitToken } : {}),
+            },
+          );
         }
-      };
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split(/\r?\n/u);
-        buffer = lines.pop() ?? "";
-        for (const line of lines) handleCatalogLine(line);
       }
-      handleCatalogLine(buffer);
-      if (refreshError) throw new Error(refreshError);
-
-      setStatisticsProgress({ phase: "stats", percent: 0 });
-      const result = await runSync(
-        statisticsOrganization,
-        (progress) => {
-          setStatisticsProgress({
-            phase: progress.phase === "complete" ? "complete" : "stats",
-            index: progress.index,
-            total: progress.total,
-            percent: progress.percent,
-            repo: progress.repo,
-            filesDone: progress.filesDone,
-            filesTotal: progress.filesTotal,
-            bytes: progress.bytes,
-            bytesPerSecond: progress.bytesPerSecond,
-          });
-        },
-        {
-          signal: controller.signal,
-          metadataOnly: true,
-          endpoint: statisticsEndpoint,
-          ...(explicitToken ? { token: explicitToken } : {}),
-        },
-      );
       setStatisticsProgress({ phase: "complete", percent: 100 });
       setStatisticsRefreshToken((value) => value + 1);
       const formatCatalogMessage = (count: number | null): string =>
@@ -519,26 +564,28 @@ export default function DatasetReviewPanel({
           : t("workbench.catalogRefreshedCount", {
               count: count.toLocaleString(),
             });
-      const catalogMessage = formatCatalogMessage(
-        catalogCount as number | null,
-      );
-      const syncMessage =
-        result.failed.length === 0
-          ? result.downloaded === 0
+      const catalogMessage = catalogCounts.length
+        ? catalogCounts.map(formatCatalogMessage).join(" ")
+        : formatCatalogMessage(null);
+      const syncMessage = syncResult
+        ? syncResult.failed.length === 0
+          ? syncResult.downloaded === 0
             ? t("workbench.statsAlreadyCurrent")
             : t("workbench.statsSynced", {
-                count: result.downloaded.toLocaleString(),
+                count: syncResult.downloaded.toLocaleString(),
               })
           : t("workbench.statsSyncedWithFailures", {
-              count: result.downloaded.toLocaleString(),
-              failed: result.failed.length.toLocaleString(),
-            });
-      const archivedRepos = result.archivedRepos ?? 0;
-      const archivedSnapshots = result.archivedMetaSnapshots ?? 0;
-      const archivedFiles = result.archivedFiles ?? 0;
-      const archiveFailures = result.archiveFailures?.length ?? 0;
+              count: syncResult.downloaded.toLocaleString(),
+              failed: syncResult.failed.length.toLocaleString(),
+            })
+        : "";
+      const archivedRepos = syncResult?.archivedRepos ?? 0;
+      const archivedSnapshots = syncResult?.archivedMetaSnapshots ?? 0;
+      const archivedFiles = syncResult?.archivedFiles ?? 0;
+      const archiveFailures = syncResult?.archiveFailures?.length ?? 0;
       const archiveMessage =
-        archivedRepos || archivedSnapshots || archivedFiles || archiveFailures
+        syncResult &&
+        (archivedRepos || archivedSnapshots || archivedFiles || archiveFailures)
           ? ` ${t("workbench.archived", {
               repos: archivedRepos.toLocaleString(),
               snapshots: archivedSnapshots.toLocaleString(),
@@ -551,7 +598,7 @@ export default function DatasetReviewPanel({
             })}`
           : "";
       setStatisticsRefreshMessage(
-        `${catalogMessage} ${syncMessage}${archiveMessage}`,
+        `${catalogMessage}${syncMessage ? ` ${syncMessage}` : ""}${archiveMessage}`,
       );
     } catch (error: unknown) {
       if (error instanceof DOMException && error.name === "AbortError") return;
@@ -867,6 +914,30 @@ export default function DatasetReviewPanel({
             className="flex flex-wrap items-center gap-x-5 gap-y-2"
             aria-label={t("workbench.datasetCategory")}
           >
+            {workbenchView === "grouping" && (
+              <label className="inline-flex items-center gap-2 text-xs text-slate-300">
+                <span>{t("workbench.statisticsSource")}</span>
+                <select
+                  value={statisticsSource}
+                  onChange={(event) =>
+                    setStatisticsSource(
+                      event.target
+                        .value as TacverseDatasetStatisticsSourceSelection,
+                    )
+                  }
+                  aria-label={t("workbench.statisticsSource")}
+                  className="rounded-md border border-white/10 bg-[var(--surface-1)] px-2 py-1 text-xs text-slate-200 focus:border-cyan-400 focus:outline-none"
+                >
+                  <option value="huggingface">
+                    {t("workbench.huggingFace")}
+                  </option>
+                  <option value="modelscope">
+                    {t("workbench.modelScope")}
+                  </option>
+                  <option value="both">{t("workbench.bothSources")}</option>
+                </select>
+              </label>
+            )}
             <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-slate-300">
               <input
                 type="checkbox"
@@ -919,12 +990,15 @@ export default function DatasetReviewPanel({
       ) : workbenchView === "dataset-statistics" ? (
         <WorkbenchDatasetStatistics
           categoryFilter={hubCategoryFilter}
+          statisticsSource={statisticsSource}
+          onStatisticsSourceChange={setStatisticsSource}
           refreshToken={statisticsRefreshToken}
         />
       ) : workbenchView === "grouping" ? (
         <WorkbenchGroupingPanel
           organization="TacVerse"
           categoryFilter={hubCategoryFilter}
+          statisticsSource={statisticsSource}
           refreshToken={statisticsRefreshToken}
           episodeData={episodeData}
         />

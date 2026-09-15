@@ -120,6 +120,7 @@ import { workbenchReplayDatasetRank } from "@/utils/workbenchReplayDatasets";
 import { useT } from "@/context/locale-context";
 import type { InterpolationVars } from "@/i18n/format";
 import type { MessageKey } from "@/i18n/messages";
+import type { TacverseDatasetStatisticsSourceSelection } from "@/utils/tacverseDatasetStatistics";
 import {
   legacyPersonnelConfigFromConfiguration,
   workbenchMappingsFromConfiguration,
@@ -257,6 +258,7 @@ type WorkbenchRewardRulesPayload = WorkbenchRewardRulesConfig & {
 
 type WorkbenchStatisticsPayload = {
   datasets?: WorkbenchDataset[];
+  source?: TacverseDatasetStatisticsSourceSelection;
   displayReplayDataset?: WorkbenchDataset | null;
   dataUpdatedAt?: string | null;
   errors?: Array<{ path: string; message: string }>;
@@ -272,6 +274,10 @@ type WorkbenchStatisticsPayload = {
   categoryTotal?: number;
   categoryCounts?: TacverseHubCategoryCounts;
   localMatchedTotal?: number;
+  remoteStatisticsTotal?: number;
+  refreshedAtBySource?: Partial<
+    Record<"huggingface" | "modelscope", string | null>
+  >;
   error?: string;
 };
 
@@ -685,11 +691,13 @@ function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
 export default function WorkbenchGroupingPanel({
   organization,
   categoryFilter = EMPTY_TACVERSE_HUB_CATEGORY_SELECTION,
+  statisticsSource = "huggingface",
   refreshToken = 0,
   episodeData,
 }: {
   organization: string;
   categoryFilter?: TacverseHubCategorySelection;
+  statisticsSource?: TacverseDatasetStatisticsSourceSelection;
   refreshToken?: number;
   episodeData?: EpisodeData;
 }) {
@@ -731,12 +739,14 @@ export default function WorkbenchGroupingPanel({
     categoryTotal: number;
     categoryCounts: TacverseHubCategoryCounts;
     localMatchedTotal: number;
+    remoteStatisticsTotal: number;
   }>({
     refreshedAt: null,
     hubTotal: 0,
     categoryTotal: 0,
     categoryCounts: EMPTY_TACVERSE_HUB_CATEGORY_COUNTS,
     localMatchedTotal: 0,
+    remoteStatisticsTotal: 0,
   });
   const [loading, setLoading] = useState(true);
   const [hasLoaded, setHasLoaded] = useState(false);
@@ -857,7 +867,9 @@ export default function WorkbenchGroupingPanel({
       "/api/workbench/statistics?org=" +
         encodeURIComponent(organization) +
         "&category=" +
-        encodeURIComponent(categoryParam),
+        encodeURIComponent(categoryParam) +
+        "&source=" +
+        encodeURIComponent(statisticsSource),
       {
         cache: "no-store",
         signal: controller.signal,
@@ -903,6 +915,7 @@ export default function WorkbenchGroupingPanel({
           categoryCounts:
             payload.categoryCounts ?? EMPTY_TACVERSE_HUB_CATEGORY_COUNTS,
           localMatchedTotal: payload.localMatchedTotal ?? 0,
+          remoteStatisticsTotal: payload.remoteStatisticsTotal ?? 0,
         });
         setDisplayReplayDataset(payload.displayReplayDataset ?? null);
         setDataUpdatedAt(payload.dataUpdatedAt ?? null);
@@ -966,6 +979,7 @@ export default function WorkbenchGroupingPanel({
     organization,
     refreshToken,
     localRefreshToken,
+    statisticsSource,
     t,
   ]);
   const showInitialLoading = loading && !hasLoaded;
@@ -2458,9 +2472,12 @@ export default function WorkbenchGroupingPanel({
             folder: hubScope.categoryCounts.folder.toLocaleString(),
             other: hubScope.categoryCounts.other.toLocaleString(),
             matched: hubScope.localMatchedTotal.toLocaleString(),
+            remote: hubScope.remoteStatisticsTotal.toLocaleString(),
             without: Math.max(
               0,
-              hubScope.categoryTotal - hubScope.localMatchedTotal,
+              hubScope.categoryTotal -
+                hubScope.localMatchedTotal -
+                hubScope.remoteStatisticsTotal,
             ).toLocaleString(),
           })}
         </div>

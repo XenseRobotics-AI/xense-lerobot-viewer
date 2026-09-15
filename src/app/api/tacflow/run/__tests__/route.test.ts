@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import type { TacFlowStreamEvent } from "@/types/tacflow.types";
+import {
+  fsMockModule,
+  readFileMock,
+} from "@/app/api/tacflow/__tests__/fs-mock";
 
 type SpawnCall = {
   command: string;
@@ -17,20 +21,12 @@ class FakeChild extends EventEmitter {
   kill = mock(() => true);
 }
 
-const DATASET_ROOT = "/home/xense/.cache/huggingface/lerobot";
-const DEFAULT_DATASET_RELATIVE = "TacVerse/taccap-g1-fold-garment-0819";
-const DEFAULT_DATASET = `${DATASET_ROOT}/${DEFAULT_DATASET_RELATIVE}`;
-const DEFAULT_INFO_JSON = `${DEFAULT_DATASET}/meta/info.json`;
 const OTHER_DATASET_RELATIVE = "TacVerse/taccap-g1-hang-shirt-0903";
-const OTHER_DATASET = `${DATASET_ROOT}/${OTHER_DATASET_RELATIVE}`;
-const OTHER_INFO_JSON = `${OTHER_DATASET}/meta/info.json`;
 
 let spawnCalls: SpawnCall[] = [];
 let nextExitCode: number | null = 0;
 let nextStdout = "Source: /tmp/source\nRepaired dataset: /tmp/repaired\n";
 let nextStderr = "";
-let files = new Map<string, string>();
-
 const spawnMock = mock(
   (
     command: string,
@@ -48,24 +44,11 @@ const spawnMock = mock(
   },
 );
 
-const readFileMock = mock(async (filePath: string) => {
-  const content = files.get(String(filePath));
-  if (content === undefined) {
-    const error = new Error(`ENOENT: no such file, open '${filePath}'`);
-    (error as Error & { code?: string }).code = "ENOENT";
-    throw error;
-  }
-  return content;
-});
-
 mock.module("node:child_process", () => ({
   spawn: spawnMock,
 }));
 
-mock.module("node:fs/promises", () => ({
-  default: { readFile: readFileMock },
-  readFile: readFileMock,
-}));
+mock.module("node:fs/promises", () => fsMockModule);
 
 async function routePost() {
   const mod = await import("@/app/api/tacflow/run/route");
@@ -94,7 +77,6 @@ beforeEach(() => {
   nextExitCode = 0;
   nextStdout = "Source: /tmp/source\nRepaired dataset: /tmp/repaired\n";
   nextStderr = "";
-  files = new Map([[DEFAULT_INFO_JSON, "{}"]]);
   spawnMock.mockClear();
   readFileMock.mockClear();
 });
@@ -103,7 +85,6 @@ afterEach(() => {
   nextExitCode = 0;
   nextStdout = "";
   nextStderr = "";
-  files = new Map();
 });
 
 describe("TacFlow run route", () => {
@@ -155,7 +136,6 @@ describe("TacFlow run route", () => {
 
   test("uses the selected dataset in step commands", async () => {
     const POST = await routePost();
-    files = new Map([[OTHER_INFO_JSON, "{}"]]);
 
     let response = await POST(
       postRequest({
