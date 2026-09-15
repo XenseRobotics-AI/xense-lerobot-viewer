@@ -30,6 +30,11 @@ import {
   YAxis,
 } from "recharts";
 import {
+  buildWorkbenchTrendRows,
+  getWorkbenchTrendTicks,
+  WORKBENCH_TREND_START_DATE,
+} from "@/utils/workbenchTrend";
+import {
   FiChevronLeft,
   FiChevronRight,
   FiPause,
@@ -741,11 +746,40 @@ const DailyTrendSlide = memo(function DailyTrendSlide({
   total: number;
 }) {
   const t = useT();
-  const chartRows = snapshot.trend.map((row) => ({
-    ...row,
-    label: row.day.slice(5),
-  }));
-  const peakHours = Math.max(0, ...snapshot.trend.map((row) => row.hours));
+  const chartRef = useRef<HTMLDivElement>(null);
+  const [chartWidth, setChartWidth] = useState(0);
+  useEffect(() => {
+    const element = chartRef.current;
+    if (!element) return;
+    const updateWidth = () => {
+      setChartWidth(Math.round(element.getBoundingClientRect().width));
+    };
+    updateWidth();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateWidth);
+      return () => window.removeEventListener("resize", updateWidth);
+    }
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const chart = useMemo(
+    () =>
+      buildWorkbenchTrendRows(snapshot.trend, {
+        startDate: WORKBENCH_TREND_START_DATE,
+        endDateExclusive: snapshot.dateRange.endDate,
+      }),
+    [snapshot.dateRange.endDate, snapshot.trend],
+  );
+  const ticks = useMemo(
+    () => getWorkbenchTrendTicks(chart.rows, chartWidth),
+    [chart.rows, chartWidth],
+  );
+  const tickLabels = useMemo(
+    () => new Map(ticks.map((tick) => [tick.offset, tick.label])),
+    [ticks],
+  );
+  const peakHours = Math.max(0, ...chart.rows.map((row) => row.hours));
   const dailyTargetHours = getWorkbenchDisplayDailyTargetHours(
     snapshot.dailyTargetHours,
     snapshot.workstations.length,
@@ -757,18 +791,18 @@ const DailyTrendSlide = memo(function DailyTrendSlide({
         index={4}
         total={total}
         title={t("workbench.dailyTrend")}
-        meta={`${"2026-07-01"} → ${snapshot.dateRange.endDate ?? t("workbench.latest")} · ${t(snapshot.trend.length === 1 ? "workbench.reportingDay_one" : "workbench.reportingDay_other", { count: snapshot.trend.length })}`}
+        meta={`${WORKBENCH_TREND_START_DATE} → ${snapshot.dateRange.endDate ?? t("workbench.latest")} · ${t(chart.rows.length === 1 ? "workbench.reportingDay_one" : "workbench.reportingDay_other", { count: chart.rows.length })}`}
       />
-      {chartRows.length === 0 ? (
+      {chart.rows.length === 0 ? (
         <EmptySlide range={formatRange(snapshot, t)}>
           {t("workbench.noDailyTrendData")}
         </EmptySlide>
       ) : (
         <div className={styles.trendLayout}>
-          <div className={styles.chartFrame}>
+          <div ref={chartRef} className={styles.chartFrame}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart
-                data={chartRows}
+                data={chart.rows}
                 margin={{ top: 18, right: 22, bottom: 10, left: 4 }}
               >
                 <CartesianGrid
@@ -777,8 +811,16 @@ const DailyTrendSlide = memo(function DailyTrendSlide({
                   strokeDasharray="4 6"
                 />
                 <XAxis
-                  dataKey="label"
-                  minTickGap={34}
+                  type="number"
+                  dataKey="dayOffset"
+                  domain={[
+                    -0.5,
+                    Math.max(0, chart.rows.at(-1)?.dayOffset ?? 0) + 0.5,
+                  ]}
+                  ticks={ticks.map((tick) => tick.offset)}
+                  tickFormatter={(value: number) =>
+                    tickLabels.get(Number(value)) ?? ""
+                  }
                   tick={{ fill: "#87919f", fontSize: 14 }}
                   tickLine={false}
                   axisLine={{ stroke: "rgba(148, 163, 184, 0.18)" }}

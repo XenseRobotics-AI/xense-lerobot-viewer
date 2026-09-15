@@ -87,10 +87,6 @@ export type LocalDatasetSummary = {
   total_frames: number;
   total_tasks?: number;
   fps: number;
-  /** Internal presence flags; non-enumerable and omitted from API payloads. */
-  localInfoFields?: ReadonlySet<
-    "robot_type" | "total_episodes" | "total_frames" | "total_tasks" | "fps"
-  >;
   /** Bytes on disk for the whole dataset directory. See `directorySizeBytes`. */
   sizeBytes: number;
   thumbnailVideoUrl: string | null;
@@ -105,6 +101,28 @@ export type LocalDatasetSummary = {
    */
   facets: DatasetFacets;
 };
+
+export type LocalDatasetInfoField =
+  | "robot_type"
+  | "total_episodes"
+  | "total_frames"
+  | "total_tasks"
+  | "fps";
+
+// Presence metadata is needed only while the server combines local info.json
+// with the remote Hub catalog. Keep it outside the DTO passed to Client
+// Components so the discovery result remains made of plain serializable data.
+const localInfoFieldsByDataset = new WeakMap<
+  LocalDatasetSummary,
+  ReadonlySet<LocalDatasetInfoField>
+>();
+
+export function hasLocalDatasetInfoField(
+  dataset: LocalDatasetSummary,
+  field: LocalDatasetInfoField,
+): boolean {
+  return localInfoFieldsByDataset.get(dataset)?.has(field) ?? true;
+}
 
 export type LocalDatasetsResponse = {
   /** The default root, `LOCAL_DATASET_ROOT`. Anchors the stores. */
@@ -450,20 +468,22 @@ async function walkForDatasets(
         tags,
         facets,
       };
-      Object.defineProperty(summary, "localInfoFields", {
-        value: new Set(
-          [
-            "robot_type",
-            "total_episodes",
-            "total_frames",
-            "total_tasks",
-            "fps",
-          ].filter((field) =>
+      localInfoFieldsByDataset.set(
+        summary,
+        new Set(
+          (
+            [
+              "robot_type",
+              "total_episodes",
+              "total_frames",
+              "total_tasks",
+              "fps",
+            ] as LocalDatasetInfoField[]
+          ).filter((field) =>
             Object.prototype.hasOwnProperty.call(info, field),
           ),
         ),
-        enumerable: false,
-      });
+      );
       found.push(summary);
       return;
     }

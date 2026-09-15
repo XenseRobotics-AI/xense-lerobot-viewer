@@ -2,7 +2,10 @@ import path from "node:path";
 import { readCorpusHistory } from "@/lib/corpus-history-store";
 import { readDatasetTasks } from "@/lib/dataset-quality-loader";
 import { readRawHfCatalog, type HfCatalogEntry } from "@/lib/hf-catalog-cache";
-import { discoverLocalDatasets } from "@/lib/local-datasets-discovery";
+import {
+  discoverLocalDatasets,
+  hasLocalDatasetInfoField,
+} from "@/lib/local-datasets-discovery";
 import { readWorkbenchConfiguration } from "@/lib/workbench-configuration-store";
 import {
   defaultWorkbenchRewardRules,
@@ -188,8 +191,11 @@ function localNumberOrRemote(
   >["datasets"][number],
   field: "total_episodes" | "total_frames" | "total_tasks" | "fps",
   remoteValue: unknown,
+  localSource: Awaited<
+    ReturnType<typeof discoverLocalDatasets>
+  >["datasets"][number] = dataset,
 ): number | null {
-  const localFieldExists = dataset.localInfoFields?.has(field) ?? true;
+  const localFieldExists = hasLocalDatasetInfoField(localSource, field);
   const local = localFieldExists ? asNumber(dataset[field]) : null;
   if (local !== null) return local;
   return asNumber(remoteValue);
@@ -210,9 +216,17 @@ function datasetHours(
     ReturnType<typeof discoverLocalDatasets>
   >["datasets"][number],
   remote: HfCatalogEntry | undefined,
+  localSource: Awaited<
+    ReturnType<typeof discoverLocalDatasets>
+  >["datasets"][number] = dataset,
 ): number {
-  const localFrames = asNumber(dataset.total_frames);
-  const localFps = asNumber(dataset.fps);
+  const localFrames = localNumberOrRemote(
+    dataset,
+    "total_frames",
+    null,
+    localSource,
+  );
+  const localFps = localNumberOrRemote(dataset, "fps", null, localSource);
   if (
     localFrames !== null &&
     localFrames > 0 &&
@@ -227,8 +241,9 @@ function datasetHours(
     dataset,
     "total_frames",
     remote?.totalFrames,
+    localSource,
   );
-  const fps = localNumberOrRemote(dataset, "fps", remote?.fps);
+  const fps = localNumberOrRemote(dataset, "fps", remote?.fps, localSource);
   return frames !== null && frames > 0 && fps !== null && fps > 0
     ? frames / fps / 3600
     : 0;
@@ -239,6 +254,9 @@ function dailyAdditionsForDataset(
     ReturnType<typeof discoverLocalDatasets>
   >["datasets"][number],
   remote: HfCatalogEntry | undefined,
+  localSource: Awaited<
+    ReturnType<typeof discoverLocalDatasets>
+  >["datasets"][number] = dataset,
 ): WorkbenchDailyAddition[] {
   const suffixDay = workbenchDatasetSuffixDay(
     dataset.relativePath,
@@ -250,12 +268,22 @@ function dailyAdditionsForDataset(
     {
       day: suffixDay,
       episodes: nonNegativeCount(
-        localNumberOrRemote(dataset, "total_episodes", remote?.totalEpisodes),
+        localNumberOrRemote(
+          dataset,
+          "total_episodes",
+          remote?.totalEpisodes,
+          localSource,
+        ),
       ),
       frames: nonNegativeCount(
-        localNumberOrRemote(dataset, "total_frames", remote?.totalFrames),
+        localNumberOrRemote(
+          dataset,
+          "total_frames",
+          remote?.totalFrames,
+          localSource,
+        ),
       ),
-      hours: roundHours(datasetHours(dataset, remote)),
+      hours: roundHours(datasetHours(dataset, remote, localSource)),
     },
   ];
 }
@@ -266,6 +294,9 @@ function applyCatalogMetadata(
   >["datasets"][number],
   remote: HfCatalogEntry | undefined,
   dailyAdditions: WorkbenchDailyAddition[] = [],
+  localSource: Awaited<
+    ReturnType<typeof discoverLocalDatasets>
+  >["datasets"][number] = dataset,
 ): WorkbenchDatasetSummary {
   const metadata = metadataFromCatalogEntry(remote);
   const source = workbenchDatasetSourceKey(dataset.relativePath);
@@ -285,14 +316,28 @@ function applyCatalogMetadata(
     codebase_version: dataset.codebase_version,
     robot_type: dataset.robot_type ?? remote?.robotType ?? null,
     total_episodes:
-      localNumberOrRemote(dataset, "total_episodes", remote?.totalEpisodes) ??
-      0,
+      localNumberOrRemote(
+        dataset,
+        "total_episodes",
+        remote?.totalEpisodes,
+        localSource,
+      ) ?? 0,
     total_frames:
-      localNumberOrRemote(dataset, "total_frames", remote?.totalFrames) ?? 0,
+      localNumberOrRemote(
+        dataset,
+        "total_frames",
+        remote?.totalFrames,
+        localSource,
+      ) ?? 0,
     total_tasks:
-      localNumberOrRemote(dataset, "total_tasks", remote?.totalTasks) ?? 0,
-    fps: localNumberOrRemote(dataset, "fps", remote?.fps) ?? 0,
-    durationHours: datasetHours(dataset, remote),
+      localNumberOrRemote(
+        dataset,
+        "total_tasks",
+        remote?.totalTasks,
+        localSource,
+      ) ?? 0,
+    fps: localNumberOrRemote(dataset, "fps", remote?.fps, localSource) ?? 0,
+    durationHours: datasetHours(dataset, remote, localSource),
     hubStorageBytes: metadata.hubStorageBytes,
     tasks: dataset.tasks,
     hf: metadata,
@@ -499,14 +544,11 @@ export async function GET(request: Request): Promise<Response> {
             path.join(discovery.root, ...dataset.relativePath.split("/")),
           ),
         };
-        Object.defineProperty(withTasks, "localInfoFields", {
-          value: dataset.localInfoFields,
-          enumerable: false,
-        });
         return applyCatalogMetadata(
           withTasks,
           remote,
-          dailyAdditionsForDataset(withTasks, remote),
+          dailyAdditionsForDataset(withTasks, remote, dataset),
+          dataset,
         );
       }),
     );
@@ -554,14 +596,11 @@ export async function GET(request: Request): Promise<Response> {
           path.join(discovery.root, ...replayCandidate.relativePath.split("/")),
         ),
       };
-      Object.defineProperty(withTasks, "localInfoFields", {
-        value: replayCandidate.localInfoFields,
-        enumerable: false,
-      });
       displayReplayDataset = applyCatalogMetadata(
         withTasks,
         remote,
-        dailyAdditionsForDataset(withTasks, remote),
+        dailyAdditionsForDataset(withTasks, remote, replayCandidate),
+        replayCandidate,
       );
     }
     const errors = discovery.errors.filter((entry) =>
