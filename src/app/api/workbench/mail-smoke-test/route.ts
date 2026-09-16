@@ -1,4 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { isSameOriginRequest } from "@/lib/request-security";
@@ -16,6 +18,7 @@ export const dynamic = "force-dynamic";
 
 const SCRIPT_TIMEOUT_MS = 45_000;
 const MAX_ERROR_LENGTH = 2_000;
+const MAX_INLINE_BODY_BYTES = 32 * 1024;
 
 type MailScriptEvent = {
   type?: unknown;
@@ -104,6 +107,7 @@ function pythonBin(): string {
 function mailSpawnEnv(
   message: WorkbenchMailMessage,
   passwordFile: string,
+  bodyFiles?: { text?: string; html?: string },
 ): NodeJS.ProcessEnv {
   const resolved = resolveWorkbenchMailSender(message.sender);
   if (!resolved.ok) throw new Error(resolved.error);
@@ -120,10 +124,48 @@ function mailSpawnEnv(
     SMTP_PASSWORD_FILE: passwordFile,
     SMTP_TO_ADDRESS: message.recipient,
     SMTP_SUBJECT: message.subject,
-    SMTP_TEXT_BODY: message.textBody,
-    SMTP_HTML_BODY: message.htmlBody,
   });
+  if (bodyFiles?.text) env.SMTP_TEXT_BODY_FILE = bodyFiles.text;
+  else env.SMTP_TEXT_BODY = message.textBody;
+  if (bodyFiles?.html) env.SMTP_HTML_BODY_FILE = bodyFiles.html;
+  else env.SMTP_HTML_BODY = message.htmlBody;
   return env;
+}
+
+function shouldWriteBodyFile(value: string): boolean {
+  return Buffer.byteLength(value, "utf8") > MAX_INLINE_BODY_BYTES;
+}
+
+async function writeLargeBodyFiles(message: WorkbenchMailMessage): Promise<{
+  files: { text?: string; html?: string };
+  cleanup: () => Promise<void>;
+}> {
+  const files: { text?: string; html?: string } = {};
+  const needsTextFile = shouldWriteBodyFile(message.textBody);
+  const needsHtmlFile = shouldWriteBodyFile(message.htmlBody);
+  if (!needsTextFile && !needsHtmlFile) {
+    return { files, cleanup: async () => undefined };
+  }
+
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "xense-mail-"));
+  try {
+    if (needsTextFile) {
+      files.text = path.join(dir, "body.txt");
+      await fs.writeFile(files.text, message.textBody, "utf8");
+    }
+    if (needsHtmlFile) {
+      files.html = path.join(dir, "body.html");
+      await fs.writeFile(files.html, message.htmlBody, "utf8");
+    }
+  } catch (error) {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+
+  return {
+    files,
+    cleanup: () => fs.rm(dir, { recursive: true, force: true }),
+  };
 }
 
 function safeMailError(value: unknown, env?: NodeJS.ProcessEnv): string {
@@ -239,7 +281,21 @@ async function runMailScript(
     return scriptFailure("config", "SMTP_AUTHORIZATION_CODE_MISSING", error);
   }
 
-  const env = mailSpawnEnv(message, passwordFile);
+  let bodyFiles: {
+    files: { text?: string; html?: string };
+    cleanup: () => Promise<void>;
+  };
+  try {
+    bodyFiles = await writeLargeBodyFiles(message);
+  } catch (error: unknown) {
+    return scriptFailure(
+      "config",
+      "SMTP_BODY_FILE_FAILED",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+
+  const env = mailSpawnEnv(message, passwordFile, bodyFiles.files);
   const py = pythonBin();
 
   return new Promise((resolve) => {
@@ -250,6 +306,7 @@ async function runMailScript(
         env,
       });
     } catch (error: unknown) {
+      void bodyFiles.cleanup();
       resolve(
         scriptFailure(
           "spawn",
@@ -277,6 +334,7 @@ async function runMailScript(
         forceKillTimer.unref?.();
       }
       settled = true;
+      void bodyFiles.cleanup();
       resolve(
         scriptFailure(
           "timeout",
@@ -299,6 +357,7 @@ async function runMailScript(
       settled = true;
       clearTimeout(timeout);
       if (forceKillTimer) clearTimeout(forceKillTimer);
+      void bodyFiles.cleanup();
       resolve(
         scriptFailure(
           "spawn",
@@ -314,6 +373,7 @@ async function runMailScript(
       settled = true;
       clearTimeout(timeout);
       if (forceKillTimer) clearTimeout(forceKillTimer);
+      void bodyFiles.cleanup();
       resolve(parseScriptOutput(stdout, stderr, code, env));
     });
   });

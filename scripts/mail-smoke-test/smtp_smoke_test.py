@@ -89,6 +89,16 @@ def get_optional_env(name: str, default: str) -> str:
     return value.strip()
 
 
+def get_optional_text_env(name: str, file_name: str, default: str) -> str:
+    file_value = os.environ.get(file_name)
+    if file_value and file_value.strip():
+        try:
+            return Path(file_value.strip()).read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ConfigError(f"could not read {file_name}: {exc}") from exc
+    return get_optional_env(name, default)
+
+
 def get_provider() -> str:
     provider = os.environ.get("SMTP_PROVIDER", "qq").strip().lower()
     if provider in {"netease", "netease163"}:
@@ -220,8 +230,12 @@ def load_config() -> dict[str, Any]:
     )
     to_address = ", ".join(to_addresses)
     subject = get_optional_env("SMTP_SUBJECT", DEFAULT_SUBJECT)
-    text_body = get_optional_env("SMTP_TEXT_BODY", DEFAULT_TEXT_BODY)
-    html_body = get_optional_env("SMTP_HTML_BODY", DEFAULT_HTML_BODY)
+    text_body = get_optional_text_env(
+        "SMTP_TEXT_BODY", "SMTP_TEXT_BODY_FILE", DEFAULT_TEXT_BODY
+    )
+    html_body = get_optional_text_env(
+        "SMTP_HTML_BODY", "SMTP_HTML_BODY_FILE", DEFAULT_HTML_BODY
+    )
     host = get_optional_env("SMTP_HOST", preset["host"])
     port = parse_port(get_optional_env("SMTP_PORT", str(preset["port"])))
     username = from_address
