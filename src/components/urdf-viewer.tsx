@@ -2208,6 +2208,29 @@ export default function URDFViewer({
             <span className="text-red-400">X · {t("urdf.axisForward")}</span>
             <span className="text-green-400">Y · {t("urdf.axisLeft")}</span>
             <span className="text-blue-400">Z · {t("urdf.axisUp")}</span>
+            {/*
+             * The trail and the gripper's own fingers are the same colour per
+             * side (baked into the two TacCap URDFs, tinted after load for
+             * RDT), so one swatch names both. Driven off `tacCapTracks` rather
+             * than a hardcoded pair: a single-arm capture legends one side.
+             * The side token is printed raw, as the mapping table below does —
+             * it is the `left_tcp` / `right_tcp` column, not a translatable
+             * word, and that also keeps it from colliding with the `Y · left`
+             * axis beside it.
+             */}
+            <span className="h-3 w-px bg-white/15" aria-hidden />
+            <span className="text-slate-500">{t("urdf.tacCapSide")}</span>
+            {tacCapTracks.map((track) => (
+              <span key={track.side} className="flex items-center gap-1">
+                <span
+                  className="inline-block h-2 w-2 rounded-full"
+                  style={{ backgroundColor: TACCAP_TRAIL_COLOR[track.side] }}
+                />
+                <span style={{ color: TACCAP_TRAIL_COLOR[track.side] }}>
+                  {track.side}
+                </span>
+              </span>
+            ))}
           </div>
         )}
         {urdfLoading && (
