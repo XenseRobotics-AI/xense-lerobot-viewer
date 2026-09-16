@@ -196,13 +196,33 @@ function scriptFailure(
   error: unknown,
   env?: NodeJS.ProcessEnv,
 ): MailScriptFailure {
+  const normalizedError =
+    code === "auth_error" && stage === "auth"
+      ? smtpAuthenticationErrorMessage(error, env)
+      : error;
   return {
     ok: false,
     status: statusForScriptStage(stage),
     stage,
     code,
-    error: safeMailError(error, env),
+    error: safeMailError(normalizedError, env),
   };
+}
+
+function smtpAuthenticationErrorMessage(
+  error: unknown,
+  env?: NodeJS.ProcessEnv,
+): string {
+  const provider = env?.SMTP_PROVIDER?.trim().toUpperCase() || "SMTP";
+  const sender = env?.SMTP_FROM_ADDRESS?.trim() || "the configured sender";
+  const detail = error instanceof Error ? error.message : String(error);
+  const suffix = detail.trim() ? ` Server detail: ${detail}` : "";
+  return (
+    `SMTP login failed for ${sender} via ${provider}. ` +
+    `Save the SMTP authorization code for this exact mailbox in Workbench, ` +
+    `not the mailbox login password. If Sender was changed, save the ` +
+    `authorization code again for the new QQ/163 provider.${suffix}`
+  );
 }
 
 function parseScriptOutput(

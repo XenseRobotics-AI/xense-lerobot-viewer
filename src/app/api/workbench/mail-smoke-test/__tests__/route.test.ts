@@ -276,11 +276,22 @@ process.exit(3);
       }),
     );
 
-    await expect(response.json()).resolves.toEqual({
-      error: "authentication failed",
+    const payload = (await response.json()) as {
+      error: string;
+      stage: string;
+      code: string;
+    };
+    expect(payload).toEqual({
+      error: expect.stringContaining(
+        "SMTP login failed for sender@qq.com via QQ",
+      ),
       stage: "auth",
       code: "auth_error",
     });
+    expect(payload.error).toContain(
+      "Save the SMTP authorization code for this exact mailbox",
+    );
+    expect(payload.error).toContain("authentication failed");
     expect(response.status).toBe(502);
   });
 
