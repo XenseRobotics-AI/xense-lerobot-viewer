@@ -2005,6 +2005,17 @@ export default function URDFViewer({
         : null,
     [chartData, isBundledGripper, selectedGroup],
   );
+  /** Viewport legend: the trajectories actually drawn, in scene colour. */
+  const legendTracks = useMemo(
+    () => [
+      ...tacCapTracks.map((track) => ({
+        label: track.side as string,
+        color: TACCAP_TRAIL_COLOR[track.side],
+      })),
+      ...(tacCapHeadTrack ? [{ label: "head", color: TACCAP_HEAD_COLOR }] : []),
+    ],
+    [tacCapHeadTrack, tacCapTracks],
+  );
 
   // Joint mapping
   const autoMapping = useMemo(
@@ -2208,6 +2219,35 @@ export default function URDFViewer({
             <span className="text-red-400">X · {t("urdf.axisForward")}</span>
             <span className="text-green-400">Y · {t("urdf.axisLeft")}</span>
             <span className="text-blue-400">Z · {t("urdf.axisUp")}</span>
+            {/*
+             * One swatch per trajectory actually drawn. A gripper's trail and
+             * its own fingers carry the same per-side colour (baked into the
+             * two TacCap URDFs, tinted after load for RDT), so the swatch
+             * names both at once.
+             *
+             * The list is built from the tracks rather than hardcoded, because
+             * what is on screen varies: a single-arm capture legends one side,
+             * and `head` exists only when the selected source carries a
+             * complete `head.xyz+r1-r6` group — a dataset with head *video*
+             * and no head pose draws no yellow trail, so it must not claim one
+             * in the legend.
+             *
+             * Tokens are printed raw, as the mapping table below does — they
+             * are the `left_tcp` / `right_tcp` / `head` columns, not
+             * translatable words, and that also keeps `left` from reading as
+             * the `Y · left` axis beside it.
+             */}
+            <span className="h-3 w-px bg-white/15" aria-hidden />
+            <span className="text-slate-500">{t("urdf.legendTracks")}</span>
+            {legendTracks.map((entry) => (
+              <span key={entry.label} className="flex items-center gap-1">
+                <span
+                  className="inline-block h-2 w-2 rounded-full"
+                  style={{ backgroundColor: entry.color }}
+                />
+                <span style={{ color: entry.color }}>{entry.label}</span>
+              </span>
+            ))}
           </div>
         )}
         {urdfLoading && (
