@@ -1212,6 +1212,30 @@ export const zh: Record<MessageKey, string> = {
   "workbench.hfDownloadActiveFiles": "活跃任务 {count} / {total}",
   "workbench.hfDownloadCompletedConcurrency":
     "本次使用 {count} 个 worker 下载。",
+  "workbench.hfDownloadQueueSources": "批量仓库",
+  "workbench.hfDownloadQueuePlaceholder":
+    "TacVerse/example-a\nTacVerse/example-b",
+  "workbench.hfDownloadQueueHint":
+    "每行一个仓库路径；当前根目录、范围、端点、token 和文件并发数会应用到每一项。",
+  "workbench.hfDownloadQueueConcurrency": "数据集并发数",
+  "workbench.hfDownloadQueueConcurrencyValue": "{count} 个数据集",
+  "workbench.hfDownloadQueueCheck": "检查队列",
+  "workbench.hfDownloadQueueChecking": "检查队列中…",
+  "workbench.hfDownloadQueueStart": "启动队列",
+  "workbench.hfDownloadQueueRunning": "队列下载中…",
+  "workbench.hfDownloadQueueConfirm":
+    "我已核对队列版本，并确认下载所有 ready 项。",
+  "workbench.hfDownloadQueueEmpty": "请至少向队列添加一个仓库路径。",
+  "workbench.hfDownloadQueueSummary":
+    "{ready} 就绪 · {done} 完成 · {failed} 失败 · {skipped} 跳过",
+  "workbench.hfDownloadQueueItemProgress": "{done} / {total} 个文件",
+  "workbench.hfDownloadQueuePendingStatus": "待检查",
+  "workbench.hfDownloadQueueCheckingStatus": "检查中",
+  "workbench.hfDownloadQueueReadyStatus": "就绪",
+  "workbench.hfDownloadQueueDownloadingStatus": "下载中",
+  "workbench.hfDownloadQueueDoneStatus": "完成",
+  "workbench.hfDownloadQueueSkippedStatus": "已是当前",
+  "workbench.hfDownloadQueueFailedStatus": "失败",
   "workbench.hfDownloadFinalPath": "最终路径",
   "workbench.hfDownloadInvalidPreview": "请输入有效的仓库路径和下载根目录。",
   "workbench.hfDownloadCheck": "检查下载",

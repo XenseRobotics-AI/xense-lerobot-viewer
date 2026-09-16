@@ -137,4 +137,25 @@ describe("HF download routes", () => {
       finishDatasetWrite(lease);
     }
   });
+
+  test("rejects nested target writers before launching Python", async () => {
+    const lease = beginDatasetWrite(
+      "hf-download",
+      "TacVerse/example",
+      path.resolve(valid.destinationRoot, "TacVerse", "example"),
+    );
+    try {
+      const response = await DOWNLOAD(
+        request("http://localhost/api/workbench/hf-download/download", {
+          ...valid,
+          source: "TacVerse/example/child",
+          revisionSha: "a".repeat(40),
+        }),
+      );
+      expect(response.status).toBe(409);
+      expect((await response.json()).error).toContain("TacVerse/example");
+    } finally {
+      finishDatasetWrite(lease);
+    }
+  });
 });

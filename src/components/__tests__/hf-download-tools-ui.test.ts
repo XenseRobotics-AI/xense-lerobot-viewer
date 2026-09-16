@@ -37,6 +37,13 @@ describe("Workbench HF download tools UI contract", () => {
     expect(panel).toContain("DEFAULT_DOWNLOAD_CONCURRENCY");
     expect(panel).toContain('type="range"');
     expect(panel).toContain("workbench.hfDownloadConcurrency");
+    expect(panel).toContain("queueText");
+    expect(panel).toContain("DEFAULT_QUEUE_CONCURRENCY");
+    expect(panel).toContain("queueConcurrency");
+    expect(panel).toContain("Math.min(queueConcurrency, runnable.length)");
+    expect(panel).toContain("runQueueCheck");
+    expect(panel).toContain("runQueueDownload");
+    expect(panel).toContain("workbench.hfDownloadQueueConfirm");
     expect(panel).toContain("checkHfDownload(nextRequest");
     expect(panel).toContain(
       "if (!check || !checkedRequest || !confirmed) return",

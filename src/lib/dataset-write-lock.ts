@@ -16,6 +16,9 @@ function keysConflict(left: string, right: string): boolean {
   const a = normalizedKey(left);
   const b = normalizedKey(right);
   if (a === b) return true;
+  if (a.startsWith("/") && b.startsWith("/")) {
+    return b.startsWith(`${a}/`) || a.startsWith(`${b}/`);
+  }
   if (a.endsWith("/*")) return b.startsWith(a.slice(0, -1));
   if (b.endsWith("/*")) return a.startsWith(b.slice(0, -1));
   // Legacy callers pass an org/repo label rather than an absolute target.

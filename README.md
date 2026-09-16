@@ -130,9 +130,11 @@ huggingface-cli download lerobot/svla_so101_pickplace \
 
 Once the download finishes, refresh the homepage — the new dataset will appear.
 
-Workbench → HF download tools downloads one checked dataset revision at a time
-and now transfers files inside that dataset in parallel. The default is 4
-workers, adjustable from 1 to 8 in the panel; lowering it is useful on unstable
+Workbench → HF download tools can download one checked dataset revision or run a
+checked batch queue of repository paths. The queue downloads up to 2 datasets in
+parallel by default, adjustable from 1 to 3, while files inside each dataset
+also transfer in parallel. File concurrency defaults to 4 workers and is
+adjustable from 1 to 8 in the panel; lowering either value is useful on unstable
 links or slow disks. Downloads still stage, verify, and promote atomically, so a
 cancelled or failed run does not replace the existing dataset.
 

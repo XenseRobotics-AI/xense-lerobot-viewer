@@ -19,28 +19,71 @@ import type {
   HfDownloadScope,
 } from "@/types/hf-download.types";
 
+type HfDownloadQueueStatus =
+  | "pending"
+  | "checking"
+  | "ready"
+  | "downloading"
+  | "done"
+  | "skipped"
+  | "failed";
+
+type HfDownloadQueueItem = {
+  source: string;
+  status: HfDownloadQueueStatus;
+  check: HfDownloadCheck | null;
+  progress: HfDownloadProgress | null;
+  result: HfDownloadResult | null;
+  error: string | null;
+};
+
 type HfDownloadPanelProps = {
   endpoint: string;
   token: string;
   initialSource?: string;
 };
 
+const SOURCE =
+  /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)?$/u;
 const DEFAULT_DOWNLOAD_CONCURRENCY = 4;
 const MIN_DOWNLOAD_CONCURRENCY = 1;
 const MAX_DOWNLOAD_CONCURRENCY = 8;
+const DEFAULT_QUEUE_CONCURRENCY = 2;
+const MIN_QUEUE_CONCURRENCY = 1;
+const MAX_QUEUE_CONCURRENCY = 3;
+
+function parseQueueSources(value: string): string[] {
+  const seen = new Set<string>();
+  const sources: string[] = [];
+  for (const raw of value.split(/[\r\n,]+/u)) {
+    const source = raw.trim();
+    if (!source || seen.has(source)) continue;
+    seen.add(source);
+    sources.push(source);
+  }
+  return sources;
+}
 
 function previewTarget(root: string, source: string): string | null {
   const cleanRoot = root.trim().replace(/\/+$/u, "");
   const cleanSource = source.trim();
-  if (
-    !cleanRoot ||
-    !/^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)?$/u.test(
-      cleanSource,
-    )
-  ) {
+  if (!cleanRoot || !SOURCE.test(cleanSource)) {
     return null;
   }
   return `${cleanRoot}/${cleanSource}`;
+}
+
+function queueStatusClass(status: HfDownloadQueueStatus): string {
+  if (status === "done" || status === "skipped") {
+    return "border-emerald-400/25 bg-emerald-500/10 text-emerald-200";
+  }
+  if (status === "failed") {
+    return "border-amber-400/25 bg-amber-500/10 text-amber-200";
+  }
+  if (status === "checking" || status === "downloading") {
+    return "border-cyan-400/25 bg-cyan-500/10 text-cyan-100";
+  }
+  return "border-white/10 bg-white/5 text-slate-300";
 }
 
 export default function HfDownloadPanel({
@@ -53,6 +96,14 @@ export default function HfDownloadPanel({
   const [root, setRoot] = useState("");
   const [scope, setScope] = useState<HfDownloadScope>("all");
   const [concurrency, setConcurrency] = useState(DEFAULT_DOWNLOAD_CONCURRENCY);
+  const [queueText, setQueueText] = useState("");
+  const [queueConcurrency, setQueueConcurrency] = useState(
+    DEFAULT_QUEUE_CONCURRENCY,
+  );
+  const [queueItems, setQueueItems] = useState<HfDownloadQueueItem[]>([]);
+  const [queueConfirmed, setQueueConfirmed] = useState(false);
+  const [queueChecking, setQueueChecking] = useState(false);
+  const [queueRunning, setQueueRunning] = useState(false);
   const [check, setCheck] = useState<HfDownloadCheck | null>(null);
   const [checkedRequest, setCheckedRequest] =
     useState<HfDownloadRequest | null>(null);
@@ -68,6 +119,27 @@ export default function HfDownloadPanel({
     () => previewTarget(root, source),
     [root, source],
   );
+  const queueSources = useMemo(() => parseQueueSources(queueText), [queueText]);
+  const queueCounts = useMemo(
+    () =>
+      queueItems.reduce(
+        (counts, item) => {
+          counts[item.status] += 1;
+          return counts;
+        },
+        {
+          pending: 0,
+          checking: 0,
+          ready: 0,
+          downloading: 0,
+          done: 0,
+          skipped: 0,
+          failed: 0,
+        } satisfies Record<HfDownloadQueueStatus, number>,
+      ),
+    [queueItems],
+  );
+  const busy = checking || downloading || queueChecking || queueRunning;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -101,8 +173,13 @@ export default function HfDownloadPanel({
     setProgress(null);
   }, [concurrency, endpoint, root, scope, source, token]);
 
-  const request = (): HfDownloadRequest => ({
-    source: source.trim(),
+  useEffect(() => {
+    setQueueItems([]);
+    setQueueConfirmed(false);
+  }, [concurrency, endpoint, queueText, root, scope, token]);
+
+  const request = (sourceOverride = source.trim()): HfDownloadRequest => ({
+    source: sourceOverride,
     destinationRoot: root.trim(),
     scope,
     endpoint,
@@ -163,6 +240,76 @@ export default function HfDownloadPanel({
     }
   };
 
+  const updateQueueItem = (
+    itemSource: string,
+    patch: Partial<HfDownloadQueueItem>,
+  ) => {
+    setQueueItems((current) =>
+      current.map((item) =>
+        item.source === itemSource ? { ...item, ...patch } : item,
+      ),
+    );
+  };
+
+  const runQueueCheck = async () => {
+    const sources = queueSources;
+    if (!sources.length) {
+      setError(t("workbench.hfDownloadQueueEmpty"));
+      return;
+    }
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setQueueChecking(true);
+    setError(null);
+    setQueueConfirmed(false);
+    setQueueItems(
+      sources.map((queuedSource) => ({
+        source: queuedSource,
+        status: "pending",
+        check: null,
+        progress: null,
+        result: null,
+        error: null,
+      })),
+    );
+    try {
+      for (const queuedSource of sources) {
+        if (controller.signal.aborted) break;
+        updateQueueItem(queuedSource, {
+          status: "checking",
+          check: null,
+          progress: null,
+          result: null,
+          error: null,
+        });
+        try {
+          const nextCheck = await checkHfDownload(
+            request(queuedSource),
+            controller.signal,
+          );
+          updateQueueItem(queuedSource, {
+            status: "ready",
+            check: nextCheck,
+            error: null,
+          });
+        } catch (reason) {
+          if (controller.signal.aborted) break;
+          updateQueueItem(queuedSource, {
+            status: "failed",
+            error: reason instanceof Error ? reason.message : String(reason),
+          });
+        }
+      }
+    } finally {
+      if (controller.signal.aborted) {
+        setError(t("workbench.hfDownloadCancelled"));
+      }
+      setQueueChecking(false);
+      if (abortRef.current === controller) abortRef.current = null;
+    }
+  };
+
   const runDownload = async () => {
     if (!check || !checkedRequest || !confirmed) return;
     const controller = new AbortController();
@@ -198,12 +345,122 @@ export default function HfDownloadPanel({
     }
   };
 
+  const runQueueDownload = async () => {
+    if (!queueConfirmed) return;
+    const planned = queueItems.filter(
+      (item) => item.status === "ready" && item.check,
+    );
+    if (!planned.length) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setQueueRunning(true);
+    setError(null);
+    try {
+      const runnable: HfDownloadQueueItem[] = [];
+      for (const item of planned) {
+        if (item.check?.matchesRevision && item.check.scopeExists) {
+          updateQueueItem(item.source, {
+            status: "skipped",
+            progress: null,
+            error: null,
+          });
+          continue;
+        }
+        runnable.push(item);
+      }
+
+      let cursor = 0;
+      const downloadNext = async () => {
+        for (;;) {
+          if (controller.signal.aborted) break;
+          const item = runnable[cursor];
+          cursor += 1;
+          if (!item) break;
+          await downloadQueueItem(item, controller);
+        }
+      };
+      await Promise.all(
+        Array.from(
+          { length: Math.min(queueConcurrency, runnable.length) },
+          downloadNext,
+        ),
+      );
+    } finally {
+      if (controller.signal.aborted) {
+        setError(t("workbench.hfDownloadCancelled"));
+      }
+      setQueueRunning(false);
+      if (abortRef.current === controller) abortRef.current = null;
+    }
+  };
+
+  const downloadQueueItem = async (
+    item: HfDownloadQueueItem,
+    controller: AbortController,
+  ) => {
+    if (!item.check) return;
+    if (controller.signal.aborted) return;
+    try {
+      updateQueueItem(item.source, {
+        status: "downloading",
+        progress: { phase: "downloading", percent: 0 },
+        result: null,
+        error: null,
+      });
+      let completed: HfDownloadResult | null = null;
+      await startHfDownload(
+        {
+          ...request(item.source),
+          revisionSha: item.check.revisionSha,
+        },
+        (event) => {
+          if (event.type === "progress") {
+            updateQueueItem(item.source, { progress: event.progress });
+          } else if (event.type === "result") {
+            completed = event.result;
+            updateQueueItem(item.source, {
+              status: "done",
+              result: event.result,
+              progress: { phase: "promoting", percent: 100 },
+            });
+          } else if (event.type === "error") {
+            throw new Error(event.error);
+          }
+        },
+        controller.signal,
+      );
+      if (!completed) throw new Error(t("workbench.hfDownloadIncomplete"));
+      updateQueueItem(item.source, { status: "done", result: completed });
+    } catch (reason) {
+      if (controller.signal.aborted) return;
+      updateQueueItem(item.source, {
+        status: "failed",
+        error: reason instanceof Error ? reason.message : String(reason),
+      });
+    }
+  };
+
   const cancel = () => {
     abortRef.current?.abort();
     abortRef.current = null;
     setDownloading(false);
     setChecking(false);
+    setQueueChecking(false);
+    setQueueRunning(false);
     setError(t("workbench.hfDownloadCancelled"));
+  };
+
+  const queueStatusLabel = (status: HfDownloadQueueStatus): string => {
+    if (status === "checking")
+      return t("workbench.hfDownloadQueueCheckingStatus");
+    if (status === "ready") return t("workbench.hfDownloadQueueReadyStatus");
+    if (status === "downloading")
+      return t("workbench.hfDownloadQueueDownloadingStatus");
+    if (status === "done") return t("workbench.hfDownloadQueueDoneStatus");
+    if (status === "skipped")
+      return t("workbench.hfDownloadQueueSkippedStatus");
+    if (status === "failed") return t("workbench.hfDownloadQueueFailedStatus");
+    return t("workbench.hfDownloadQueuePendingStatus");
   };
 
   const percent = Math.max(
@@ -230,7 +487,7 @@ export default function HfDownloadPanel({
           <span>{t("workbench.hfDownloadRepoPath")}</span>
           <input
             value={source}
-            disabled={downloading}
+            disabled={busy}
             onChange={(event) => setSource(event.target.value)}
             placeholder="TacVerse/taccap-g1-flip-bound-document-0909"
             className="min-w-0 rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-600 focus:border-cyan-300/60 focus:outline-none disabled:opacity-50"
@@ -245,13 +502,13 @@ export default function HfDownloadPanel({
           <span className="flex min-w-0 flex-col gap-2 sm:flex-row">
             <input
               value={root}
-              disabled={downloading}
+              disabled={busy}
               onChange={(event) => setRoot(event.target.value)}
               className="min-w-0 flex-1 rounded-md border border-white/10 bg-black/20 px-3 py-2 font-mono text-xs text-slate-100 focus:border-cyan-300/60 focus:outline-none disabled:opacity-50"
             />
             <button
               type="button"
-              disabled={downloading}
+              disabled={busy}
               onClick={() => void browse()}
               className="rounded-md border border-white/10 px-3 py-2 text-xs text-slate-300 hover:border-cyan-300/50 disabled:opacity-50"
             >
@@ -274,7 +531,7 @@ export default function HfDownloadPanel({
                 name="hfDownloadScope"
                 value="all"
                 checked={scope === "all"}
-                disabled={downloading}
+                disabled={busy}
                 onChange={() => setScope("all")}
                 className="accent-cyan-400"
               />
@@ -286,7 +543,7 @@ export default function HfDownloadPanel({
                 name="hfDownloadScope"
                 value="meta"
                 checked={scope === "meta"}
-                disabled={downloading}
+                disabled={busy}
                 onChange={() => setScope("meta")}
                 className="accent-cyan-400"
               />
@@ -310,7 +567,7 @@ export default function HfDownloadPanel({
             max={MAX_DOWNLOAD_CONCURRENCY}
             step={1}
             value={concurrency}
-            disabled={downloading}
+            disabled={busy}
             onChange={(event) =>
               setConcurrency(Number.parseInt(event.target.value, 10))
             }
@@ -336,7 +593,7 @@ export default function HfDownloadPanel({
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          disabled={checking || downloading || !targetPreview}
+          disabled={busy || !targetPreview}
           onClick={() => void runCheck()}
           className="rounded-md bg-cyan-400/80 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
         >
@@ -344,7 +601,7 @@ export default function HfDownloadPanel({
             ? t("workbench.hfDownloadChecking")
             : t("workbench.hfDownloadCheck")}
         </button>
-        {(checking || downloading) && (
+        {busy && (
           <button
             type="button"
             onClick={cancel}
@@ -352,6 +609,183 @@ export default function HfDownloadPanel({
           >
             {t("workbench.hfDownloadCancel")}
           </button>
+        )}
+      </div>
+
+      <div className="space-y-3 rounded-lg border border-white/10 bg-black/10 p-3 text-xs text-slate-300">
+        <label className="grid gap-1.5">
+          <span>{t("workbench.hfDownloadQueueSources")}</span>
+          <textarea
+            value={queueText}
+            disabled={busy}
+            onChange={(event) => setQueueText(event.target.value)}
+            placeholder={t("workbench.hfDownloadQueuePlaceholder")}
+            rows={4}
+            className="min-w-0 resize-y rounded-md border border-white/10 bg-black/20 px-3 py-2 font-mono text-xs text-slate-100 placeholder:text-slate-600 focus:border-cyan-300/60 focus:outline-none disabled:opacity-50"
+          />
+          <span className="text-[11px] text-slate-500">
+            {t("workbench.hfDownloadQueueHint")}
+          </span>
+        </label>
+        <label className="grid gap-2">
+          <span className="flex items-center justify-between gap-3">
+            <span>{t("workbench.hfDownloadQueueConcurrency")}</span>
+            <span className="tabular-nums text-cyan-200">
+              {t("workbench.hfDownloadQueueConcurrencyValue", {
+                count: queueConcurrency.toLocaleString(),
+              })}
+            </span>
+          </span>
+          <input
+            type="range"
+            min={MIN_QUEUE_CONCURRENCY}
+            max={MAX_QUEUE_CONCURRENCY}
+            step={1}
+            value={queueConcurrency}
+            disabled={busy}
+            onChange={(event) =>
+              setQueueConcurrency(Number.parseInt(event.target.value, 10))
+            }
+            className="accent-cyan-400"
+          />
+        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={busy || !root.trim() || queueSources.length === 0}
+            onClick={() => void runQueueCheck()}
+            className="rounded-md border border-cyan-400/25 bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-100 hover:border-cyan-300/60 hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {queueChecking
+              ? t("workbench.hfDownloadQueueChecking")
+              : t("workbench.hfDownloadQueueCheck")}
+          </button>
+          {queueItems.length > 0 && (
+            <span className="text-[11px] text-slate-500">
+              {t("workbench.hfDownloadQueueSummary", {
+                ready: queueCounts.ready.toLocaleString(),
+                done: queueCounts.done.toLocaleString(),
+                failed: queueCounts.failed.toLocaleString(),
+                skipped: queueCounts.skipped.toLocaleString(),
+              })}
+            </span>
+          )}
+        </div>
+
+        {queueItems.length > 0 && (
+          <div className="space-y-3">
+            <div className="max-h-72 overflow-auto rounded-md border border-white/10">
+              {queueItems.map((item) => {
+                const itemPercent = Math.max(
+                  0,
+                  Math.min(100, Math.round(item.progress?.percent ?? 0)),
+                );
+                return (
+                  <div
+                    key={item.source}
+                    className="border-b border-white/5 px-3 py-2 last:border-b-0"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <span className="break-all font-mono text-slate-200">
+                        {item.source}
+                      </span>
+                      <span
+                        className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] ${queueStatusClass(item.status)}`}
+                      >
+                        {queueStatusLabel(item.status)}
+                      </span>
+                    </div>
+                    {item.check && (
+                      <p className="mt-1 break-all text-[11px] text-slate-500">
+                        {item.check.fileCount.toLocaleString()} ·{" "}
+                        {formatTransferred(item.check.sizeBytes)} ·{" "}
+                        <span className="font-mono">
+                          {item.check.revisionSha}
+                        </span>{" "}
+                        ·{" "}
+                        {item.check.scopeExists
+                          ? item.check.matchesRevision
+                            ? t("workbench.hfDownloadAlreadyCurrent")
+                            : t("workbench.hfDownloadWillReplace")
+                          : t("workbench.hfDownloadMissing")}
+                      </p>
+                    )}
+                    {item.progress && item.status === "downloading" && (
+                      <div className="mt-2">
+                        <div
+                          role="progressbar"
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={itemPercent}
+                          className="h-1 overflow-hidden rounded-full bg-white/10"
+                        >
+                          <div
+                            className="h-full rounded-full bg-cyan-300"
+                            style={{ width: `${itemPercent}%` }}
+                          />
+                        </div>
+                        <p className="mt-1 break-all text-[11px] text-slate-500">
+                          {item.progress.currentFile ||
+                            t("workbench.hfDownloadPreparing")}
+                        </p>
+                        <p className="mt-1 text-[11px] tabular-nums text-cyan-200/80">
+                          {t("workbench.hfDownloadQueueItemProgress", {
+                            done: (
+                              item.progress.filesDone ?? 0
+                            ).toLocaleString(),
+                            total: (
+                              item.progress.filesTotal ??
+                              item.check?.fileCount ??
+                              0
+                            ).toLocaleString(),
+                          })}
+                          {typeof item.progress.bytes === "number"
+                            ? ` · ${formatTransferred(item.progress.bytes)}`
+                            : ""}
+                          {item.progress.bytesPerSecond
+                            ? ` · ${formatTransferRate(item.progress.bytesPerSecond)}`
+                            : ""}
+                        </p>
+                      </div>
+                    )}
+                    {item.result && (
+                      <p className="mt-1 break-all text-[11px] text-emerald-200">
+                        {t("workbench.hfDownloadSavedTo")}{" "}
+                        <span className="font-mono">
+                          {item.result.targetPath}
+                        </span>
+                      </p>
+                    )}
+                    {item.error && (
+                      <p className="mt-1 break-all text-[11px] text-amber-200">
+                        {item.error}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <label className="flex items-start gap-2 rounded-md border border-white/10 p-3">
+              <input
+                type="checkbox"
+                checked={queueConfirmed}
+                disabled={busy || queueCounts.ready === 0}
+                onChange={(event) => setQueueConfirmed(event.target.checked)}
+                className="mt-0.5 accent-cyan-400"
+              />
+              <span>{t("workbench.hfDownloadQueueConfirm")}</span>
+            </label>
+            <button
+              type="button"
+              disabled={!queueConfirmed || busy || queueCounts.ready === 0}
+              onClick={() => void runQueueDownload()}
+              className="rounded-md bg-emerald-400/80 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {queueRunning
+                ? t("workbench.hfDownloadQueueRunning")
+                : t("workbench.hfDownloadQueueStart")}
+            </button>
+          </div>
         )}
       </div>
 
@@ -389,7 +823,7 @@ export default function HfDownloadPanel({
             <input
               type="checkbox"
               checked={confirmed}
-              disabled={downloading}
+              disabled={busy}
               onChange={(event) => setConfirmed(event.target.checked)}
               className="mt-0.5 accent-cyan-400"
             />
@@ -403,7 +837,7 @@ export default function HfDownloadPanel({
           </label>
           <button
             type="button"
-            disabled={!confirmed || downloading}
+            disabled={!confirmed || busy}
             onClick={() => void runDownload()}
             className="rounded-md bg-emerald-400/80 px-3 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
           >

@@ -1266,6 +1266,31 @@ export const en = {
   "workbench.hfDownloadActiveFiles": "{count} / {total} active",
   "workbench.hfDownloadCompletedConcurrency":
     "Downloaded with {count} workers.",
+  "workbench.hfDownloadQueueSources": "Batch repositories",
+  "workbench.hfDownloadQueuePlaceholder":
+    "TacVerse/example-one\nTacVerse/example-two",
+  "workbench.hfDownloadQueueHint":
+    "One repository path per line. The current root, scope, endpoint, token, and file concurrency apply to every item.",
+  "workbench.hfDownloadQueueConcurrency": "Dataset concurrency",
+  "workbench.hfDownloadQueueConcurrencyValue": "{count} datasets",
+  "workbench.hfDownloadQueueCheck": "Check queue",
+  "workbench.hfDownloadQueueChecking": "Checking queue…",
+  "workbench.hfDownloadQueueStart": "Start queue",
+  "workbench.hfDownloadQueueRunning": "Downloading queue…",
+  "workbench.hfDownloadQueueConfirm":
+    "I checked the queued revisions and confirm downloading the ready items.",
+  "workbench.hfDownloadQueueEmpty":
+    "Add at least one repository path to the queue.",
+  "workbench.hfDownloadQueueSummary":
+    "{ready} ready · {done} done · {failed} failed · {skipped} skipped",
+  "workbench.hfDownloadQueueItemProgress": "{done} / {total} files",
+  "workbench.hfDownloadQueuePendingStatus": "Pending",
+  "workbench.hfDownloadQueueCheckingStatus": "Checking",
+  "workbench.hfDownloadQueueReadyStatus": "Ready",
+  "workbench.hfDownloadQueueDownloadingStatus": "Downloading",
+  "workbench.hfDownloadQueueDoneStatus": "Done",
+  "workbench.hfDownloadQueueSkippedStatus": "Current",
+  "workbench.hfDownloadQueueFailedStatus": "Failed",
   "workbench.hfDownloadFinalPath": "Final path",
   "workbench.hfDownloadInvalidPreview":
     "Enter a valid repository path and download root.",
