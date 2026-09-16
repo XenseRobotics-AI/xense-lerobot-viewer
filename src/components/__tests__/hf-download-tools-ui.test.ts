@@ -34,6 +34,9 @@ describe("Workbench HF download tools UI contract", () => {
   test("defaults to all files and requires check plus confirmation", async () => {
     const panel = await source("hf-download-panel.tsx");
     expect(panel).toContain('useState<HfDownloadScope>("all")');
+    expect(panel).toContain("DEFAULT_DOWNLOAD_CONCURRENCY");
+    expect(panel).toContain('type="range"');
+    expect(panel).toContain("workbench.hfDownloadConcurrency");
     expect(panel).toContain("checkHfDownload(nextRequest");
     expect(panel).toContain(
       "if (!check || !checkedRequest || !confirmed) return",

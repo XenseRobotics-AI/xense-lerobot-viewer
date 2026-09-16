@@ -16,7 +16,9 @@ import shutil
 import signal
 import sys
 import tempfile
+import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -34,6 +36,8 @@ STAGING_DIR = "hf-download-staging"
 BACKUP_DIR = "hf-download-backups"
 STATE_DIR = "hf-download-state"
 PROGRESS_REPORT_INTERVAL = 0.5
+DEFAULT_DOWNLOAD_CONCURRENCY = 4
+MAX_DOWNLOAD_CONCURRENCY = 8
 
 
 class DownloadConflict(RuntimeError):
@@ -45,6 +49,7 @@ class DownloadCancelled(RuntimeError):
 
 
 _cancelled = False
+_emit_lock = threading.Lock()
 
 
 def _cancel(_signum: int, _frame: Any) -> None:
@@ -53,8 +58,9 @@ def _cancel(_signum: int, _frame: Any) -> None:
 
 
 def emit(payload: dict[str, Any]) -> None:
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
-    sys.stdout.flush()
+    with _emit_lock:
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+        sys.stdout.flush()
 
 
 def _progress_tqdm_class(callback: Callable[[int], None]) -> type[Any] | None:
@@ -250,6 +256,28 @@ def build_check_result(
     }
 
 
+def download_concurrency(value: Any) -> int:
+    if value is None:
+        return DEFAULT_DOWNLOAD_CONCURRENCY
+    if isinstance(value, bool):
+        raise ValueError(
+            f"concurrency must be an integer from 1 to {MAX_DOWNLOAD_CONCURRENCY}."
+        )
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value)
+    else:
+        raise ValueError(
+            f"concurrency must be an integer from 1 to {MAX_DOWNLOAD_CONCURRENCY}."
+        )
+    if parsed < 1 or parsed > MAX_DOWNLOAD_CONCURRENCY:
+        raise ValueError(
+            f"concurrency must be an integer from 1 to {MAX_DOWNLOAD_CONCURRENCY}."
+        )
+    return parsed
+
+
 def _backup_target(root: Path, parts: tuple[str, ...], scope: str) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     base = (root / CONTROL_DIR / BACKUP_DIR / stamp / Path(*parts)).resolve(
@@ -377,94 +405,154 @@ def download(request: dict[str, Any], token: str | None) -> dict[str, Any]:
     snapshot.mkdir()
     total_known = sum(entry["size"] or 0 for entry in files)
     processed = 0
+    completed = 0
+    workers = min(download_concurrency(request.get("concurrency")), len(files))
     started = time.monotonic()
-    try:
-        for index, entry in enumerate(files, start=1):
+    progress_lock = threading.Lock()
+    downloaded_by_file: dict[str, int] = {}
+    active_files: set[str] = set()
+    last_report = 0.0
+
+    def progress_payload(
+        current_file: str | None = None,
+        current_file_bytes: int | None = None,
+        current_file_total: int | None = None,
+    ) -> dict[str, Any]:
+        bytes_done = processed + sum(downloaded_by_file.values())
+        elapsed = max(time.monotonic() - started, 0.001)
+        if total_known > 0:
+            percent = min(99.9, round(bytes_done / total_known * 100, 1))
+        else:
+            percent = round(completed / len(files) * 100, 1)
+        visible_active = sorted(active_files)[:workers]
+        return {
+            "phase": "downloading",
+            "currentFile": current_file or (visible_active[0] if visible_active else None),
+            "filesDone": completed,
+            "filesTotal": len(files),
+            "bytes": bytes_done,
+            "totalBytes": total_known,
+            "currentFileBytes": current_file_bytes,
+            "currentFileTotalBytes": current_file_total,
+            "activeFiles": visible_active,
+            "concurrency": workers,
+            "bytesPerSecond": round(bytes_done / elapsed),
+            "percent": percent,
+        }
+
+    def emit_progress(
+        *,
+        current_file: str | None = None,
+        current_file_bytes: int | None = None,
+        current_file_total: int | None = None,
+        force: bool = False,
+    ) -> None:
+        nonlocal last_report
+        with progress_lock:
+            now = time.monotonic()
+            if not force and now - last_report < PROGRESS_REPORT_INTERVAL:
+                return
+            last_report = now
+            payload = progress_payload(current_file, current_file_bytes, current_file_total)
+        emit({"type": "progress", "progress": payload})
+
+    def download_one(entry: dict[str, Any]) -> int:
+        nonlocal processed, completed
+        if _cancelled:
+            raise DownloadCancelled("Download cancelled.")
+
+        remote_path = entry["remotePath"]
+        expected_size = entry["size"]
+        with progress_lock:
+            active_files.add(remote_path)
+            downloaded_by_file[remote_path] = 0
+        emit_progress(
+            current_file=remote_path,
+            current_file_bytes=0,
+            current_file_total=expected_size,
+            force=True,
+        )
+
+        def report_file_progress(delta: int, *, force: bool = False) -> None:
+            if _cancelled:
+                return
+            with progress_lock:
+                downloaded_by_file[remote_path] = max(
+                    0, downloaded_by_file.get(remote_path, 0) + delta
+                )
+                current_bytes = downloaded_by_file[remote_path]
+            emit_progress(
+                current_file=remote_path,
+                current_file_bytes=current_bytes,
+                current_file_total=expected_size,
+                force=force,
+            )
+
+        progress_class = _progress_tqdm_class(report_file_progress)
+        download_kwargs: dict[str, Any] = {
+            "repo_id": repo_id,
+            "filename": remote_path,
+            "repo_type": "dataset",
+            "revision": expected_sha,
+            "token": token,
+        }
+        if progress_class is not None:
+            download_kwargs["tqdm_class"] = progress_class
+        try:
+            cached = hf_hub_download(**download_kwargs)
             if _cancelled:
                 raise DownloadCancelled("Download cancelled.")
-            expected_size = entry["size"]
-            file_downloaded = 0
-            last_report = 0.0
-
-            def report_file_progress(delta: int, *, force: bool = False) -> None:
-                nonlocal file_downloaded, last_report
-                file_downloaded = max(0, file_downloaded + delta)
-                now = time.monotonic()
-                if not force and now - last_report < PROGRESS_REPORT_INTERVAL:
-                    return
-                last_report = now
-                elapsed = max(now - started, 0.001)
-                emit(
-                    {
-                        "type": "progress",
-                        "progress": {
-                            "phase": "downloading",
-                            "currentFile": entry["remotePath"],
-                            "filesDone": index - 1,
-                            "filesTotal": len(files),
-                            "bytes": processed + file_downloaded,
-                            "totalBytes": total_known,
-                            "currentFileBytes": file_downloaded,
-                            "currentFileTotalBytes": expected_size,
-                            "bytesPerSecond": round((processed + file_downloaded) / elapsed),
-                            "percent": round((index - 1) / len(files) * 100, 1),
-                        },
-                    }
-                )
-
-            emit(
-                {
-                    "type": "progress",
-                    "progress": {
-                        "phase": "downloading",
-                        "currentFile": entry["remotePath"],
-                        "filesDone": index - 1,
-                        "filesTotal": len(files),
-                        "bytes": processed,
-                        "totalBytes": total_known,
-                        "currentFileBytes": 0,
-                        "currentFileTotalBytes": expected_size,
-                        "percent": round((index - 1) / len(files) * 100, 1),
-                    },
-                }
-            )
-            progress_class = _progress_tqdm_class(report_file_progress)
-            download_kwargs: dict[str, Any] = {
-                "repo_id": repo_id,
-                "filename": entry["remotePath"],
-                "repo_type": "dataset",
-                "revision": expected_sha,
-                "token": token,
-            }
-            if progress_class is not None:
-                download_kwargs["tqdm_class"] = progress_class
-            cached = hf_hub_download(**download_kwargs)
             local = snapshot.joinpath(*entry["localPath"].split("/"))
             local.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(cached, local)
             actual_size = local.stat().st_size
             if expected_size is not None and actual_size != expected_size:
-                raise IOError(f"Size verification failed for {entry['remotePath']}.")
-            report_file_progress(actual_size - file_downloaded, force=True)
-            processed += actual_size
-            elapsed = max(time.monotonic() - started, 0.001)
-            emit(
-                {
-                    "type": "progress",
-                    "progress": {
-                        "phase": "downloading",
-                        "currentFile": entry["remotePath"],
-                        "filesDone": index,
-                        "filesTotal": len(files),
-                        "bytes": processed,
-                        "totalBytes": total_known,
-                        "currentFileBytes": actual_size,
-                        "currentFileTotalBytes": expected_size,
-                        "bytesPerSecond": round(processed / elapsed),
-                        "percent": round(index / len(files) * 100, 1),
-                    },
-                }
-            )
+                raise IOError(f"Size verification failed for {remote_path}.")
+
+            with progress_lock:
+                previous_file_bytes = downloaded_by_file.pop(remote_path, 0)
+                active_files.discard(remote_path)
+                processed += actual_size
+                completed += 1
+                current_file_bytes = max(previous_file_bytes, actual_size)
+                payload = progress_payload(remote_path, current_file_bytes, expected_size)
+                payload["bytes"] = processed + sum(downloaded_by_file.values())
+                payload["filesDone"] = completed
+                payload["percent"] = (
+                    round(completed / len(files) * 100, 1)
+                    if total_known <= 0
+                    else min(100, round(payload["bytes"] / total_known * 100, 1))
+                )
+        except BaseException:
+            with progress_lock:
+                downloaded_by_file.pop(remote_path, None)
+                active_files.discard(remote_path)
+            raise
+        emit({"type": "progress", "progress": payload})
+        return actual_size
+
+    try:
+        emit_progress(force=True)
+        executor = ThreadPoolExecutor(max_workers=workers)
+        pending: set[Future[int]] = set()
+        try:
+            pending = {executor.submit(download_one, entry) for entry in files}
+            while pending:
+                if _cancelled:
+                    for future in pending:
+                        future.cancel()
+                    raise DownloadCancelled("Download cancelled.")
+                done, pending = wait(
+                    pending, timeout=0.2, return_when=FIRST_COMPLETED
+                )
+                for future in done:
+                    future.result()
+        except BaseException:
+            for future in pending:
+                future.cancel()
+            raise
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
 
         if _cancelled:
             raise DownloadCancelled("Download cancelled.")
@@ -488,6 +576,7 @@ def download(request: dict[str, Any], token: str | None) -> dict[str, Any]:
             "backupPath": str(backup) if backup else None,
             "fileCount": len(files),
             "sizeBytes": processed,
+            "concurrency": workers,
             "metaOnly": scope == "meta",
         }
     finally:

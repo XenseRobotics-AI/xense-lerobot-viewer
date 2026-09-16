@@ -1205,6 +1205,13 @@ export const zh: Record<MessageKey, string> = {
   "workbench.hfDownloadScope": "下载范围",
   "workbench.hfDownloadAllFiles": "全部文件",
   "workbench.hfDownloadMetaOnly": "仅 Meta",
+  "workbench.hfDownloadConcurrency": "文件并发数",
+  "workbench.hfDownloadConcurrencyValue": "{count} 个 worker",
+  "workbench.hfDownloadConcurrencyHint":
+    "单个数据集内部的并行文件下载数；网络或磁盘不稳定时可调低。",
+  "workbench.hfDownloadActiveFiles": "活跃任务 {count} / {total}",
+  "workbench.hfDownloadCompletedConcurrency":
+    "本次使用 {count} 个 worker 下载。",
   "workbench.hfDownloadFinalPath": "最终路径",
   "workbench.hfDownloadInvalidPreview": "请输入有效的仓库路径和下载根目录。",
   "workbench.hfDownloadCheck": "检查下载",

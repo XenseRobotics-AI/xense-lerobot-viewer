@@ -19,6 +19,8 @@ import type {
 const SOURCE =
   /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)?$/u;
 const CHECK_TIMEOUT_MS = 120_000;
+export const DEFAULT_HF_DOWNLOAD_CONCURRENCY = 4;
+export const MAX_HF_DOWNLOAD_CONCURRENCY = 8;
 
 export type ParsedHfDownloadRequest = Omit<HfDownloadRequest, "token"> & {
   token: string | null;
@@ -64,6 +66,26 @@ export async function parseHfDownloadRequest(
   if (scope !== "all" && scope !== "meta") {
     throw new TypeError("`scope` must be `all` or `meta`.");
   }
+  const rawConcurrency = value.concurrency;
+  let concurrency = DEFAULT_HF_DOWNLOAD_CONCURRENCY;
+  if (rawConcurrency !== undefined) {
+    if (typeof rawConcurrency === "boolean") {
+      throw new TypeError(
+        `\`concurrency\` must be an integer from 1 to ${MAX_HF_DOWNLOAD_CONCURRENCY}.`,
+      );
+    }
+    const parsed = Number(rawConcurrency);
+    if (
+      !Number.isInteger(parsed) ||
+      parsed < 1 ||
+      parsed > MAX_HF_DOWNLOAD_CONCURRENCY
+    ) {
+      throw new TypeError(
+        `\`concurrency\` must be an integer from 1 to ${MAX_HF_DOWNLOAD_CONCURRENCY}.`,
+      );
+    }
+    concurrency = parsed;
+  }
   const endpoint = normalizeHfEndpoint(value.endpoint);
   if (!endpoint) {
     throw new TypeError(
@@ -88,6 +110,7 @@ export async function parseHfDownloadRequest(
     destinationRoot,
     scope: scope as HfDownloadScope,
     endpoint,
+    concurrency,
     token,
   };
 }

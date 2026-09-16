@@ -1,7 +1,9 @@
 import json
 import sys
+import threading
 import types
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +13,7 @@ from types import SimpleNamespace
 
 from hf_download import (
     build_check_result,
+    download_concurrency,
     parse_source,
     promote_download,
     read_state,
@@ -43,6 +46,13 @@ class HfDownloadTest(unittest.TestCase):
         ):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 parse_source(value)
+
+    def test_validates_download_concurrency(self):
+        self.assertEqual(download_concurrency(None), 4)
+        self.assertEqual(download_concurrency("3"), 3)
+        for value in (0, 9, 1.5, "fast", True):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                download_concurrency(value)
 
     def test_selects_the_four_scope_variants_and_strips_folder_prefix(self):
         files = [
@@ -227,6 +237,50 @@ class HfDownloadTest(unittest.TestCase):
             self.assertEqual((target / "meta" / "info.json").read_bytes(), b"abc")
             self.assertEqual(revisions, [info.sha])
             self.assertTrue(result["metaOnly"])
+
+    def test_downloads_files_with_requested_concurrency(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "cache"
+            cache_dir.mkdir()
+            info = SimpleNamespace(
+                sha="abcdef1234567",
+                siblings=[remote(f"data/{index}.bin", 1) for index in range(4)],
+            )
+            active = 0
+            max_active = 0
+            lock = threading.Lock()
+            module = types.ModuleType("huggingface_hub")
+
+            def fake_download(**kwargs):
+                nonlocal active, max_active
+                with lock:
+                    active += 1
+                    max_active = max(max_active, active)
+                time.sleep(0.05)
+                filename = kwargs["filename"]
+                cache = cache_dir / filename.replace("/", "_")
+                cache.write_bytes(b"x")
+                with lock:
+                    active -= 1
+                return str(cache)
+
+            module.hf_hub_download = fake_download
+            request = {
+                "source": "TacVerse/example",
+                "destinationRoot": str(root),
+                "scope": "all",
+                "revisionSha": info.sha,
+                "concurrency": 3,
+            }
+            with patch.dict(sys.modules, {"huggingface_hub": module}):
+                with patch("hf_download._api_and_info", return_value=(None, info)):
+                    result = hf_download.download(request, None)
+
+            target = root / "TacVerse" / "example"
+            self.assertEqual(result["concurrency"], 3)
+            self.assertGreaterEqual(max_active, 2)
+            self.assertEqual(len(list((target / "data").glob("*.bin"))), 4)
 
     def test_rejects_existing_target_symlink_that_escapes_root(self):
         with tempfile.TemporaryDirectory() as directory:

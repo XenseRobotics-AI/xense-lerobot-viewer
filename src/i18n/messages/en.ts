@@ -1259,6 +1259,13 @@ export const en = {
   "workbench.hfDownloadScope": "Download scope",
   "workbench.hfDownloadAllFiles": "All files",
   "workbench.hfDownloadMetaOnly": "Meta only",
+  "workbench.hfDownloadConcurrency": "File concurrency",
+  "workbench.hfDownloadConcurrencyValue": "{count} workers",
+  "workbench.hfDownloadConcurrencyHint":
+    "Parallel file downloads inside one dataset. Lower it if the network or disk is unstable.",
+  "workbench.hfDownloadActiveFiles": "{count} / {total} active",
+  "workbench.hfDownloadCompletedConcurrency":
+    "Downloaded with {count} workers.",
   "workbench.hfDownloadFinalPath": "Final path",
   "workbench.hfDownloadInvalidPreview":
     "Enter a valid repository path and download root.",

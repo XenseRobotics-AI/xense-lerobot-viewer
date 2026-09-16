@@ -33,6 +33,7 @@ const valid = {
   destinationRoot: "/tmp/lerobot",
   scope: "all",
   endpoint: "https://huggingface.co",
+  concurrency: 4,
   token: "hf_test_only",
 };
 
@@ -80,6 +81,19 @@ describe("HF download routes", () => {
       }),
     );
     expect(response.status).toBe(400);
+  });
+
+  test("rejects invalid download concurrency before launching Python", async () => {
+    for (const concurrency of [0, 9, 1.5, "fast", true]) {
+      const response = await CHECK(
+        request("http://localhost/api/workbench/hf-download/check", {
+          ...valid,
+          concurrency,
+        }),
+      );
+      expect(response.status).toBe(400);
+      expect((await response.json()).error).toContain("concurrency");
+    }
   });
 
   test("rejects cross-origin checks and downloads", async () => {

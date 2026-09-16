@@ -5,6 +5,7 @@ export type HfDownloadRequest = {
   destinationRoot: string;
   scope: HfDownloadScope;
   endpoint: string;
+  concurrency?: number;
   token?: string;
 };
 
@@ -26,13 +27,15 @@ export type HfDownloadCheck = {
 
 export type HfDownloadProgress = {
   phase: "downloading" | "promoting";
-  currentFile?: string;
+  currentFile?: string | null;
   filesDone?: number;
   filesTotal?: number;
   bytes?: number;
   totalBytes?: number;
-  currentFileBytes?: number;
+  currentFileBytes?: number | null;
   currentFileTotalBytes?: number | null;
+  activeFiles?: string[];
+  concurrency?: number;
   bytesPerSecond?: number;
   percent?: number;
 };
@@ -47,6 +50,7 @@ export type HfDownloadResult = {
   backupPath: string | null;
   fileCount: number;
   sizeBytes: number;
+  concurrency: number;
   metaOnly: boolean;
 };
 

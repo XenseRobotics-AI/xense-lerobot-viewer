@@ -25,6 +25,10 @@ type HfDownloadPanelProps = {
   initialSource?: string;
 };
 
+const DEFAULT_DOWNLOAD_CONCURRENCY = 4;
+const MIN_DOWNLOAD_CONCURRENCY = 1;
+const MAX_DOWNLOAD_CONCURRENCY = 8;
+
 function previewTarget(root: string, source: string): string | null {
   const cleanRoot = root.trim().replace(/\/+$/u, "");
   const cleanSource = source.trim();
@@ -48,6 +52,7 @@ export default function HfDownloadPanel({
   const [source, setSource] = useState(initialSource);
   const [root, setRoot] = useState("");
   const [scope, setScope] = useState<HfDownloadScope>("all");
+  const [concurrency, setConcurrency] = useState(DEFAULT_DOWNLOAD_CONCURRENCY);
   const [check, setCheck] = useState<HfDownloadCheck | null>(null);
   const [checkedRequest, setCheckedRequest] =
     useState<HfDownloadRequest | null>(null);
@@ -94,13 +99,14 @@ export default function HfDownloadPanel({
     setConfirmed(false);
     setResult(null);
     setProgress(null);
-  }, [endpoint, root, scope, source, token]);
+  }, [concurrency, endpoint, root, scope, source, token]);
 
   const request = (): HfDownloadRequest => ({
     source: source.trim(),
     destinationRoot: root.trim(),
     scope,
     endpoint,
+    concurrency,
     ...(token.trim() ? { token: token.trim() } : {}),
   });
 
@@ -289,6 +295,32 @@ export default function HfDownloadPanel({
           </div>
         </fieldset>
 
+        <label className="grid gap-2 text-xs text-slate-300">
+          <span className="flex items-center justify-between gap-3">
+            <span>{t("workbench.hfDownloadConcurrency")}</span>
+            <span className="tabular-nums text-cyan-200">
+              {t("workbench.hfDownloadConcurrencyValue", {
+                count: concurrency.toLocaleString(),
+              })}
+            </span>
+          </span>
+          <input
+            type="range"
+            min={MIN_DOWNLOAD_CONCURRENCY}
+            max={MAX_DOWNLOAD_CONCURRENCY}
+            step={1}
+            value={concurrency}
+            disabled={downloading}
+            onChange={(event) =>
+              setConcurrency(Number.parseInt(event.target.value, 10))
+            }
+            className="accent-cyan-400"
+          />
+          <span className="text-[11px] leading-4 text-slate-500">
+            {t("workbench.hfDownloadConcurrencyHint")}
+          </span>
+        </label>
+
         <div className="rounded-lg border border-white/10 bg-black/15 p-3 text-xs">
           <span className="text-slate-500">
             {t("workbench.hfDownloadFinalPath")}
@@ -415,6 +447,15 @@ export default function HfDownloadPanel({
           <p className="mt-2 break-all text-[11px] text-slate-500">
             {progress.currentFile || t("workbench.hfDownloadPreparing")}
           </p>
+          {progress.activeFiles && progress.activeFiles.length > 1 && (
+            <p className="mt-1 break-all text-[11px] text-slate-500">
+              {t("workbench.hfDownloadActiveFiles", {
+                count: progress.activeFiles.length.toLocaleString(),
+                total: (progress.concurrency ?? concurrency).toLocaleString(),
+              })}{" "}
+              {progress.activeFiles.join(", ")}
+            </p>
+          )}
           <p className="mt-1 text-[11px] tabular-nums text-cyan-200/80">
             {(progress.filesDone ?? 0).toLocaleString()} /{" "}
             {(progress.filesTotal ?? check?.fileCount ?? 0).toLocaleString()}
@@ -441,6 +482,11 @@ export default function HfDownloadPanel({
           </p>
           <p className="mt-1 break-all">
             SHA: <span className="font-mono">{result.revisionSha}</span>
+          </p>
+          <p className="mt-1">
+            {t("workbench.hfDownloadCompletedConcurrency", {
+              count: result.concurrency.toLocaleString(),
+            })}
           </p>
           {result.backupPath && (
             <p className="mt-1 break-all">
