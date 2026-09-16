@@ -828,6 +828,7 @@ export const zh: Record<MessageKey, string> = {
     "TCP 坐标系：+X 向前、+Y 向左、+Z 向上（对应红/绿/蓝参考轴）。存在完整 head.xyz+r1-r6 时，黄色轨迹、头显示意模型和播放点坐标系会同步显示；头显以记录的 head 位姿为中心且面罩朝 +X，不附加未经标定的偏移。仅有头部视频不会生成轨迹。",
   "urdf.tacCapNoPose":
     "未找到可用于夹爪回放的完整 left_tcp/right_tcp xyz+r1-r6 轨迹。",
+  "urdf.legendTracks": "轨迹",
   "urdf.axisForward": "向前",
   "urdf.axisLeft": "向左",
   "urdf.axisUp": "向上",
