@@ -1199,8 +1199,11 @@ function EpisodeViewerInner({
           {activeTab === "annotations" && (
             <div className="annotations-skin flex flex-1 min-h-0 flex-col gap-4">
               <div className="flex shrink-0 items-center gap-3">
-                <p className="text-base font-medium text-slate-200 truncate">
-                  {datasetInfo.repoId}
+                <p
+                  className="truncate text-base font-medium text-slate-200"
+                  title={datasetDisplayName}
+                >
+                  {datasetDisplayName}
                 </p>
                 <p className="text-[10px] uppercase tracking-wide text-slate-500 tabular">
                   {t("ep.episodeLabel", { id: episodeId })}
@@ -1361,6 +1364,21 @@ function EpisodeViewerInner({
               className={activeTab === "urdf" ? "contents" : "hidden"}
               aria-hidden={activeTab !== "urdf"}
             >
+              {/* The tab renders through `display: contents`, so this header is
+                  laid out as a sibling flex item above the viewport rather than
+                  inside it — which keeps it out of URDFViewer, whose own root is
+                  the `flex-1` element that has to keep filling the column. */}
+              <div className="flex shrink-0 items-center gap-3">
+                <p
+                  className="truncate text-base font-medium text-slate-200"
+                  title={datasetDisplayName}
+                >
+                  {datasetDisplayName}
+                </p>
+                <p className="text-[10px] uppercase tracking-wide text-slate-500 tabular">
+                  {t("ep.episodeLabel", { id: episodeId })}
+                </p>
+              </div>
               <Suspense fallback={<Loading />}>
                 <URDFViewer
                   key={datasetInfo.repoId}
