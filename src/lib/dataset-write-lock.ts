@@ -1,6 +1,6 @@
 export type DatasetWriteLease = {
   id: symbol;
-  kind: "hf-download" | "metadata-sync";
+  kind: "hf-download" | "metadata-sync" | "modelscope-download";
   label: string;
   key: string;
   startedAt: number;

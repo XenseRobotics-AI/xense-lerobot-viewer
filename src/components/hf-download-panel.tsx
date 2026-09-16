@@ -11,13 +11,37 @@ import {
   readHfDownloadRoot,
   startHfDownload,
 } from "@/utils/hfDownloadClient";
+import {
+  checkModelScopeDownload,
+  readModelScopeDownloadRoot,
+  startModelScopeDownload,
+} from "@/utils/modelscopeDownloadClient";
 import type {
   HfDownloadCheck,
   HfDownloadProgress,
   HfDownloadRequest,
   HfDownloadResult,
   HfDownloadScope,
+  HfDownloadStreamEvent,
 } from "@/types/hf-download.types";
+import type {
+  ModelScopeDownloadCheck,
+  ModelScopeDownloadProgress,
+  ModelScopeDownloadRequest,
+  ModelScopeDownloadResult,
+  ModelScopeDownloadScope,
+  ModelScopeDownloadStreamEvent,
+} from "@/types/modelscope-download.types";
+
+type DownloadProvider = "huggingface" | "modelscope";
+type DownloadScope = HfDownloadScope | ModelScopeDownloadScope;
+type DownloadRequest = HfDownloadRequest | ModelScopeDownloadRequest;
+type DownloadCheck = HfDownloadCheck | ModelScopeDownloadCheck;
+type DownloadProgress = HfDownloadProgress | ModelScopeDownloadProgress;
+type DownloadResult = HfDownloadResult | ModelScopeDownloadResult;
+type DownloadStreamEvent =
+  | HfDownloadStreamEvent
+  | ModelScopeDownloadStreamEvent;
 
 type HfDownloadQueueStatus =
   | "pending"
@@ -31,9 +55,9 @@ type HfDownloadQueueStatus =
 type HfDownloadQueueItem = {
   source: string;
   status: HfDownloadQueueStatus;
-  check: HfDownloadCheck | null;
-  progress: HfDownloadProgress | null;
-  result: HfDownloadResult | null;
+  check: DownloadCheck | null;
+  progress: DownloadProgress | null;
+  result: DownloadResult | null;
   error: string | null;
 };
 
@@ -45,6 +69,8 @@ type HfDownloadPanelProps = {
 
 const SOURCE =
   /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)?$/u;
+const MODELSCOPE_SOURCE =
+  /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)+$/u;
 const DEFAULT_DOWNLOAD_CONCURRENCY = 4;
 const MIN_DOWNLOAD_CONCURRENCY = 1;
 const MAX_DOWNLOAD_CONCURRENCY = 8;
@@ -64,13 +90,34 @@ function parseQueueSources(value: string): string[] {
   return sources;
 }
 
-function previewTarget(root: string, source: string): string | null {
+function localPreviewSource(
+  provider: DownloadProvider,
+  source: string,
+): string {
+  const parts = source.split("/");
+  if (
+    provider === "modelscope" &&
+    parts.length >= 3 &&
+    parts[0] === "XenseRobotics" &&
+    parts[1] === "TacVerse"
+  ) {
+    return ["TacVerse", ...parts.slice(2)].join("/");
+  }
+  return source;
+}
+
+function previewTarget(
+  root: string,
+  source: string,
+  provider: DownloadProvider,
+): string | null {
   const cleanRoot = root.trim().replace(/\/+$/u, "");
   const cleanSource = source.trim();
-  if (!cleanRoot || !SOURCE.test(cleanSource)) {
+  const pattern = provider === "huggingface" ? SOURCE : MODELSCOPE_SOURCE;
+  if (!cleanRoot || !pattern.test(cleanSource)) {
     return null;
   }
-  return `${cleanRoot}/${cleanSource}`;
+  return `${cleanRoot}/${localPreviewSource(provider, cleanSource)}`;
 }
 
 function queueStatusClass(status: HfDownloadQueueStatus): string {
@@ -92,9 +139,10 @@ export default function HfDownloadPanel({
   initialSource = "",
 }: HfDownloadPanelProps) {
   const t = useT();
+  const [provider, setProvider] = useState<DownloadProvider>("huggingface");
   const [source, setSource] = useState(initialSource);
   const [root, setRoot] = useState("");
-  const [scope, setScope] = useState<HfDownloadScope>("all");
+  const [scope, setScope] = useState<DownloadScope>("all");
   const [concurrency, setConcurrency] = useState(DEFAULT_DOWNLOAD_CONCURRENCY);
   const [queueText, setQueueText] = useState("");
   const [queueConcurrency, setQueueConcurrency] = useState(
@@ -104,20 +152,21 @@ export default function HfDownloadPanel({
   const [queueConfirmed, setQueueConfirmed] = useState(false);
   const [queueChecking, setQueueChecking] = useState(false);
   const [queueRunning, setQueueRunning] = useState(false);
-  const [check, setCheck] = useState<HfDownloadCheck | null>(null);
-  const [checkedRequest, setCheckedRequest] =
-    useState<HfDownloadRequest | null>(null);
+  const [check, setCheck] = useState<DownloadCheck | null>(null);
+  const [checkedRequest, setCheckedRequest] = useState<DownloadRequest | null>(
+    null,
+  );
   const [confirmed, setConfirmed] = useState(false);
   const [checking, setChecking] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const [progress, setProgress] = useState<HfDownloadProgress | null>(null);
-  const [result, setResult] = useState<HfDownloadResult | null>(null);
+  const [progress, setProgress] = useState<DownloadProgress | null>(null);
+  const [result, setResult] = useState<DownloadResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [browseMessage, setBrowseMessage] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const targetPreview = useMemo(
-    () => previewTarget(root, source),
-    [root, source],
+    () => previewTarget(root, source, provider),
+    [provider, root, source],
   );
   const queueSources = useMemo(() => parseQueueSources(queueText), [queueText]);
   const queueCounts = useMemo(
@@ -143,13 +192,17 @@ export default function HfDownloadPanel({
 
   useEffect(() => {
     const controller = new AbortController();
-    readHfDownloadRoot(controller.signal)
+    const readRoot =
+      provider === "huggingface"
+        ? readHfDownloadRoot
+        : readModelScopeDownloadRoot;
+    readRoot(controller.signal)
       .then(setRoot)
       .catch((reason: unknown) =>
         setError(reason instanceof Error ? reason.message : String(reason)),
       );
     return () => controller.abort();
-  }, []);
+  }, [provider]);
 
   useEffect(() => {
     const abortOnPageExit = () => {
@@ -171,21 +224,27 @@ export default function HfDownloadPanel({
     setConfirmed(false);
     setResult(null);
     setProgress(null);
-  }, [concurrency, endpoint, root, scope, source, token]);
+  }, [concurrency, endpoint, provider, root, scope, source, token]);
 
   useEffect(() => {
     setQueueItems([]);
     setQueueConfirmed(false);
-  }, [concurrency, endpoint, queueText, root, scope, token]);
+  }, [concurrency, endpoint, provider, queueText, root, scope, token]);
 
-  const request = (sourceOverride = source.trim()): HfDownloadRequest => ({
-    source: sourceOverride,
-    destinationRoot: root.trim(),
-    scope,
-    endpoint,
-    concurrency,
-    ...(token.trim() ? { token: token.trim() } : {}),
-  });
+  const request = (sourceOverride = source.trim()): DownloadRequest => {
+    const base = {
+      source: sourceOverride,
+      destinationRoot: root.trim(),
+      scope,
+      concurrency,
+    };
+    if (provider === "modelscope") return base;
+    return {
+      ...base,
+      endpoint,
+      ...(token.trim() ? { token: token.trim() } : {}),
+    };
+  };
 
   const browse = async () => {
     setBrowseMessage(null);
@@ -228,7 +287,16 @@ export default function HfDownloadPanel({
     setConfirmed(false);
     try {
       const nextRequest = request();
-      const nextCheck = await checkHfDownload(nextRequest, controller.signal);
+      const nextCheck =
+        provider === "huggingface"
+          ? await checkHfDownload(
+              nextRequest as HfDownloadRequest,
+              controller.signal,
+            )
+          : await checkModelScopeDownload(
+              nextRequest as ModelScopeDownloadRequest,
+              controller.signal,
+            );
       setCheckedRequest(nextRequest);
       setCheck(nextCheck);
     } catch (reason) {
@@ -284,10 +352,17 @@ export default function HfDownloadPanel({
           error: null,
         });
         try {
-          const nextCheck = await checkHfDownload(
-            request(queuedSource),
-            controller.signal,
-          );
+          const nextRequest = request(queuedSource);
+          const nextCheck =
+            provider === "huggingface"
+              ? await checkHfDownload(
+                  nextRequest as HfDownloadRequest,
+                  controller.signal,
+                )
+              : await checkModelScopeDownload(
+                  nextRequest as ModelScopeDownloadRequest,
+                  controller.signal,
+                );
           updateQueueItem(queuedSource, {
             status: "ready",
             check: nextCheck,
@@ -318,23 +393,38 @@ export default function HfDownloadPanel({
     setError(null);
     setResult(null);
     setProgress({ phase: "downloading", percent: 0 });
-    let completed: HfDownloadResult | null = null;
+    let completed: DownloadResult | null = null;
     try {
-      await startHfDownload(
-        { ...checkedRequest, revisionSha: check.revisionSha },
-        (event) => {
-          if (event.type === "progress") setProgress(event.progress);
-          else if (event.type === "result") {
-            completed = event.result;
-            setResult(event.result);
-            setProgress((current) => ({
-              ...(current ?? { phase: "promoting" }),
-              percent: 100,
-            }));
-          } else if (event.type === "error") throw new Error(event.error);
-        },
-        controller.signal,
-      );
+      const onEvent = (event: DownloadStreamEvent) => {
+        if (event.type === "progress") setProgress(event.progress);
+        else if (event.type === "result") {
+          completed = event.result;
+          setResult(event.result);
+          setProgress((current) => ({
+            ...(current ?? { phase: "promoting" }),
+            percent: 100,
+          }));
+        } else if (event.type === "error") throw new Error(event.error);
+      };
+      if (provider === "huggingface") {
+        await startHfDownload(
+          {
+            ...(checkedRequest as HfDownloadRequest),
+            revisionSha: check.revisionSha,
+          },
+          onEvent,
+          controller.signal,
+        );
+      } else {
+        await startModelScopeDownload(
+          {
+            ...(checkedRequest as ModelScopeDownloadRequest),
+            revisionSha: check.revisionSha,
+          },
+          onEvent,
+          controller.signal,
+        );
+      }
       if (!completed) throw new Error(t("workbench.hfDownloadIncomplete"));
     } catch (reason) {
       if (!controller.signal.aborted)
@@ -407,28 +497,41 @@ export default function HfDownloadPanel({
         result: null,
         error: null,
       });
-      let completed: HfDownloadResult | null = null;
-      await startHfDownload(
-        {
-          ...request(item.source),
-          revisionSha: item.check.revisionSha,
-        },
-        (event) => {
-          if (event.type === "progress") {
-            updateQueueItem(item.source, { progress: event.progress });
-          } else if (event.type === "result") {
-            completed = event.result;
-            updateQueueItem(item.source, {
-              status: "done",
-              result: event.result,
-              progress: { phase: "promoting", percent: 100 },
-            });
-          } else if (event.type === "error") {
-            throw new Error(event.error);
-          }
-        },
-        controller.signal,
-      );
+      let completed: DownloadResult | null = null;
+      const nextRequest = request(item.source);
+      const onEvent = (event: DownloadStreamEvent) => {
+        if (event.type === "progress") {
+          updateQueueItem(item.source, { progress: event.progress });
+        } else if (event.type === "result") {
+          completed = event.result;
+          updateQueueItem(item.source, {
+            status: "done",
+            result: event.result,
+            progress: { phase: "promoting", percent: 100 },
+          });
+        } else if (event.type === "error") {
+          throw new Error(event.error);
+        }
+      };
+      if (provider === "huggingface") {
+        await startHfDownload(
+          {
+            ...(nextRequest as HfDownloadRequest),
+            revisionSha: item.check.revisionSha,
+          },
+          onEvent,
+          controller.signal,
+        );
+      } else {
+        await startModelScopeDownload(
+          {
+            ...(nextRequest as ModelScopeDownloadRequest),
+            revisionSha: item.check.revisionSha,
+          },
+          onEvent,
+          controller.signal,
+        );
+      }
       if (!completed) throw new Error(t("workbench.hfDownloadIncomplete"));
       updateQueueItem(item.source, { status: "done", result: completed });
     } catch (reason) {
@@ -484,16 +587,41 @@ export default function HfDownloadPanel({
 
       <div className="grid gap-4">
         <label className="grid gap-1.5 text-xs text-slate-300">
+          <span>{t("workbench.hfDownloadProvider")}</span>
+          <select
+            value={provider}
+            disabled={busy}
+            onChange={(event) =>
+              setProvider(event.target.value as DownloadProvider)
+            }
+            className="min-w-0 rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-100 focus:border-cyan-300/60 focus:outline-none disabled:opacity-50"
+          >
+            <option value="huggingface">
+              {t("workbench.hfDownloadProviderHuggingFace")}
+            </option>
+            <option value="modelscope">
+              {t("workbench.hfDownloadProviderModelScope")}
+            </option>
+          </select>
+        </label>
+
+        <label className="grid gap-1.5 text-xs text-slate-300">
           <span>{t("workbench.hfDownloadRepoPath")}</span>
           <input
             value={source}
             disabled={busy}
             onChange={(event) => setSource(event.target.value)}
-            placeholder="TacVerse/taccap-g1-flip-bound-document-0909"
+            placeholder={
+              provider === "modelscope"
+                ? "TacVerse/nested/collection/example"
+                : "TacVerse/taccap-g1-flip-bound-document-0909"
+            }
             className="min-w-0 rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-600 focus:border-cyan-300/60 focus:outline-none disabled:opacity-50"
           />
           <span className="text-[11px] text-slate-500">
-            {t("workbench.hfDownloadRepoHint")}
+            {provider === "modelscope"
+              ? t("workbench.hfDownloadModelScopeRepoHint")
+              : t("workbench.hfDownloadRepoHint")}
           </span>
         </label>
 
@@ -574,7 +702,9 @@ export default function HfDownloadPanel({
             className="accent-cyan-400"
           />
           <span className="text-[11px] leading-4 text-slate-500">
-            {t("workbench.hfDownloadConcurrencyHint")}
+            {provider === "modelscope"
+              ? t("workbench.hfDownloadModelScopeConcurrencyHint")
+              : t("workbench.hfDownloadConcurrencyHint")}
           </span>
         </label>
 
@@ -619,12 +749,18 @@ export default function HfDownloadPanel({
             value={queueText}
             disabled={busy}
             onChange={(event) => setQueueText(event.target.value)}
-            placeholder={t("workbench.hfDownloadQueuePlaceholder")}
+            placeholder={
+              provider === "modelscope"
+                ? t("workbench.hfDownloadModelScopeQueuePlaceholder")
+                : t("workbench.hfDownloadQueuePlaceholder")
+            }
             rows={4}
             className="min-w-0 resize-y rounded-md border border-white/10 bg-black/20 px-3 py-2 font-mono text-xs text-slate-100 placeholder:text-slate-600 focus:border-cyan-300/60 focus:outline-none disabled:opacity-50"
           />
           <span className="text-[11px] text-slate-500">
-            {t("workbench.hfDownloadQueueHint")}
+            {provider === "modelscope"
+              ? t("workbench.hfDownloadModelScopeQueueHint")
+              : t("workbench.hfDownloadQueueHint")}
           </span>
         </label>
         <label className="grid gap-2">

@@ -1245,12 +1245,17 @@ export const en = {
   "workbench.waitingNetworkBytes": "waiting for network bytes…",
   "workbench.groupedStatistics": "Grouped statistics",
   "workbench.currentDatasetChecks": "Current dataset checks",
-  "workbench.hfDownloadTools": "HF download tools",
+  "workbench.hfDownloadTools": "Dataset download tools",
   "workbench.hfDownloadDescription":
-    "Download one exact Hugging Face dataset revision into the local LeRobot library.",
+    "Download one exact Hugging Face or ModelScope dataset revision into the local LeRobot library.",
+  "workbench.hfDownloadProvider": "Source",
+  "workbench.hfDownloadProviderHuggingFace": "Hugging Face",
+  "workbench.hfDownloadProviderModelScope": "ModelScope",
   "workbench.hfDownloadRepoPath": "Repository path",
   "workbench.hfDownloadRepoHint":
     "Use owner/repo, or owner/repo/folder for a single folder dataset.",
+  "workbench.hfDownloadModelScopeRepoHint":
+    "Use TacVerse/path/to/dataset, or XenseRobotics/TacVerse/path/to/dataset.",
   "workbench.hfDownloadRoot": "Download root",
   "workbench.hfDownloadBrowse": "Browse…",
   "workbench.hfDownloadChooseRoot": "Choose the LeRobot download root",
@@ -1263,14 +1268,20 @@ export const en = {
   "workbench.hfDownloadConcurrencyValue": "{count} workers",
   "workbench.hfDownloadConcurrencyHint":
     "Parallel file downloads inside one dataset. Lower it if the network or disk is unstable.",
+  "workbench.hfDownloadModelScopeConcurrencyHint":
+    "Parallel file downloads inside one ModelScope nested dataset. Lower it if the network or disk is unstable.",
   "workbench.hfDownloadActiveFiles": "{count} / {total} active",
   "workbench.hfDownloadCompletedConcurrency":
     "Downloaded with {count} workers.",
   "workbench.hfDownloadQueueSources": "Batch repositories",
   "workbench.hfDownloadQueuePlaceholder":
     "TacVerse/example-one\nTacVerse/example-two",
+  "workbench.hfDownloadModelScopeQueuePlaceholder":
+    "TacVerse/nested/example-one\nTacVerse/nested/example-two",
   "workbench.hfDownloadQueueHint":
     "One repository path per line. The current root, scope, endpoint, token, and file concurrency apply to every item.",
+  "workbench.hfDownloadModelScopeQueueHint":
+    "One dataset path per line. The current root, scope, and file concurrency apply to every item.",
   "workbench.hfDownloadQueueConcurrency": "Dataset concurrency",
   "workbench.hfDownloadQueueConcurrencyValue": "{count} datasets",
   "workbench.hfDownloadQueueCheck": "Check queue",

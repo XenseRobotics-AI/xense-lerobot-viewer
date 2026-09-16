@@ -120,7 +120,10 @@ import { workbenchReplayDatasetRank } from "@/utils/workbenchReplayDatasets";
 import { useT } from "@/context/locale-context";
 import type { InterpolationVars } from "@/i18n/format";
 import type { MessageKey } from "@/i18n/messages";
-import type { TacverseDatasetStatisticsSourceSelection } from "@/utils/tacverseDatasetStatistics";
+import type {
+  TacverseDatasetStatisticsSource,
+  TacverseDatasetStatisticsSourceSelection,
+} from "@/utils/tacverseDatasetStatistics";
 import {
   legacyPersonnelConfigFromConfiguration,
   workbenchMappingsFromConfiguration,
@@ -158,6 +161,7 @@ const WORKBENCH_HEATMAP_DAY_LIMIT = 10;
 type Translator = (key: MessageKey, vars?: InterpolationVars) => string;
 
 type WorkbenchDataset = LocalDatasetSummary & {
+  hubSource?: TacverseDatasetStatisticsSource;
   source?: WorkbenchDatasetSourceKey;
   sourceLabel?: string;
   captureSpan?: { from: string; to: string } | null;
@@ -292,10 +296,16 @@ type WorkbenchDashboardRow = WorkbenchRollupRow & {
   workstation: string;
   reward: ReturnType<typeof evaluateWorkbenchRewardRules>;
   sourceRepoIds: string[];
+  sourceRepos: SourceRepoReference[];
   dailyHours: Record<string, number>;
 };
 
 type WorkbenchDashboardAggregateRow = Omit<WorkbenchDashboardRow, "reward">;
+
+type SourceRepoReference = {
+  repoId: string;
+  hubSource?: TacverseDatasetStatisticsSource;
+};
 
 type RewardRulesDraft = Omit<
   WorkbenchRewardRulesConfig,
@@ -537,16 +547,40 @@ function dayKeyFromDateTimeInput(value: string): string | null {
   return match?.[1] ?? null;
 }
 
-function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
+function hubSourceBadge(
+  source: TacverseDatasetStatisticsSource | undefined,
+  t: Translator,
+) {
+  if (source === "modelscope") {
+    return {
+      label: "ModelScope",
+      title: t("workbench.modelScope"),
+      className: "border-violet-400/25 bg-violet-500/10 text-violet-200",
+    };
+  }
+  return {
+    label: "HF",
+    title: t("workbench.huggingFace"),
+    className: "border-cyan-400/25 bg-cyan-500/10 text-cyan-200",
+  };
+}
+
+function SourceReposCell({ repos }: { repos: readonly SourceRepoReference[] }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const [copyState, setCopyState] = useState<{
     repoId: string;
     ok: boolean;
   } | null>(null);
-  const repos = useMemo(
-    () => repoIds.map((repoId) => repoId.trim()).filter(Boolean),
-    [repoIds],
+  const sourceRepos = useMemo(
+    () =>
+      repos
+        .map((repo) => ({
+          repoId: repo.repoId.trim(),
+          hubSource: repo.hubSource,
+        }))
+        .filter((repo) => repo.repoId),
+    [repos],
   );
 
   const copyRepo = useCallback(async (repoId: string) => {
@@ -571,31 +605,42 @@ function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
     }
   }, []);
 
-  const repoButton = (repoId: string, compact = false) => (
-    <button
-      type="button"
-      onClick={() => void copyRepo(repoId)}
-      className={
-        compact
-          ? "block max-w-full break-all text-left font-mono text-[11px] leading-5 text-cyan-200/80 transition-colors hover:text-cyan-100 hover:underline"
-          : "block max-w-[22rem] break-all text-left font-mono text-[11px] leading-5 text-cyan-200/90 transition-colors hover:text-cyan-100 hover:underline"
-      }
-      title={t("workbench.copyRepoTitle", { repo: repoId })}
-      aria-label={t("workbench.copyRepoAria", { repo: repoId })}
-    >
-      {repoId}
-    </button>
-  );
+  const repoButton = (repo: SourceRepoReference, compact = false) => {
+    const badge = hubSourceBadge(repo.hubSource, t);
+    return (
+      <span className="flex max-w-full min-w-0 items-center gap-1.5">
+        <span
+          className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold leading-none ${badge.className}`}
+          title={badge.title}
+        >
+          {badge.label}
+        </span>
+        <button
+          type="button"
+          onClick={() => void copyRepo(repo.repoId)}
+          className={
+            compact
+              ? "block max-w-full break-all text-left font-mono text-[11px] leading-5 text-cyan-200/80 transition-colors hover:text-cyan-100 hover:underline"
+              : "block max-w-[22rem] break-all text-left font-mono text-[11px] leading-5 text-cyan-200/90 transition-colors hover:text-cyan-100 hover:underline"
+          }
+          title={t("workbench.copyRepoTitle", { repo: repo.repoId })}
+          aria-label={t("workbench.copyRepoAria", { repo: repo.repoId })}
+        >
+          {repo.repoId}
+        </button>
+      </span>
+    );
+  };
 
-  if (repos.length === 0) {
+  if (sourceRepos.length === 0) {
     return <span className="text-slate-500">—</span>;
   }
 
-  if (repos.length === 1) {
+  if (sourceRepos.length === 1) {
     return (
       <div className="max-w-[22rem]">
-        {repoButton(repos[0])}
-        {copyState?.repoId === repos[0] && (
+        {repoButton(sourceRepos[0])}
+        {copyState?.repoId === sourceRepos[0].repoId && (
           <span
             role="status"
             className={
@@ -627,11 +672,11 @@ function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
     >
       <div className="flex min-w-0 items-start gap-2">
         <span className="shrink-0 pt-0.5 text-slate-100 tabular-nums">
-          {t("workbench.repos", { count: repos.length })}
+          {t("workbench.repos", { count: sourceRepos.length })}
         </span>
         <div className="min-w-0 flex-1">
-          {repoButton(repos[0], true)}
-          {copyState?.repoId === repos[0] && (
+          {repoButton(sourceRepos[0], true)}
+          {copyState?.repoId === sourceRepos[0].repoId && (
             <span
               role="status"
               className={
@@ -646,7 +691,7 @@ function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
         <button
           type="button"
           aria-expanded={open}
-          aria-label={t("workbench.viewRepos", { count: repos.length })}
+          aria-label={t("workbench.viewRepos", { count: sourceRepos.length })}
           onClick={() => setOpen((value) => !value)}
           className="shrink-0 rounded border border-white/10 px-2 py-0.5 text-[10px] text-cyan-200 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/10"
         >
@@ -663,10 +708,13 @@ function SourceReposCell({ repoIds }: { repoIds: readonly string[] }) {
             {t("workbench.copyRepoHint")}
           </div>
           <ul className="space-y-1">
-            {repos.map((repoId) => (
-              <li key={repoId} className="rounded bg-white/[0.03] px-2 py-1">
-                {repoButton(repoId)}
-                {copyState?.repoId === repoId && (
+            {sourceRepos.map((repo) => (
+              <li
+                key={`${repo.hubSource ?? "huggingface"}:${repo.repoId}`}
+                className="rounded bg-white/[0.03] px-2 py-1"
+              >
+                {repoButton(repo)}
+                {copyState?.repoId === repo.repoId && (
                   <span
                     role="status"
                     className={
@@ -1278,6 +1326,7 @@ export default function WorkbenchGroupingPanel({
         sourceLabels: [sourceLabel],
         workstation,
         sourceRepoIds: [],
+        sourceRepos: [],
         dailyHours: {},
         collectorSerialNumber: null,
         datasetPaths: new Set<string>(),
@@ -1288,6 +1337,19 @@ export default function WorkbenchGroupingPanel({
         const repoId = workbenchSourceRepoId(dataset.relativePath);
         if (!current.sourceRepoIds.includes(repoId)) {
           current.sourceRepoIds.push(repoId);
+        }
+        const sourceRepoKey = `${dataset.hubSource ?? "huggingface"}:${repoId}`;
+        if (
+          !current.sourceRepos.some(
+            (repo) =>
+              `${repo.hubSource ?? "huggingface"}:${repo.repoId}` ===
+              sourceRepoKey,
+          )
+        ) {
+          current.sourceRepos.push({
+            repoId,
+            hubSource: dataset.hubSource ?? undefined,
+          });
         }
       }
       for (const addition of additions) {
@@ -1312,6 +1374,9 @@ export default function WorkbenchGroupingPanel({
         hours: Math.round(row.hours * 1000) / 1000,
         sourceRepoIds: [...row.sourceRepoIds].sort((left, right) =>
           left.localeCompare(right),
+        ),
+        sourceRepos: [...row.sourceRepos].sort((left, right) =>
+          left.repoId.localeCompare(right.repoId),
         ),
       };
     });
@@ -1351,6 +1416,7 @@ export default function WorkbenchGroupingPanel({
         hours: 0,
         pctHours: 0,
         sourceRepoIds: [],
+        sourceRepos: [],
         dailyHours: {},
       };
       current.count += row.count;
@@ -1362,6 +1428,18 @@ export default function WorkbenchGroupingPanel({
       for (const repoId of row.sourceRepoIds) {
         if (!current.sourceRepoIds.includes(repoId)) {
           current.sourceRepoIds.push(repoId);
+        }
+      }
+      for (const repo of row.sourceRepos) {
+        const sourceRepoKey = `${repo.hubSource ?? "huggingface"}:${repo.repoId}`;
+        if (
+          !current.sourceRepos.some(
+            (candidate) =>
+              `${candidate.hubSource ?? "huggingface"}:${candidate.repoId}` ===
+              sourceRepoKey,
+          )
+        ) {
+          current.sourceRepos.push(repo);
         }
       }
       for (const [day, hours] of Object.entries(row.dailyHours)) {
@@ -1385,6 +1463,9 @@ export default function WorkbenchGroupingPanel({
           hours: Math.round(row.hours * 1000) / 1000,
           sourceRepoIds: [...row.sourceRepoIds].sort((left, right) =>
             left.localeCompare(right),
+          ),
+          sourceRepos: [...row.sourceRepos].sort((left, right) =>
+            left.repoId.localeCompare(right.repoId),
           ),
           reward: evaluateWorkbenchRewardRules(
             row.hours,
@@ -2744,7 +2825,7 @@ export default function WorkbenchGroupingPanel({
                           ?.join(", ") || "—"}
                       </td>
                       <td className="px-3 py-2.5 text-slate-300">
-                        <SourceReposCell repoIds={row.sourceRepoIds} />
+                        <SourceReposCell repos={row.sourceRepos} />
                       </td>
                       <td className="px-3 py-2.5 text-slate-300 tabular-nums">
                         {formatCount(row.count)}

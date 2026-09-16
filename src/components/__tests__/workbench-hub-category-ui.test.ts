@@ -133,4 +133,13 @@ describe("Workbench Hub category UI contract", () => {
       "reward: evaluateWorkbenchRewardRules(\n            row.hours,",
     );
   });
+
+  test("shows Hugging Face and ModelScope badges on workstation source repos", async () => {
+    const grouping = await source("workbench-grouping-panel.tsx");
+    expect(grouping).toContain("hubSourceBadge");
+    expect(grouping).toContain('label: "HF"');
+    expect(grouping).toContain('label: "ModelScope"');
+    expect(grouping).toContain("hubSource: dataset.hubSource");
+    expect(grouping).toContain("<SourceReposCell repos={row.sourceRepos} />");
+  });
 });

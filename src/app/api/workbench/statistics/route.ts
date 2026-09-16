@@ -93,6 +93,7 @@ type WorkbenchDatasetSummary = Awaited<
   hubStorageBytes?: number | null;
   dailyAdditions?: WorkbenchDailyAddition[];
   tacflowScore?: WorkbenchDatasetScore;
+  hubSource?: TacverseDatasetStatisticsSource;
   source?: WorkbenchDatasetSourceKey;
   sourceLabel?: string;
   captureSpan?: { from: string; to: string } | null;
@@ -313,6 +314,7 @@ function applyCatalogMetadata(
     ReturnType<typeof discoverLocalDatasets>
   >["datasets"][number],
   remote: HfCatalogEntry | undefined,
+  hubSource: TacverseDatasetStatisticsSource | undefined,
   dailyAdditions: WorkbenchDailyAddition[] = [],
   localSource: Awaited<
     ReturnType<typeof discoverLocalDatasets>
@@ -365,12 +367,27 @@ function applyCatalogMetadata(
     uploader: metadata.uploader,
     uploaderDisplayName: metadata.uploaderDisplayName,
     dailyAdditions,
+    hubSource,
   };
 }
 
 type WorkbenchHubScope = {
-  entries: Map<string, { entry: HfCatalogEntry; rank: number }>;
-  modelScopeEntries: Map<string, { entry: HfCatalogEntry; rank: number }>;
+  entries: Map<
+    string,
+    {
+      entry: HfCatalogEntry;
+      rank: number;
+      source: TacverseDatasetStatisticsSource;
+    }
+  >;
+  modelScopeEntries: Map<
+    string,
+    {
+      entry: HfCatalogEntry;
+      rank: number;
+      source: TacverseDatasetStatisticsSource;
+    }
+  >;
   refreshedAt: string | null;
   refreshedAtBySource: Partial<
     Record<TacverseDatasetStatisticsSource, string | null>
@@ -472,11 +489,19 @@ async function readCatalogByRepo(
   const folderRepoIds = new Set<string>();
   const preferredEntries = new Map<
     string,
-    { entry: HfCatalogEntry; rank: number }
+    {
+      entry: HfCatalogEntry;
+      rank: number;
+      source: TacverseDatasetStatisticsSource;
+    }
   >();
   const modelScopeEntries = new Map<
     string,
-    { entry: HfCatalogEntry; rank: number }
+    {
+      entry: HfCatalogEntry;
+      rank: number;
+      source: TacverseDatasetStatisticsSource;
+    }
   >();
   const selectedRepoIds = new Set<string>();
   let hubTotal = 0;
@@ -517,6 +542,7 @@ async function readCatalogByRepo(
         preferredEntries.set(entry.repoId, {
           entry,
           rank: preferredEntries.size,
+          source,
         });
       } else {
         const preferred = preferredEntries.get(entry.repoId);
@@ -542,8 +568,16 @@ async function readCatalogByRepo(
           return preferred ? [repoId, preferred] : null;
         })
         .filter(
-          (item): item is [string, { entry: HfCatalogEntry; rank: number }] =>
-            item !== null,
+          (
+            item,
+          ): item is [
+            string,
+            {
+              entry: HfCatalogEntry;
+              rank: number;
+              source: TacverseDatasetStatisticsSource;
+            },
+          ] => item !== null,
         ),
     ),
     modelScopeEntries,
@@ -680,12 +714,14 @@ function dedupeLocalDatasetsByRepo(
 }
 
 function catalogEntryForLocalDataset(
-  catalog: Map<string, { entry: HfCatalogEntry; rank: number }>,
+  catalog: WorkbenchHubScope["entries"],
   organization: string,
   relativePath: string,
   folderRepoIds: ReadonlySet<string>,
   datasetRepoIds: ReadonlySet<string>,
-): { entry: HfCatalogEntry; rank: number } | undefined {
+): WorkbenchHubScope["entries"] extends Map<string, infer Entry>
+  ? Entry | undefined
+  : never {
   const repoId = hubRepoIdForLocalDatasetPath(
     relativePath,
     organization,
@@ -847,7 +883,7 @@ export async function GET(request: Request): Promise<Response> {
           dataset.relativePath,
           hubScope.folderRepoIds,
           catalogRepoIds,
-        )?.entry;
+        );
         const withTasks = {
           ...dataset,
           tasks: await readDatasetTasks(
@@ -856,8 +892,9 @@ export async function GET(request: Request): Promise<Response> {
         };
         return applyCatalogMetadata(
           withTasks,
-          remote,
-          dailyAdditionsForDataset(withTasks, remote, dataset),
+          remote?.entry,
+          remote?.source,
+          dailyAdditionsForDataset(withTasks, remote?.entry, dataset),
           dataset,
         );
       }),
@@ -902,7 +939,7 @@ export async function GET(request: Request): Promise<Response> {
         replayCandidate.relativePath,
         hubScope.folderRepoIds,
         catalogRepoIds,
-      )?.entry;
+      );
       const withTasks = {
         ...replayCandidate,
         tasks: await readDatasetTasks(
@@ -911,8 +948,9 @@ export async function GET(request: Request): Promise<Response> {
       };
       displayReplayDataset = applyCatalogMetadata(
         withTasks,
-        remote,
-        dailyAdditionsForDataset(withTasks, remote, replayCandidate),
+        remote?.entry,
+        remote?.source,
+        dailyAdditionsForDataset(withTasks, remote?.entry, replayCandidate),
         replayCandidate,
       );
     }

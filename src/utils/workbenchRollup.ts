@@ -90,6 +90,7 @@ export type WorkbenchRollupDataset = Pick<
   | "sizeBytes"
 > & {
   /** Explicit API value; omitted legacy callers are classified from the path. */
+  hubSource?: "huggingface" | "modelscope" | null;
   source?: WorkbenchDatasetSourceKey | null;
   sourceLabel?: string | null;
   captureSpan?: WorkbenchCaptureSpan | null;

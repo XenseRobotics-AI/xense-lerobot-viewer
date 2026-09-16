@@ -17,6 +17,7 @@ import {
   type TacverseDatasetSort,
   type TacverseDatasetStatisticsResponse,
   type TacverseDatasetStatisticsRow,
+  type TacverseDatasetStatisticsSource,
   type TacverseDatasetStatisticsSourceSelection,
   type TacverseLocalStatus,
 } from "@/utils/tacverseDatasetStatistics";
@@ -86,6 +87,24 @@ function localBadge(status: TacverseLocalStatus, t: ReturnType<typeof useT>) {
   return {
     label: t("workbench.localMissing"),
     className: "border-slate-400/20 bg-slate-500/10 text-slate-400",
+  };
+}
+
+function sourceBadge(
+  source: TacverseDatasetStatisticsSource | undefined,
+  t: ReturnType<typeof useT>,
+) {
+  if (source === "modelscope") {
+    return {
+      label: "ModelScope",
+      title: t("workbench.modelScope"),
+      className: "border-violet-400/25 bg-violet-500/10 text-violet-200",
+    };
+  }
+  return {
+    label: "HF",
+    title: t("workbench.huggingFace"),
+    className: "border-cyan-400/25 bg-cyan-500/10 text-cyan-200",
   };
 }
 
@@ -516,6 +535,7 @@ export default function WorkbenchDatasetStatistics({
                     : null;
                 const mixedRobotTypes = item.robotTypes.length > 1;
                 const itemKey = `${item.source ?? "huggingface"}:${item.repoId}`;
+                const source = sourceBadge(item.source, t);
                 return (
                   <>
                     <td className="max-w-[24rem] px-3 py-2.5">
@@ -592,10 +612,13 @@ export default function WorkbenchDatasetStatistics({
                         </div>
                       </div>
                     </td>
-                    <td className="px-3 py-2.5 text-slate-400">
-                      {item.source === "modelscope"
-                        ? t("workbench.modelScope")
-                        : t("workbench.huggingFace")}
+                    <td className="px-3 py-2.5">
+                      <span
+                        className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${source.className}`}
+                        title={source.title}
+                      >
+                        {source.label}
+                      </span>
                     </td>
                     <td
                       className="px-3 py-2.5 text-slate-400"

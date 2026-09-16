@@ -1191,12 +1191,17 @@ export const zh: Record<MessageKey, string> = {
   "workbench.waitingNetworkBytes": "等待网络字节数……",
   "workbench.groupedStatistics": "聚合统计",
   "workbench.currentDatasetChecks": "当前数据集检查",
-  "workbench.hfDownloadTools": "HF 下载工具",
+  "workbench.hfDownloadTools": "数据集下载工具",
   "workbench.hfDownloadDescription":
-    "将一个确定版本的 Hugging Face 数据集下载到本地 LeRobot 数据库。",
+    "将一个确定版本的 Hugging Face 或 ModelScope 数据集下载到本地 LeRobot 数据库。",
+  "workbench.hfDownloadProvider": "来源",
+  "workbench.hfDownloadProviderHuggingFace": "Hugging Face（HF）",
+  "workbench.hfDownloadProviderModelScope": "ModelScope 魔搭",
   "workbench.hfDownloadRepoPath": "仓库路径",
   "workbench.hfDownloadRepoHint":
     "使用 owner/repo；单个 Folder 子数据集使用 owner/repo/folder。",
+  "workbench.hfDownloadModelScopeRepoHint":
+    "使用 TacVerse/path/to/dataset，或 XenseRobotics/TacVerse/path/to/dataset。",
   "workbench.hfDownloadRoot": "下载根目录",
   "workbench.hfDownloadBrowse": "浏览…",
   "workbench.hfDownloadChooseRoot": "选择 LeRobot 下载根目录",
@@ -1209,14 +1214,20 @@ export const zh: Record<MessageKey, string> = {
   "workbench.hfDownloadConcurrencyValue": "{count} 个 worker",
   "workbench.hfDownloadConcurrencyHint":
     "单个数据集内部的并行文件下载数；网络或磁盘不稳定时可调低。",
+  "workbench.hfDownloadModelScopeConcurrencyHint":
+    "单个 ModelScope 嵌套数据集内部的并行文件下载数；网络或磁盘不稳定时可调低。",
   "workbench.hfDownloadActiveFiles": "活跃任务 {count} / {total}",
   "workbench.hfDownloadCompletedConcurrency":
     "本次使用 {count} 个 worker 下载。",
   "workbench.hfDownloadQueueSources": "批量仓库",
   "workbench.hfDownloadQueuePlaceholder":
     "TacVerse/example-a\nTacVerse/example-b",
+  "workbench.hfDownloadModelScopeQueuePlaceholder":
+    "TacVerse/nested/example-a\nTacVerse/nested/example-b",
   "workbench.hfDownloadQueueHint":
     "每行一个仓库路径；当前根目录、范围、端点、token 和文件并发数会应用到每一项。",
+  "workbench.hfDownloadModelScopeQueueHint":
+    "每行一个数据集路径；当前根目录、范围和文件并发数会应用到每一项。",
   "workbench.hfDownloadQueueConcurrency": "数据集并发数",
   "workbench.hfDownloadQueueConcurrencyValue": "{count} 个数据集",
   "workbench.hfDownloadQueueCheck": "检查队列",

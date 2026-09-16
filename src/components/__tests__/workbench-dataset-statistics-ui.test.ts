@@ -71,11 +71,14 @@ describe("TacVerse dataset statistics UI contract", () => {
 
   test("offers Hugging Face, ModelScope, and combined catalog views", async () => {
     const source = await componentSource();
+    expect(source).toContain("sourceBadge");
     expect(source).toContain("workbench.huggingFace");
     expect(source).toContain("workbench.modelScope");
     expect(source).toContain("workbench.bothSources");
     expect(source).toContain('statisticsSource === "both"');
     expect(source).toContain("/api/modelscope/catalog");
+    expect(source).toContain('label: "HF"');
+    expect(source).toContain('label: "ModelScope"');
   });
 
   test("localizes the statistics scope rule and grouped hour details", async () => {

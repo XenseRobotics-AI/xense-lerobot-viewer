@@ -6,7 +6,7 @@ async function source(file: string): Promise<string> {
   return fs.readFile(path.join(process.cwd(), "src/components", file), "utf8");
 }
 
-describe("Workbench HF download tools UI contract", () => {
+describe("Workbench dataset download tools UI contract", () => {
   test("places the tab immediately after Current dataset checks", async () => {
     const parent = await source("dataset-review-panel.tsx");
     const checks = parent.indexOf(
@@ -33,10 +33,14 @@ describe("Workbench HF download tools UI contract", () => {
 
   test("defaults to all files and requires check plus confirmation", async () => {
     const panel = await source("hf-download-panel.tsx");
-    expect(panel).toContain('useState<HfDownloadScope>("all")');
+    expect(panel).toContain('useState<DownloadProvider>("huggingface")');
+    expect(panel).toContain('useState<DownloadScope>("all")');
     expect(panel).toContain("DEFAULT_DOWNLOAD_CONCURRENCY");
     expect(panel).toContain('type="range"');
     expect(panel).toContain("workbench.hfDownloadConcurrency");
+    expect(panel).toContain("checkModelScopeDownload");
+    expect(panel).toContain("startModelScopeDownload");
+    expect(panel).toContain("workbench.hfDownloadProvider");
     expect(panel).toContain("queueText");
     expect(panel).toContain("DEFAULT_QUEUE_CONCURRENCY");
     expect(panel).toContain("queueConcurrency");
@@ -44,7 +48,8 @@ describe("Workbench HF download tools UI contract", () => {
     expect(panel).toContain("runQueueCheck");
     expect(panel).toContain("runQueueDownload");
     expect(panel).toContain("workbench.hfDownloadQueueConfirm");
-    expect(panel).toContain("checkHfDownload(nextRequest");
+    expect(panel).toContain("checkHfDownload(");
+    expect(panel).toContain("checkModelScopeDownload(");
     expect(panel).toContain(
       "if (!check || !checkedRequest || !confirmed) return",
     );
@@ -56,6 +61,7 @@ describe("Workbench HF download tools UI contract", () => {
     const panel = await source("hf-download-panel.tsx");
     for (const text of [
       "readHfDownloadRoot",
+      "readModelScopeDownloadRoot",
       "/api/local-datasets/pick-folder",
       'role="progressbar"',
       "abortRef.current?.abort()",
