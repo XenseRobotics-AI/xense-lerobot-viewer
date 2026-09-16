@@ -8,6 +8,7 @@ import {
   readDatasetCollectorSerialNumber,
   readDatasetHardwareRobotId,
   readDatasetHardwareValue,
+  toSerializableLocalDatasetsResponse,
 } from "@/lib/local-datasets-discovery";
 import { addLocation } from "@/lib/dataset-locations-store";
 import { decodeLocalDatasetPath } from "@/utils/datasetRoute";
@@ -231,6 +232,15 @@ describe("discoverLocalDatasets with a switched path", () => {
     expect(decodeLocalDatasetPath(byRoot.datasets[0].encodedPath)).toBe(
       "Xense/in-root",
     );
+    expect(byRoot.datasets[0].localInfoFields).toBeInstanceOf(Set);
+
+    const serializable = toSerializableLocalDatasetsResponse(byRoot);
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        serializable.datasets[0],
+        "localInfoFields",
+      ),
+    ).toBe(false);
 
     const switched = await discoverLocalDatasets(archive);
     expect(switched.root).toBe(path.resolve(root));

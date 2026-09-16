@@ -1,6 +1,9 @@
 import { cookies } from "next/headers";
 import LocalDatasetGrid from "./local-dataset-grid";
-import { discoverLocalDatasets } from "@/lib/local-datasets-discovery";
+import {
+  discoverLocalDatasets,
+  toSerializableLocalDatasetsResponse,
+} from "@/lib/local-datasets-discovery";
 import { BROWSE_PATH_COOKIE } from "@/utils/browsePath";
 import { recordDaySnapshot } from "@/lib/corpus-history-store";
 import { computeCorpusStats } from "@/utils/corpusStats";
@@ -19,7 +22,9 @@ export default async function Home() {
   const cookieStore = await cookies();
   const requestedPath = cookieStore.get(BROWSE_PATH_COOKIE)?.value;
   const { root, browsePath, locations, datasets, errors } =
-    await discoverLocalDatasets(requestedPath);
+    toSerializableLocalDatasetsResponse(
+      await discoverLocalDatasets(requestedPath),
+    );
 
   // Record today's totals and diff against the last day on record. This is the
   // only write the browse path performs; `recordDaySnapshot` swallows its own
