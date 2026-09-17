@@ -1,6 +1,7 @@
 "use client";
 
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { reloadOnceForChunkError } from "@/utils/lazyChunkRecovery";
 
 type DatasetReviewErrorBoundaryProps = {
   children: ReactNode;
@@ -28,6 +29,7 @@ export default class DatasetReviewErrorBoundary extends Component<
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    if (reloadOnceForChunkError("dataset-review-boundary", error)) return;
     console.error("[dataset-review] Render failed:", error, errorInfo);
   }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { EpisodeLengthStats } from "@/app/[org]/[dataset]/[episode]/fetch-data";
+import type { EpisodeLengthStats } from "@/types/episode-data";
 import { EpisodeLengthHistogram } from "@/components/stats-panel";
 import { useFlaggedEpisodes } from "@/context/flagged-episodes-context";
 import {

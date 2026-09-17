@@ -25,7 +25,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { EpisodeData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
+import type { EpisodeData } from "@/types/episode-data";
 import type { LocalDatasetSummary } from "@/lib/local-datasets-discovery";
 import {
   getLinkedHubDatasetRepoId,
@@ -2052,13 +2052,19 @@ export default function WorkbenchGroupingPanel({
 
     if (!replayEpisodeData && replayDataset) {
       try {
-        const { getEpisodeDataSafe } =
-          await import("@/app/[org]/[dataset]/[episode]/fetch-data");
-        const result = await getEpisodeDataSafe(
-          "_local",
-          replayDataset.encodedPath,
-          0,
+        const response = await fetch(
+          `/api/local-datasets/${encodeURIComponent(
+            replayDataset.encodedPath,
+          )}/episode-data/0`,
+          { cache: "no-store" },
         );
+        const result = (await response.json()) as {
+          data?: EpisodeData;
+          error?: string;
+        };
+        if (!response.ok) {
+          throw new Error(result.error ?? `HTTP ${response.status}`);
+        }
         replayEpisodeData = result.data;
         if (!replayEpisodeData && result.error) {
           setDisplayReplayError(result.error);

@@ -112,6 +112,47 @@ export type LocalDatasetsResponse = {
   errors: { path: string; message: string }[];
 };
 
+export function serializeLocalDatasetSummaryForClient(
+  dataset: LocalDatasetSummary,
+): LocalDatasetSummary {
+  return {
+    relativePath: dataset.relativePath,
+    encodedPath: dataset.encodedPath,
+    codebase_version: dataset.codebase_version,
+    robot_type: dataset.robot_type,
+    collectorSerialNumber: dataset.collectorSerialNumber ?? null,
+    robotId: dataset.robotId,
+    leftGripperSn: dataset.leftGripperSn,
+    total_episodes: dataset.total_episodes,
+    total_frames: dataset.total_frames,
+    total_tasks: dataset.total_tasks,
+    fps: dataset.fps,
+    sizeBytes: dataset.sizeBytes,
+    thumbnailVideoUrl: dataset.thumbnailVideoUrl,
+    integrity: { ...dataset.integrity },
+    tags: {
+      ...dataset.tags,
+      objects: [...dataset.tags.objects],
+    },
+    ...(dataset.tasks
+      ? { tasks: dataset.tasks.map((task) => ({ ...task })) }
+      : {}),
+    facets: { ...dataset.facets },
+  };
+}
+
+export function serializeLocalDatasetsResponseForClient(
+  response: LocalDatasetsResponse,
+): LocalDatasetsResponse {
+  return {
+    root: response.root,
+    browsePath: response.browsePath,
+    locations: [...response.locations],
+    datasets: response.datasets.map(serializeLocalDatasetSummaryForClient),
+    errors: response.errors.map((error) => ({ ...error })),
+  };
+}
+
 async function readDatasetInfo(
   datasetDir: string,
 ): Promise<LocalDatasetInfoJson | null> {

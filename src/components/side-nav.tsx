@@ -6,7 +6,7 @@ import { useFlaggedEpisodes } from "@/context/flagged-episodes-context";
 import { useT } from "@/context/locale-context";
 import { routePathFromRepoId } from "@/utils/datasetRoute";
 
-import type { DatasetDisplayInfo } from "@/app/[org]/[dataset]/[episode]/fetch-data";
+import type { DatasetDisplayInfo } from "@/types/episode-data";
 
 interface SidebarProps {
   datasetInfo: DatasetDisplayInfo;

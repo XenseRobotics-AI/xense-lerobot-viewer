@@ -920,6 +920,7 @@ export const zh: Record<MessageKey, string> = {
   "workbench.tacCapShowcaseVideo": "TacCap 展示视频",
   "workbench.autoplayMuted": "自动播放已静音 · 打开声音",
   "workbench.replayStatus": "{count} / 6 路视频 · t+{seconds}s",
+  "workbench.replayRenderingRecovering": "正在恢复 3D 回放……",
   "workbench.missing": "缺少：{items}",
   "workbench.videoStreams": "路视频",
   "workbench.tcpTrajectory": "TCP 轨迹",

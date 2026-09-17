@@ -7,7 +7,7 @@ import type {
   DatasetDisplayInfo,
   EpisodeData,
   EpisodeLengthStats,
-} from "@/app/[org]/[dataset]/[episode]/fetch-data";
+} from "@/types/episode-data";
 import { EpisodeLengthHistogram } from "@/components/stats-panel";
 import HfDownloadPanel from "@/components/hf-download-panel";
 import WorkbenchDatasetStatistics from "@/components/workbench-dataset-statistics";

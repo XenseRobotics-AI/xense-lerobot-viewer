@@ -6,7 +6,6 @@ import {
   useEffect,
   useRef,
   useCallback,
-  lazy,
   Suspense,
   useLayoutEffect,
   useTransition,
@@ -63,24 +62,43 @@ import {
   yieldsSpaceShortcut,
 } from "@/utils/viewerShortcuts";
 import DatasetTagsEditor from "@/components/dataset-tags-editor";
+import { lazyWithChunkRecovery } from "@/utils/lazyChunkRecovery";
 
-const URDFViewer = lazy(() => import("@/components/urdf-viewer"));
-const ActionInsightsPanel = lazy(
+const URDFViewer = lazyWithChunkRecovery(
+  "urdf-viewer",
+  () => import("@/components/urdf-viewer"),
+);
+const ActionInsightsPanel = lazyWithChunkRecovery(
+  "action-insights-panel",
   () => import("@/components/action-insights-panel"),
 );
-const FilteringPanel = lazy(() => import("@/components/filtering-panel"));
-const DoctorPanel = lazy(() => import("@/components/doctor-panel"));
-const ParquetTablePanel = lazy(
+const FilteringPanel = lazyWithChunkRecovery(
+  "filtering-panel",
+  () => import("@/components/filtering-panel"),
+);
+const DoctorPanel = lazyWithChunkRecovery(
+  "doctor-panel",
+  () => import("@/components/doctor-panel"),
+);
+const ParquetTablePanel = lazyWithChunkRecovery(
+  "parquet-table-panel",
   () => import("@/components/parquet-table-panel"),
 );
-const DatasetReviewPanel = lazy(
+const DatasetReviewPanel = lazyWithChunkRecovery(
+  "dataset-review-panel",
   () => import("@/components/dataset-review-panel"),
 );
-const TacFlowPanel = lazy(() => import("@/components/tacflow-panel"));
+const TacFlowPanel = lazyWithChunkRecovery(
+  "tacflow-panel",
+  () => import("@/components/tacflow-panel"),
+);
 // Recharts is ~150KB gz and not above-the-fold (videos render first on the
 // Episodes tab). Lazy-load it so the initial chunk can ship faster and
 // videos start downloading in parallel with the chart bundle.
-const DataRecharts = lazy(() => import("@/components/data-recharts"));
+const DataRecharts = lazyWithChunkRecovery(
+  "data-recharts",
+  () => import("@/components/data-recharts"),
+);
 
 type EpisodeSwitchTiming = {
   targetEpisode: number;

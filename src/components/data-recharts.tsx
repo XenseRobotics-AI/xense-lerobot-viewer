@@ -21,8 +21,10 @@ import { useT } from "@/context/locale-context";
 import { hasEpisodePoseTrajectories } from "@/utils/poseTrajectory3d";
 import { CHART_CONFIG } from "@/utils/constants";
 import { evenlySampleArray } from "@/utils/sampling";
+import { lazyWithChunkRecovery } from "@/utils/lazyChunkRecovery";
 
-const EpisodePose3DViewer = React.lazy(
+const EpisodePose3DViewer = lazyWithChunkRecovery(
+  "episode-pose-3d-viewer",
   () => import("@/components/episode-pose-3d-viewer"),
 );
 

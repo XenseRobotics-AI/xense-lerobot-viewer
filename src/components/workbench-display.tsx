@@ -14,7 +14,7 @@ import { useT } from "@/context/locale-context";
 import type { InterpolationVars } from "@/i18n/format";
 import type { MessageKey } from "@/i18n/messages";
 import { createPortal } from "react-dom";
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import { TacCapReplayScene } from "@/components/taccap-replay-scene";
 import UrdfVideoOverlay from "@/components/urdf-video-overlay";
@@ -720,6 +720,36 @@ function WorkstationHeatmapSlide({
 
 const ignoreTacCapModelReady = () => undefined;
 
+function ReplayCanvasRecovery({
+  onContextLost,
+  onContextRestored,
+}: {
+  onContextLost: () => void;
+  onContextRestored: () => void;
+}) {
+  const gl = useThree((state) => state.gl);
+
+  useEffect(() => {
+    const canvas = gl.domElement;
+    const handleContextLost = (event: Event) => {
+      event.preventDefault();
+      onContextLost();
+    };
+    const handleContextRestored = () => {
+      onContextRestored();
+    };
+
+    canvas.addEventListener("webglcontextlost", handleContextLost);
+    canvas.addEventListener("webglcontextrestored", handleContextRestored);
+    return () => {
+      canvas.removeEventListener("webglcontextlost", handleContextLost);
+      canvas.removeEventListener("webglcontextrestored", handleContextRestored);
+    };
+  }, [gl, onContextLost, onContextRestored]);
+
+  return null;
+}
+
 function TacCapReplaySlide({
   snapshot,
   elapsedMs,
@@ -733,6 +763,8 @@ function TacCapReplaySlide({
 }) {
   const t = useT();
   const replay = snapshot.replay;
+  const [canvasVersion, setCanvasVersion] = useState(0);
+  const [webglRecovering, setWebglRecovering] = useState(false);
   const chartRows = useMemo(
     () => (replay ? Array.from(replay.chartRows) : []),
     [replay],
@@ -758,6 +790,13 @@ function TacCapReplaySlide({
       }),
     [elapsedMs, replay, tracks],
   );
+  const handleContextLost = useCallback(() => {
+    setWebglRecovering(true);
+  }, []);
+  const handleContextRestored = useCallback(() => {
+    setWebglRecovering(false);
+    setCanvasVersion((version) => version + 1);
+  }, []);
   if (!replay) return null;
 
   const localTimeSeconds = Math.min(
@@ -788,7 +827,9 @@ function TacCapReplaySlide({
       />
       <div className={styles.replayFrame}>
         <Canvas
+          key={canvasVersion}
           className={styles.replayCanvas}
+          dpr={[1, 1.5]}
           shadows
           frameloop="always"
           camera={{
@@ -798,10 +839,17 @@ function TacCapReplaySlide({
             far: 100,
           }}
           gl={{
+            antialias: true,
+            powerPreference: "high-performance",
+            preserveDrawingBuffer: false,
             toneMapping: THREE.ACESFilmicToneMapping,
             toneMappingExposure: 0.9,
           }}
         >
+          <ReplayCanvasRecovery
+            onContextLost={handleContextLost}
+            onContextRestored={handleContextRestored}
+          />
           <color attach="background" args={["#1a2433"]} />
           <ambientLight intensity={0.12} />
           <directionalLight
@@ -840,6 +888,11 @@ function TacCapReplaySlide({
           />
           <OrbitControls makeDefault target={[0, 0, 0]} />
         </Canvas>
+        {webglRecovering && (
+          <div className={styles.replayRecovering} aria-live="polite">
+            {t("workbench.replayRenderingRecovering")}
+          </div>
+        )}
         <UrdfVideoOverlay
           active
           episodeTimeSeconds={episodeTimeSeconds}

@@ -955,6 +955,7 @@ export const en = {
   "workbench.tacCapShowcaseVideo": "TacCap showcase video",
   "workbench.autoplayMuted": "Autoplay continued muted · Turn sound on",
   "workbench.replayStatus": "{count} / 6 video streams · t+{seconds}s",
+  "workbench.replayRenderingRecovering": "Restoring 3D replay…",
   "workbench.missing": "Missing: {items}",
   "workbench.videoStreams": "video streams",
   "workbench.tcpTrajectory": "TCP trajectory",

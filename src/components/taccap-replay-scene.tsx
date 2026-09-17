@@ -135,6 +135,16 @@ function applyTacCapGripperFrame(
   robot.updateMatrixWorld(true);
 }
 
+function disposeTacCapRobotMaterials(robot: URDFRobot) {
+  robot.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+    const materials = Array.isArray(child.material)
+      ? child.material
+      : [child.material];
+    materials.forEach((material) => material.dispose());
+  });
+}
+
 function TacCapAxisArrow({
   alwaysVisible = false,
   color,
@@ -423,7 +433,10 @@ function TacCapGripperModel({
     return () => {
       cancelled = true;
       const robot = mountedRobot ?? robotRef.current;
-      if (robot) scene.remove(robot);
+      if (robot) {
+        scene.remove(robot);
+        disposeTacCapRobotMaterials(robot);
+      }
       if (robotRef.current === mountedRobot) robotRef.current = null;
       recordedTcpToRootRef.current = null;
     };

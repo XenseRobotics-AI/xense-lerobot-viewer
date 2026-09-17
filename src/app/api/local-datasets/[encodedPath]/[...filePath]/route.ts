@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
-import fs from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { statDatasetFile } from "@/lib/local-dataset-paths";
 
 export const runtime = "nodejs";
@@ -63,6 +64,15 @@ function buildCommonHeaders(filePath: string, size: number): Headers {
   return headers;
 }
 
+function fileStream(
+  filePath: string,
+  options?: { start?: number; end?: number },
+): BodyInit {
+  return Readable.toWeb(
+    createReadStream(filePath, options),
+  ) as unknown as BodyInit;
+}
+
 export async function GET(
   req: NextRequest,
   ctx: { params: Promise<{ encodedPath: string; filePath: string[] }> },
@@ -74,8 +84,10 @@ export async function GET(
   const rangeHeader = req.headers.get("range");
   if (!rangeHeader) {
     const headers = buildCommonHeaders(file.absolutePath, file.size);
-    const buffer = await fs.readFile(file.absolutePath);
-    return new Response(buffer, { status: 200, headers });
+    return new Response(fileStream(file.absolutePath), {
+      status: 200,
+      headers,
+    });
   }
 
   const range = normalizeRange(rangeHeader, file.size);
@@ -88,20 +100,23 @@ export async function GET(
     });
   }
 
-  const handle = await fs.open(file.absolutePath, "r");
-  const body = new Uint8Array(range.end - range.start + 1);
-  await handle.read(body, 0, body.byteLength, range.start);
-  await handle.close();
-  const headers = buildCommonHeaders(file.absolutePath, body.byteLength);
+  const contentLength = range.end - range.start + 1;
+  const headers = buildCommonHeaders(file.absolutePath, contentLength);
   headers.set(
     "content-range",
     `bytes ${range.start}-${range.end}/${file.size}`,
   );
 
-  return new Response(body, {
-    status: 206,
-    headers,
-  });
+  return new Response(
+    fileStream(file.absolutePath, {
+      start: range.start,
+      end: range.end,
+    }),
+    {
+      status: 206,
+      headers,
+    },
+  );
 }
 
 export async function HEAD(
