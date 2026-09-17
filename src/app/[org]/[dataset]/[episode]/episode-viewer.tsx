@@ -27,6 +27,7 @@ import {
 import { AnnotationsPanel } from "@/components/annotations-panel";
 import { AnnotationsTimeline } from "@/components/annotations-timeline";
 import { SubtaskPanel } from "@/components/subtask-panel";
+import { TactileAtomBoundariesPanel } from "@/components/tactile-atom-boundaries-panel";
 import Sidebar from "@/components/side-nav";
 import LanguageSwitcher from "@/components/language-switcher";
 import { useLocale, useT } from "@/context/locale-context";
@@ -834,7 +835,7 @@ function EpisodeViewerInner({
   );
   // Which annotation system the Annotations tab's right pane is showing.
   const [annotationEditor, setAnnotationEditor] = useState<
-    "atoms" | "subtasks"
+    "atoms" | "subtasks" | "tactile_atom"
   >("atoms");
 
   const [urdfMounted, setUrdfMounted] = useState(activeTab === "urdf");
@@ -1265,6 +1266,7 @@ function EpisodeViewerInner({
                       [
                         { id: "atoms", label: t("ann.title") },
                         { id: "subtasks", label: t("subtask.title") },
+                        { id: "tactile_atom", label: t("tactileAtom.title") },
                       ] as const
                     ).map((entry) => (
                       <button
@@ -1284,17 +1286,25 @@ function EpisodeViewerInner({
                     ))}
                   </div>
                   <div className="min-h-0 flex-1 pt-3 lg:overflow-y-auto lg:pr-1">
-                    {annotationEditor === "atoms" ? (
+                    {annotationEditor === "atoms" && (
                       <AnnotationsPanel
                         cameraKeys={videosInfo.map((v) => v.filename)}
                       />
-                    ) : (
+                    )}
+                    {annotationEditor === "subtasks" && (
                       <SubtaskPanel
                         encodedPath={encodedDatasetPath}
                         episodeId={episodeId}
                         fps={datasetInfo.fps}
                         task={task}
                         frameTimestamps={data.frameTimestamps}
+                      />
+                    )}
+                    {annotationEditor === "tactile_atom" && (
+                      <TactileAtomBoundariesPanel
+                        encodedPath={encodedDatasetPath}
+                        episodeId={episodeId}
+                        duration={data.duration}
                       />
                     )}
                   </div>

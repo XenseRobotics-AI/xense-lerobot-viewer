@@ -887,4 +887,18 @@ export const zh: Record<MessageKey, string> = {
   "err.fixHint":
     "用 {cmd} 重新下载数据集内容，确保 {data} 与 {videos} 不为空；或者把这个空条目从本地缓存中删掉。",
   "err.back": "← 返回数据集浏览",
+
+  // ── 触觉原子候选边界面板（Annotations tab）──────────────────────────────
+  "tactileAtom.title": "触觉原子",
+  "tactileAtom.subtitle":
+    "TacFlow-Engine 产出的只读候选边界（对触觉视频做 change point detection），目前还没有区间标签。",
+  "tactileAtom.loading": "正在加载候选边界…",
+  "tactileAtom.empty":
+    "这个 episode 还没有发布触觉原子候选边界。先用 TacFlow-Engine 的 detect_tactile_boundaries.py --publish 跑一遍。",
+  "tactileAtom.error": "候选边界加载失败。",
+  "tactileAtom.source": "边界来源：{source}",
+  "tactileAtom.detectedAt": "检测时间 {time}",
+  "tactileAtom.configFingerprint": "配置指纹：{fingerprint}…",
+  "tactileAtom.boundaryCount": "{count} 个边界",
+  "tactileAtom.tickTitle": "边界 @ {time}s（frame {frame}）",
 };

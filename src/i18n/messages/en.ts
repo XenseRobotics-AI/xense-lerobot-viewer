@@ -918,6 +918,20 @@ export const en = {
   "err.fixHint":
     "Re-download the dataset payload with {cmd} so that {data} and {videos} are populated, or remove the empty entry from your local cache.",
   "err.back": "← Back to dataset browser",
+
+  // ── Tactile-atom candidate boundaries panel (Annotations tab) ──────────
+  "tactileAtom.title": "Tactile Atoms",
+  "tactileAtom.subtitle":
+    "Read-only candidate boundaries from TacFlow-Engine (change-point detection on tactile video). No region labels yet.",
+  "tactileAtom.loading": "Loading candidate boundaries…",
+  "tactileAtom.empty":
+    "No tactile-atom candidates published for this episode yet. Run TacFlow-Engine's detect_tactile_boundaries.py --publish to generate them.",
+  "tactileAtom.error": "Failed to load candidate boundaries.",
+  "tactileAtom.source": "boundary_source: {source}",
+  "tactileAtom.detectedAt": "detected {time}",
+  "tactileAtom.configFingerprint": "config: {fingerprint}…",
+  "tactileAtom.boundaryCount": "{count} boundaries",
+  "tactileAtom.tickTitle": "boundary @ {time}s (frame {frame})",
 } as const;
 
 export type MessageKey = keyof typeof en;
