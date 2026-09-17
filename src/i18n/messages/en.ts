@@ -38,6 +38,8 @@ export const en = {
   "common.healthy": "healthy",
   "common.incomplete": "incomplete",
   "common.empty": "empty",
+  "common.issueCount_one": "{count} issue",
+  "common.issueCount_other": "{count} issues",
   "common.cancel": "Cancel",
   "common.copy": "Copy",
   "common.clear": "Clear",
@@ -88,6 +90,8 @@ export const en = {
   "grid.filterIssues": "Issues ({count})",
   "grid.filterPlaceholder": "Filter tasks by name or robot type",
   "grid.allRobots": "All robots ({count})",
+  "grid.datasetCount_one": "{count} dataset",
+  "grid.datasetCount_other": "{count} datasets",
   "grid.noMatch": "No tasks match the current filter.",
   "grid.sourceLabel": "Source",
   "grid.sourceAll": "All",
@@ -159,6 +163,8 @@ export const en = {
   "source.share": "Share",
   "source.needAttention": "need attention",
   "source.browseTasks": "Browse {count} tasks",
+  "source.robotsMore": "+{count} more",
+  "source.filterToSource": "Show its {count} tasks below",
   "source.syncButton": "Sync from Hugging Face",
   "source.syncHint":
     "Downloads {source} through hf-mirror. Shows what it would pull first.",
@@ -227,6 +233,11 @@ export const en = {
   "pathswitch.use": "Use",
   "pathswitch.choose": "Choose folder…",
   "pathswitch.choosing": "Dialog open…",
+  "pathswitch.switching": "Switching to {path} — scanning it now.",
+  "pathswitch.switchingHint":
+    "A large directory on slow storage (an external drive) can take a minute.",
+  "pathswitch.notSwitched":
+    "Still browsing the default root: {path} is no longer a known location.",
   "pathswitch.dialogTitle": "Choose a dataset folder",
   "pathswitch.dialogUnavailable": "No folder dialog: {reason}",
 
@@ -290,6 +301,7 @@ export const en = {
     "Workbench-style dataset statistics and custom quality checks",
   "viewer.tab.tacflow": "TacFlow",
   "viewer.tab.tacflowTitle": "Run the fixed TacFlow tactile repair pipeline",
+  "viewer.backToGroup": "Back to the dataset list",
   "viewer.home": "Home",
 
   // ── episode viewer: body ────────────────────────────────────────────────
@@ -858,6 +870,7 @@ export const en = {
     "TCP frame: +X forward, +Y left, +Z up (red/green/blue reference axes). Complete head.xyz+r1-r6 data adds a yellow trail, schematic HMD, and playback frame. The HMD is centered on the recorded head pose with its visor facing +X; no uncalibrated offset is added. Head video alone does not create a trajectory.",
   "urdf.tacCapNoPose":
     "No complete left_tcp/right_tcp xyz+r1-r6 trajectories were found for TacCap replay.",
+  "urdf.legendTracks": "Tracks",
   "urdf.axisForward": "forward",
   "urdf.axisLeft": "left",
   "urdf.axisUp": "up",
@@ -955,6 +968,7 @@ export const en = {
   "workbench.tacCapShowcaseVideo": "TacCap showcase video",
   "workbench.autoplayMuted": "Autoplay continued muted · Turn sound on",
   "workbench.replayStatus": "{count} / 6 video streams · t+{seconds}s",
+  "workbench.replayRenderingRecovering": "Restoring 3D replay…",
   "workbench.missing": "Missing: {items}",
   "workbench.videoStreams": "video streams",
   "workbench.tcpTrajectory": "TCP trajectory",
@@ -1446,6 +1460,10 @@ export const en = {
   "chart.threeDRotationAxes": "Playback frame: X red · Y green · Z blue",
   "chart.split": "Split charts",
   "chart.combine": "Combine all",
+  "chart.gripperOnly": "Gripper only",
+  "chart.gripperOnlyHint":
+    "Hide every series but the gripper opening, so it can be read against the video",
+  "chart.noGripper": "No gripper series among this dataset's features",
 
   // ── client-side failures rendered verbatim by the calling panel ─────────
   "err.doctorRequest": "Doctor request failed ({status}).",

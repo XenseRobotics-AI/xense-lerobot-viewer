@@ -1,6 +1,12 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { useRouter } from "next/navigation";
 import { browsePathCookieString } from "@/utils/browsePath";
 import { useLocale } from "@/context/locale-context";
@@ -17,6 +23,17 @@ import { useLocale } from "@/context/locale-context";
  * The choice is a cookie, read on the next server render. The default root
  * stays the anchor for the stores (locations list, corpus history, trash) —
  * only the scan follows the selection.
+ *
+ * **The switch has to show that it is working.** Applying it means a fresh
+ * server scan of the chosen directory, and that is seconds-to-minutes on a big
+ * archive over slow storage (a 612-dataset exFAT USB drive here measured 46 s
+ * with a warm dentry cache). `router.refresh()` on its own paints nothing while
+ * that runs: the popover closed, the old listing stayed, and the only honest
+ * reading was that the button did nothing. So the refresh runs inside a
+ * transition, the popover stays open until the new path lands, and a scan that
+ * comes back on a *different* path than asked — an unlisted location the server
+ * refuses, falling back to the root — says so instead of looking identical to
+ * success.
  */
 
 type Message = { tone: "ok" | "error"; text: string };
@@ -35,13 +52,20 @@ export default function DatasetPathSwitcher({
   browsePath: string;
   locations: string[];
 }) {
-  const { t } = useLocale();
+  const { t, tRich } = useLocale();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<Message | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [isPending, startTransition] = useTransition();
+  /** The path a refresh is currently in flight for, or null. */
+  const [pendingTarget, setPendingTarget] = useState<string | null>(null);
+  const sawPending = useRef(false);
+  /** The target whose apparent failure has already been checked with the server. */
+  const verified = useRef<string | null>(null);
+  const locked = busy || isPending;
 
   // Close on Escape or a click elsewhere, the way a menu is expected to behave.
   useEffect(() => {
@@ -54,23 +78,74 @@ export default function DatasetPathSwitcher({
         setOpen(false);
       }
     };
+    // Dismissing mid-switch would hide the only progress there is.
+    if (pendingTarget !== null) return;
     document.addEventListener("keydown", onKeyDown);
     document.addEventListener("mousedown", onPointerDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("mousedown", onPointerDown);
     };
-  }, [open]);
+  }, [open, pendingTarget]);
 
   const switchTo = useCallback(
     (target: string) => {
       document.cookie = browsePathCookieString(target);
-      setOpen(false);
       setMessage(null);
-      router.refresh();
+      setPendingTarget(target);
+      // Inside a transition so `isPending` covers the server scan; the popover
+      // is closed by the effect below, once the new path is actually rendered.
+      startTransition(() => router.refresh());
     },
     [router],
   );
+
+  useEffect(() => {
+    if (isPending) sawPending.current = true;
+  }, [isPending]);
+
+  useEffect(() => {
+    if (pendingTarget === null) return;
+    if (browsePath === pendingTarget) {
+      sawPending.current = false;
+      verified.current = null;
+      setPendingTarget(null);
+      setOpen(false);
+      return;
+    }
+    if (isPending || !sawPending.current) return;
+    if (verified.current === pendingTarget) return;
+    verified.current = pendingTarget;
+
+    // The transition has settled on a path other than the one asked for, which
+    // *looks* like `resolveBrowsePath` refusing the cookie and falling back to
+    // the root — silent before, and indistinguishable from "the button does
+    // nothing". But `isPending` is only as trustworthy as React keeping the
+    // refresh's suspended tree inside this transition, so the refusal is
+    // confirmed against the store rather than inferred: the root is always
+    // accepted, and any other path is honoured exactly when it is still listed.
+    // If it is listed, the refresh simply has not landed yet — keep waiting.
+    const target = pendingTarget;
+    void (async () => {
+      if (target === root) return;
+      try {
+        const response = await fetch("/api/local-datasets/locations");
+        const data = (await response.json()) as {
+          locations?: { path?: string }[];
+        };
+        if (!response.ok) return;
+        if (data.locations?.some((entry) => entry?.path === target)) return;
+      } catch {
+        return; // can't confirm a refusal, so don't claim one
+      }
+      sawPending.current = false;
+      setPendingTarget((current) => (current === target ? null : current));
+      setMessage({
+        tone: "error",
+        text: t("pathswitch.notSwitched", { path: target }),
+      });
+    })();
+  }, [browsePath, isPending, pendingTarget, root, t]);
 
   /** Remember a path and switch to it in one go — that is why it was chosen. */
   const rememberAndSwitch = useCallback(
@@ -195,6 +270,28 @@ export default function DatasetPathSwitcher({
             {t("pathswitch.hint")}
           </p>
 
+          {pendingTarget !== null && (
+            <p
+              role="status"
+              className="mb-2 flex items-start gap-1.5 rounded border border-cyan-400/25 bg-cyan-500/10 px-2 py-1.5 text-cyan-100"
+            >
+              <span
+                aria-hidden
+                className="mt-0.5 h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-cyan-300/30 border-t-cyan-200"
+              />
+              <span className="min-w-0">
+                {tRich("pathswitch.switching", {
+                  path: (
+                    <span className="font-mono break-all">{pendingTarget}</span>
+                  ),
+                })}
+                <span className="mt-0.5 block text-cyan-200/60">
+                  {t("pathswitch.switchingHint")}
+                </span>
+              </span>
+            </p>
+          )}
+
           <ul className="mb-3 space-y-0.5">
             {entries.map((entry) => {
               const active = entry === browsePath;
@@ -202,7 +299,7 @@ export default function DatasetPathSwitcher({
                 <li key={entry} className="flex items-center gap-1">
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={locked}
                     onClick={() => switchTo(entry)}
                     aria-current={active}
                     className={`min-w-0 flex-1 truncate rounded px-2 py-1 text-left font-mono transition-colors ${
@@ -213,6 +310,7 @@ export default function DatasetPathSwitcher({
                     title={entry}
                   >
                     {active && <span aria-hidden>✓ </span>}
+                    {entry === pendingTarget && <span aria-hidden>⋯ </span>}
                     {entry}
                     {entry === root && (
                       <span className="ml-2 font-sans text-[10px] text-slate-500">
@@ -223,7 +321,7 @@ export default function DatasetPathSwitcher({
                   {entry !== root && (
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={locked}
                       onClick={() => remove(entry)}
                       aria-label={t("pathswitch.forgetAria", { path: entry })}
                       title={t("pathswitch.forget")}
@@ -240,7 +338,7 @@ export default function DatasetPathSwitcher({
           <div className="flex items-center gap-1.5">
             <button
               type="button"
-              disabled={busy}
+              disabled={locked}
               onClick={() => void chooseFolder()}
               className="shrink-0 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-slate-200 transition-colors hover:bg-white/10 disabled:opacity-40"
             >
@@ -260,7 +358,7 @@ export default function DatasetPathSwitcher({
             />
             <button
               type="button"
-              disabled={busy || !input.trim()}
+              disabled={locked || !input.trim()}
               onClick={() => void rememberAndSwitch(input)}
               className="shrink-0 rounded-md bg-cyan-500/90 px-2 py-1 text-[11px] font-semibold text-slate-900 transition-colors hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
             >

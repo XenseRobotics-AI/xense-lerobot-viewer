@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { EpisodeLengthStats } from "@/app/[org]/[dataset]/[episode]/fetch-data";
+import type { EpisodeLengthStats } from "@/types/episode-data";
 import { EpisodeLengthHistogram } from "@/components/stats-panel";
 import { useFlaggedEpisodes } from "@/context/flagged-episodes-context";
 import {
@@ -348,7 +348,7 @@ function CheckCard({
           </div>
           <span className="ml-auto shrink-0 text-[11px] tabular text-slate-500">
             {issueCount > 0
-              ? tp("home.groupIssues", issueCount)
+              ? tp("common.issueCount", issueCount)
               : t("doctor.clean")}
           </span>
         </button>

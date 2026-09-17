@@ -49,11 +49,21 @@ export function isTacCapRobot(robotType: string | null): boolean {
   );
 }
 
+export function isRdtGripperRobot(robotType: string | null): boolean {
+  if (!robotType) return false;
+  // The RDT handheld gripper: bimanual TacCap-style TCP recording, but a
+  // CTAG2F120 jaw rather than the TacCap unit, so it loads its own bundled
+  // model. Matched on the separator-stripped form for the same reason
+  // `isTacCapRobot` is — see `normalizeRobotType`.
+  return normalizeRobotType(robotType).includes("birdtgripper");
+}
+
 export function hasURDFSupport(robotType: string | null): boolean {
   return (
     isSO101Robot(robotType) ||
     isOpenArmRobot(robotType) ||
     isG1Robot(robotType) ||
-    isTacCapRobot(robotType)
+    isTacCapRobot(robotType) ||
+    isRdtGripperRobot(robotType)
   );
 }

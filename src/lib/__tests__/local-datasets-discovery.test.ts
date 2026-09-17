@@ -9,7 +9,7 @@ import {
   readDatasetHardwareRobotId,
   readDatasetHardwareValue,
   readDatasetXumiDeviceInfo,
-  toSerializableLocalDatasetsResponse,
+  serializeLocalDatasetsResponseForClient,
 } from "@/lib/local-datasets-discovery";
 import { addLocation } from "@/lib/dataset-locations-store";
 import { decodeLocalDatasetPath } from "@/utils/datasetRoute";
@@ -287,7 +287,7 @@ describe("discoverLocalDatasets with a switched path", () => {
     );
     expect(byRoot.datasets[0].localInfoFields).toBeInstanceOf(Set);
 
-    const serializable = toSerializableLocalDatasetsResponse(byRoot);
+    const serializable = serializeLocalDatasetsResponseForClient(byRoot);
     expect(
       Object.prototype.hasOwnProperty.call(
         serializable.datasets[0],
@@ -304,6 +304,36 @@ describe("discoverLocalDatasets with a switched path", () => {
     // Away from the root, the absolute path is what the file routes need.
     expect(decodeLocalDatasetPath(switched.datasets[0].encodedPath)).toBe(
       path.join(archive, "TacVerse-RDT"),
+    );
+  });
+
+  test("strips server-only dataset metadata from client payloads", async () => {
+    const root = await tempTree();
+    await dataset(path.join(root, "Xense", "client-safe"));
+    process.env.LOCAL_DATASET_ROOT = root;
+
+    const discovery = await discoverLocalDatasets();
+    expect(discovery.datasets[0].localInfoFields?.has("fps")).toBe(true);
+    expect(Object.getOwnPropertyNames(discovery.datasets[0])).toContain(
+      "localInfoFields",
+    );
+
+    const serialized = serializeLocalDatasetsResponseForClient(discovery);
+    expect(serialized.datasets[0].localInfoFields).toBeUndefined();
+    expect(Object.getOwnPropertyNames(serialized.datasets[0])).not.toContain(
+      "localInfoFields",
+    );
+    expect(Object.getPrototypeOf(serialized.datasets[0])).toBe(
+      Object.prototype,
+    );
+    expect(Object.getPrototypeOf(serialized.datasets[0].integrity)).toBe(
+      Object.prototype,
+    );
+    expect(Object.getPrototypeOf(serialized.datasets[0].tags)).toBe(
+      Object.prototype,
+    );
+    expect(Object.getPrototypeOf(serialized.datasets[0].facets)).toBe(
+      Object.prototype,
     );
   });
 

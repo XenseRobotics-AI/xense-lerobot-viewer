@@ -14,9 +14,9 @@ import {
   TrashStrip,
 } from "@/components/dataset-trash-controls";
 import HoverPlayVideo from "@/components/hover-play-video";
-import LanguageSwitcher from "@/components/language-switcher";
 import {
   compareDatasetsBySize,
+  getDatasetPrefix,
   getDatasetTaskName,
 } from "@/utils/datasetGrouping";
 import { formatBytes } from "@/utils/byteSize";
@@ -38,8 +38,6 @@ import { useLocale } from "@/context/locale-context";
 import type { MessageKey } from "@/i18n/messages";
 
 type DatasetCardGridProps = {
-  root: string;
-  prefix: string;
   datasets: LocalDatasetSummary[];
   /**
    * False while browsing a switched-to location: the trash lives under the
@@ -47,7 +45,13 @@ type DatasetCardGridProps = {
    * button rather than offering an action that cannot work.
    */
   canDelete: boolean;
-  onBack: () => void;
+  /**
+   * The text filter, owned by the page shell so the corpus dashboard can set
+   * it — clicking a tape band narrows this list to that source instead of
+   * opening a page of its own.
+   */
+  query: string;
+  onQueryChange: (value: string) => void;
 };
 
 type HealthFilter = "all" | "ok" | "issues";
@@ -118,15 +122,13 @@ function describeIntegrity(
 }
 
 export default function DatasetCardGrid({
-  root,
-  prefix,
   datasets,
   canDelete,
-  onBack,
+  query,
+  onQueryChange,
 }: DatasetCardGridProps) {
-  const { t, tpRich, tRich } = useLocale();
+  const { t, tp, tRich } = useLocale();
   const router = useRouter();
-  const [query, setQuery] = useState("");
   const [selectedRobot, setSelectedRobot] = useState<string>("all");
   const [healthFilter, setHealthFilter] = useState<HealthFilter>("all");
   const [taskFilter, setTaskFilter] = useState<TaskFilter>("all");
@@ -271,37 +273,10 @@ export default function DatasetCardGrid({
     : null;
 
   return (
-    <main className="px-8 py-10 max-w-7xl mx-auto">
+    <>
       <header className="mb-8">
-        <div className="flex items-start justify-between gap-4">
-          <button
-            type="button"
-            onClick={onBack}
-            className="group inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-[var(--surface-1)]/60 px-3 py-1.5 text-sm text-slate-300 transition-colors hover:border-cyan-400/40 hover:text-cyan-100"
-          >
-            <svg
-              className="h-4 w-4 transition-transform group-hover:-translate-x-0.5"
-              viewBox="0 0 20 20"
-              fill="currentColor"
-              aria-hidden
-            >
-              <path
-                fillRule="evenodd"
-                d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z"
-                clipRule="evenodd"
-              />
-            </svg>
-            {t("grid.back")}
-          </button>
-          <LanguageSwitcher />
-        </div>
-        <h1 className="mt-4 text-3xl font-bold tracking-tight text-slate-100">
-          {prefix}
-        </h1>
-        <p className="mt-2 text-sm text-slate-400">
-          {tpRich("grid.browsingLine", datasetsWithLiveTags.length, {
-            root: <span className="font-mono text-cyan-200/90">{root}</span>,
-          })}
+        <p className="text-sm text-slate-400">
+          {tp("grid.datasetCount", datasetsWithLiveTags.length)}
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
           <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-emerald-200">
@@ -431,7 +406,7 @@ export default function DatasetCardGrid({
           <input
             type="text"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => onQueryChange(e.target.value)}
             placeholder={t("grid.filterPlaceholder")}
             className="w-full rounded-md border border-white/10 bg-[var(--surface-1)]/60 px-10 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none"
           />
@@ -652,6 +627,16 @@ export default function DatasetCardGrid({
           {filtered.map((ds) => {
             const health = describeIntegrity(ds.integrity, t);
             const taskName = getDatasetTaskName(ds.relativePath);
+            // The list is no longer scoped to one source, so the task name
+            // alone is ambiguous — two sources can hold the same one. Shown as
+            // two lines rather than the raw `relativePath` so the name a person
+            // is scanning for still reads as the name.
+            // Null rather than `UNGROUPED_PREFIX` for a single-segment path:
+            // the task name is already the whole path there, and a literal
+            // "Ungrouped" line above it would be noise, not provenance.
+            const sourceName = ds.relativePath.includes("/")
+              ? getDatasetPrefix(ds.relativePath)
+              : null;
             const expectedShape = expectedShapeOf(ds.robot_type);
             const borderTone =
               health.tone === "error"
@@ -814,6 +799,14 @@ export default function DatasetCardGrid({
                 </div>
 
                 <div className="relative z-20 w-full px-3 py-2.5 text-slate-100">
+                  {sourceName && (
+                    <div
+                      className="truncate text-[11px] text-slate-400"
+                      title={ds.relativePath}
+                    >
+                      {sourceName}
+                    </div>
+                  )}
                   <div
                     className="truncate text-sm font-medium"
                     title={ds.relativePath}
@@ -976,6 +969,6 @@ export default function DatasetCardGrid({
           }}
         />
       )}
-    </main>
+    </>
   );
 }

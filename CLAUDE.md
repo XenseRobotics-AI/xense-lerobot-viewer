@@ -48,7 +48,9 @@ bun run validate     # type-check + lint + format:check + test
 
 Each LeRobot dataset under `LOCAL_DATASET_ROOT` (default `${HOME}/.cache/huggingface/lerobot`) is identified by the presence of `meta/info.json`. The homepage server-side scans up to 3 levels deep via `src/lib/local-datasets-discovery.ts`, returning `LocalDatasetSummary[]` with an integrity probe (`ok` / `empty` / `incomplete`) and `sizeBytes`.
 
-`sizeBytes` comes from `directorySizeBytes()`, a recursive walk of the dataset directory. It counts **everything on disk**, including the `.cache/huggingface` bookkeeping a Hub sync leaves behind — the figure answers "what does this cost me on disk", and `IGNORE_DIRS` only governs where datasets are _found_. Symlinks are skipped rather than followed, so a linked-in `videos/` is attributed to whoever owns the bytes instead of being double-counted. Apparent size is summed, not allocated blocks, so it reads slightly under `du` (which also charges for directory inodes). The walk is cheap enough to run inline on every homepage render — ~8 ms for 20 datasets / 4k files — so there is no cache to invalidate.
+`sizeBytes` comes from `directorySizeBytes()`, a recursive walk of the dataset directory. It counts **everything on disk**, including the `.cache/huggingface` bookkeeping a Hub sync leaves behind — the figure answers "what does this cost me on disk", and `IGNORE_DIRS` only governs where datasets are _found_. Symlinks are skipped rather than followed, so a linked-in `videos/` is attributed to whoever owns the bytes instead of being double-counted. Apparent size is summed, not allocated blocks, so it reads slightly under `du` (which also charges for directory inodes). The walk is cheap enough to run inline on every homepage render **on the default root** — ~8 ms for 20 datasets / 4k files on an SSD.
+
+It is not cheap on a big archive over slow storage, and that is the one thing it is cached for. Measured on the dev box's exFAT USB drive: `/media/.../TacVerse-opendata` is 162 datasets / 52k files and the size walk is **9.2 s of a 9.6 s scan — 96% of it**, everything else (info.json, tags, integrity, facets) being 0.4 s; `/media/.../TacVerse` is 612 datasets / 175k files and takes **46 s with a warm dentry cache**, minutes cold. That is a homepage render, which is why the path switcher looked like it simply did not work. So `src/lib/dataset-size-cache.ts` remembers each walk in one file under the **default root** (the root anchors the stores whichever path is browsed, so entries from every location coexist and switching back and forth does not evict), keyed on the absolute dataset directory plus `datasetSizeFingerprint` — the mtimes of the dataset directory, `meta/`, `data/`, `videos/` and **the immediate children of the latter two**. Those children are the point: directory mtime only moves when a _direct_ child changes, so the dataset directory alone cannot see `export_subtasks.py` writing a `.bak` inside `data/chunk-000/`. It is a heuristic and it can still miss a file rewritten in place with no directory change; what that costs is a stale number in a storage column, so the trade is deliberate, and deleting the file forces a full recount. A miss costs exactly what it cost before, every store failure is swallowed, and `flush()` writes only when the scan learned something — a read-only root loses the speed-up and nothing else.
 
 ### Robot types and dataset shapes
 
@@ -78,16 +80,73 @@ spelling still resolves. It is shared with `isTacCapRobot` deliberately: two
 matchers that disagree on how a name is read is the failure this file already
 warns about for the URDF predicates.
 
-Note `bi_rdt_gripper` matches none of the URDF predicates, so it gets no **3D
-Replay** tab — no RDT URDF is bundled. Its state layout is the same bimanual
-`left_tcp.*` / `right_tcp.*` / `*_gripper.pos` naming TacCap uses, so the
-Episodes `3D` chart mode and the Action Insights spatial trajectories, which key
-off feature names rather than robot type, work already.
+`bi_rdt_gripper` records the same bimanual `left_tcp.*` / `right_tcp.*` /
+`*_gripper.pos` layout TacCap does, so everything keyed off feature names — the
+Episodes `3D` chart mode, the Action Insights spatial trajectories, and the whole
+of `taccapGripperReplay.ts` — worked for it before any model existed. It now has
+a bundled model too; see **Bundled grippers** below.
 
 Where it surfaces: every dataset card carries the shape as a badge — neutral
-when it matches the robot type, amber when it does not — and the homepage
-category cards list the robot types present in each source, because a source
-directory is an owner rather than a rig and can hold several.
+when it matches the robot type, amber when it does not — and the dashboard's
+per-source panel lists the robot types present in that source, because a source
+directory is an owner rather than a rig and can hold several. That list rides on
+`CorpusSegment.robotTypes`; the source panel is the only place left that
+describes a source as a whole, so it is the only place it can be said.
+
+### Bundled grippers (TacCap and RDT)
+
+Two robot types have no arm: what is recorded is a `{side}_tcp` pose plus a
+normalized `{side}_gripper.pos`, so the viewer places a gripper model at each
+recorded TCP and drives one joint. That is a separate scene from the generic
+`RobotScene`, which maps dataset columns onto a full kinematic chain, and its
+assets are project-local rather than fetched from the HF bucket.
+
+Everything gripper-specific lives in one place — `bundledGripperProfile` in
+`src/utils/bundledGrippers.ts`:
+
+|               | `bi_taccap_gripper`                          | `bi_rdt_gripper`                                 |
+| ------------- | -------------------------------------------- | ------------------------------------------------ |
+| asset         | `public/urdf/taccap-grippers/{left,right}/`  | `public/urdf/rdt-gripper/` (one file, both arms) |
+| drive joint   | `joint1` → `0.5047 rad`, `joint2` mimics ×-1 | `R2` → `0.7 rad`, 13 joints mimic it             |
+| root ← TCP    | translation only, **measured**               | rotation + translation, **derived**              |
+| finger colour | baked per side in the two files              | tinted per side after load                       |
+
+`getRobotConfig` returns an empty `urdfUrl` for both, which is the signal to use
+this scene; it must stay in step with `bundledGripperProfile`, and through it
+with `hasURDFSupport`, or a robot whose tab is shown calls `URDFLoader.load("")`.
+
+**The RDT TCP transform is derived from the model's forward kinematics, not
+measured.** TacCap's is a number copied from the collector's `ee_transform.py`;
+no equivalent exists for the RDT gripper anywhere — not in
+`xense-taccap-lerobot`, not as a `taccap_extrinsics.json`, not beside the raw
+HDF5. The jaw midpoint sits `0.2572 m` above `base_link` at the closed pose, and
+the model approaches along its own `+Z` while the canonical TCP frame is
+`+X forward`, so the rotation is an axis cycle rather than the identity TacCap
+gets. Both numbers fail _visibly_ — a gripper detached from its own trail, or
+approaching sideways — and both are a one-constant fix. Replace them when a
+measurement exists; see `public/urdf/rdt-gripper/README.md`.
+
+One URDF serves both RDT arms: `Left_*` / `Right_*` in that model are the two
+jaws of a single gripper, not two arms.
+
+### Browsing is flat — one list per scanned path
+
+The homepage lists **every dataset under the currently scanned path at once**,
+ordered largest-first. There is no category level and no `?org=`.
+
+There used to be: `CategoryLanding` showed one card per path prefix and clicking
+one drilled into a scoped grid. The prefix was a presentation-layer invention —
+`discoverLocalDatasets` already returns one flat `LocalDatasetSummary[]`, and
+`getDatasetPrefix` is nothing but the first path segment — so the level bought a
+page the user had to pass through on the way in. Choosing which _set_ of
+datasets you see is the path switcher's job (below); narrowing within one is
+what the grid's own name/robot/tag/health/bucket/date filters are for.
+
+- `src/app/local-dataset-grid.tsx` is the page shell: header + `DatasetPathSwitcher`, `CorpusDashboard`, `RepoFetchPanel`, the scan-errors list, then one `DatasetCardGrid`. It renders a single `<main>`; the grid returns a fragment, so don't give it one of its own.
+- **The grid's text filter is a controlled prop**, owned by the shell. That is not tidiness: a corpus-tape band and the source panel's button call `onSelectSource(prefix)`, which sets the filter to that prefix and scrolls to the grid. They used to open the category page, and with it gone they had to mean something — filtering is the same narrowing with no extra page. The prefix is a whole leading path segment and the filter already matches `relativePath`, so it selects exactly that source.
+- **The prefix itself is very much alive, just not as navigation.** `groupDatasetsByPrefix` still keys `corpus-history.json`, still feeds the tape and the per-source dashboard panels, and is still the Hugging Face org that `runSync({ source })` targets. Do not delete it as "unused UI code".
+- Cards show the source above the task name (`getDatasetPrefix` / `getDatasetTaskName` off the same path). A flat list is no longer scoped to one source, so a bare task name is ambiguous — two sources can hold the same one. A single-segment path shows no source line rather than the literal `Ungrouped`.
+- Stale `/?org=…` links land on the full list. That is the intended degradation; nothing reads the param.
 
 ### Switching the scanned path
 
@@ -97,6 +156,7 @@ directory is an owner rather than a rig and can hold several.
 - The selection rides in the `xense-browse-path` cookie. `src/utils/browsePath.ts` holds the cookie name and serializer because the switcher is a client component and the store imports `node:fs` (same split as `i18n/config` vs `i18n/locale-server`).
 - `discoverLocalDatasets(requestedPath?)` scans that one directory and returns `{ root, browsePath, locations, datasets, errors }`. Away from the root, `encodedPath` carries the **absolute** path — `resolveServerLocalDatasetPath` already accepted those, so no file route changes — and a browsed directory that is itself a dataset is listed under its own basename.
 - Routes: `GET/POST/DELETE /api/local-datasets/locations`, and `POST /api/local-datasets/pick-folder`, which opens the **desktop's** folder dialog server-side (`src/lib/native-folder-dialog.ts`, zenity or kdialog) and returns `picked` / `cancelled` / `unavailable`. A browser cannot hand a page an absolute path, so the server asks the desktop instead; The window opens on the server's desktop whatever address the browser used: this viewer is normally reached by the host's LAN address even from the host itself (see `allowedDevOrigins`), so a loopback-only rule just meant the button never worked. `pickFolder` allows one dialog at a time, which keeps windows from stacking and caps what a caller can spawn. Everything that can go wrong (no display, no tool, crash, 3-minute timeout) comes back as `unavailable`, since the fallback — type the path — is the same for all of them.
+- **Applying a switch has to show that it is working.** It is a fresh server scan of the chosen directory — seconds to minutes on a big archive over slow storage (see `sizeBytes` above) — and a bare `router.refresh()` paints nothing while that runs: the popover closed, the old listing stayed, and the only honest reading was that the button did nothing. `dataset-path-switcher.tsx` therefore runs the refresh inside a `useTransition`, keeps the popover open (and undismissable) until the new `browsePath` prop arrives, and reports a scan that comes back on a **different** path than asked — an unlisted location `resolveBrowsePath` refused, falling back to the root — instead of leaving it indistinguishable from success. That refusal is **confirmed against the locations store, not inferred from `isPending`**: `router.refresh()` already wraps its own `startTransition`, so the outer one only stays pending for as long as React keeps the refresh's suspended tree in the same transition lane, and a flag that settles early would otherwise report a false failure on every ordinary switch. Re-reading the store is exact — the root is always accepted and any other path is honoured exactly when it is still listed — so a target that is still there just means the scan has not landed yet, and the spinner keeps waiting. Don't drop the transition back to a bare `refresh()`, and don't swap the confirmation for the flag.
 - `DatasetCardGrid` takes `canDelete`; it is false away from the root, hiding both the per-card Delete and the `TrashStrip`, because `local-dataset-trash.ts` guards on the root and would refuse those datasets.
 
 ### Repo IDs and routing
@@ -333,7 +393,7 @@ The **Doctor** tab (`src/components/doctor-panel.tsx`, immediately after Action 
 The homepage header is a tabbed dashboard: an **All sources** tab holding the corpus tape, plus one tab per top-level source (the directory prefix / HF org) with that source's own figures, its growth since the last snapshot, and its Sync button. Tabs are per _source_, never per task — there are ~4 sources against 231 tasks, and sync is an org-level operation.
 
 - **The tape is proportioned by recorded hours, not episode count.** An episode is an arbitrary slice; sources differ by an order of magnitude in mean episode length (see `avgEpisodeSeconds`), so episode counts are not comparable quantities and hours are. The legend deliberately shows episodes _and_ mean length beside the duration bar so the mismatch is visible.
-- **Card grids are ordered largest-first**, both levels: `compareDatasetsBySize` in `src/utils/datasetGrouping.ts` sorts on `sizeBytes` desc → `total_frames` desc → `total_episodes` desc → path, and `groupDatasetsByPrefix` ranks the category cards on the same keys summed (`totalBytes` first). **Bytes lead** — "how big is this dataset" is a storage question, and frames are only a proxy for it: on the real corpus TacVerse holds the most frames (2.9M) but 13 GB, while Vertax holds 1.6M frames and 40 GB, so the two keys genuinely disagree about which card comes first. Frames stay as the second key because `sizeBytes` is 0 for a directory that could not be walked, and those must not collapse to the bottom in path order. A group's card art is the thumbnail of its largest dataset that has one.
+- **The card grid is ordered largest-first**: `compareDatasetsBySize` in `src/utils/datasetGrouping.ts` sorts on `sizeBytes` desc → `total_frames` desc → `total_episodes` desc → path, and `groupDatasetsByPrefix` ranks the sources on the same keys summed (`totalBytes` first). **Bytes lead** — "how big is this dataset" is a storage question, and frames are only a proxy for it: on the real corpus TacVerse holds the most frames (2.9M) but 13 GB, while Vertax holds 1.6M frames and 40 GB, so the two keys genuinely disagree about which card comes first. Frames stay as the second key because `sizeBytes` is 0 for a directory that could not be walked, and those must not collapse to the bottom in path order.
 - **Two sync targets, one route.** `POST /api/local-datasets/sync` takes either `{ source }` (a whole org) or `{ repo: "owner/name" }` (one dataset), and the client's `SyncTarget` keeps them on one code path. The by-id target exists because the per-source button can only refresh a source already on disk — a dataset the machine has never held has no tab to press. Its panel (`repo-fetch-panel.tsx`) therefore sits on the homepage **outside** `CorpusDashboard`, which renders nothing when no source exists, and opens by default in exactly that case. The owner half of the id becomes the source directory, so a successful fetch is what makes a new source tab appear.
   Its listing pass calls `dataset_info(files_metadata=True)`, so the confirmation names a size and file count rather than "1 dataset pending" — deliberately **not** done on the org path, where it would be ~188 metadata calls before anything renders. A hand-typed id that does not resolve fails the listing outright instead of being conservatively treated as work the way an unresolvable org repo is: the id came from a keyboard, so "no such dataset" is the answer, not a download attempt.
 - **Storage is reported at all three levels**: `totalBytes` on the All-sources tile row, `bytes` per source (tab tile + tape legend), `sizeBytes` on each dataset card. Formatting goes through the one shared `formatBytes` in `src/utils/byteSize.ts` (binary units, read against `du`). `sync-progress.tsx` keeps a separate `formatTransferred` for live sync progress — that one is decimal on purpose, because it is read against what the Hub reports for the repo. The progress bars and the outcome line live there too, shared by both sync entry points: once bytes are moving the report is the same report. Storage is also in the daily snapshot, so the source panel shows a "since last snapshot" storage delta beside hours/episodes/tasks.
@@ -415,10 +475,11 @@ Every user-facing panel is translated (625 keys). To extend: add keys to both di
 | `src/lib/dataset-facets.ts`                                       | Pure browsing facets: bucket, capture dates, and the robot→shape table (`expectedShapeOf`, `shapeAnomalyOf`) — no `node:` imports                                  |
 | `src/lib/dataset-facets-server.ts`                                | Server half: reads capture dates off disk and derives shape from `info.json` features                                                                              |
 | `src/utils/corpusFilters.ts`                                      | Pure secondary filters for one category — bucket, capture date, odd-shape shortcut, and the chip counts                                                            |
-| `src/app/dataset-card-grid.tsx`                                   | The level-2 dataset grid: name/robot/tag filters, health + shape badges, per-card tag editor and Delete                                                            |
+| `src/app/dataset-card-grid.tsx`                                   | The dataset grid: name/robot/tag/health/bucket/date filters, shape badges, per-card tag editor and Delete; its text filter is a controlled prop                    |
 | `src/lib/local-datasets-discovery.ts`                             | Server-side scanner: walks the local root, returns datasets + `DatasetIntegrity`                                                                                   |
+| `src/lib/dataset-size-cache.ts`                                   | Remembered `directorySizeBytes` per dataset, fingerprinted on directory mtimes — 96% of a big location's scan                                                      |
 | `src/app/page.tsx`                                                | Server component → calls `discoverLocalDatasets()` → renders `LocalDatasetGrid`                                                                                    |
-| `src/app/local-dataset-grid.tsx`                                  | Client grid: filter, health filter, "Open episode N" quick-jump, card with health badge                                                                            |
+| `src/app/local-dataset-grid.tsx`                                  | The homepage shell: header + path switcher, corpus dashboard, HF-id panel, scan errors, and the one flat `DatasetCardGrid`                                         |
 | `src/app/_local/[encodedPath]/[episode]/page.tsx`                 | Server health probe + `EpisodeViewer` mount (the only live entry into the viewer)                                                                                  |
 | `src/app/api/local-datasets/route.ts`                             | `GET /api/local-datasets` — discovery API for clients                                                                                                              |
 | `src/app/api/local-datasets/[encodedPath]/[...filePath]/route.ts` | `GET`/`HEAD` for individual files, range-aware for video                                                                                                           |
@@ -463,6 +524,7 @@ Every user-facing panel is translated (625 keys). To extend: add keys to both di
 | `src/utils/datasetRoute.ts`                                       | `local:` repoId wrapper, base64url encode, route ↔ repoId conversion                                                                                               |
 | `src/utils/stringFormatting.ts`                                   | `buildV3DataPath`, `buildV3VideoPath`, `buildV3EpisodesMetadataPath`, padding helpers                                                                              |
 | `src/utils/parquetUtils.ts`                                       | `fetchParquetFile`, `readParquetAsObjects`, `formatStringWithVars`                                                                                                 |
+| `src/utils/gripperSeries.ts`                                      | Pure gripper-series selection behind the Episodes chart `Gripper only` filter                                                                                      |
 | `src/utils/dataProcessing.ts`                                     | Chart grouping pipeline: `buildSuffixGroupsMap` → `computeGroupStats` → `groupByScale` → `flattenScaleGroups` → `processChartDataGroups`                           |
 | `src/utils/typeGuards.ts`                                         | `bigIntToNumber`, `isNumeric`, `isValidTaskIndex`, etc.                                                                                                            |
 | `src/utils/constants.ts`                                          | `PADDING`, `EXCLUDED_COLUMNS`, `CHART_CONFIG`, `THRESHOLDS`                                                                                                        |
@@ -495,6 +557,30 @@ playback); `TimeControlsContext` (`seek`, `subscribe`, `setIsPlaying`,
 
 Series keys use `" | "` as delimiter (e.g. `observation.state | 0`).
 `groupRowBySuffix` groups by **suffix**: if two different prefixes share suffix `"0"` (e.g. `observation.state | 0` and `action | 0`), they are merged under `result["0"] = { "observation.state": ..., "action": ... }`. A series with a unique suffix stays flat with its full original key.
+
+### Gripper-only filter
+
+The chart toolbar's `Gripper only` toggle, beside `Combine all`, collapses the
+scale-grouped grid to a single chart holding nothing but the `*_gripper.pos`
+series — video, playback bar and playhead left in place. Scale grouping is the
+right default for reading a whole episode and the wrong one for "did the gripper
+close when the footage shows it closing": on a real TacCap capture the opening
+series shares a chart with `left_tcp.r5`/`r6` purely because they happen to span
+the same range.
+
+`src/utils/gripperSeries.ts` is the whole of it, pure and unit-tested.
+`isGripperFeature` matches a whole **token** of the feature name, so `gripper`,
+`gripper.pos`, `left_gripper.pos` and `right_gripper.position` all read without
+re-enumerating the `.pos` / `.position` / `.q` value suffixes that
+`autoMatchJoints` and `findGripperKey` each tolerate separately.
+`selectGripperSeriesRows` handles both key shapes `groupRowBySuffix` emits and
+merges gripper series that landed in different scale groups into one chart.
+
+The focus is **derived, not an effect**: velocity groups carry no gripper series,
+so a `useEffect` clearing the flag on a mode switch would paint one empty chart
+in the frame before it ran. A dataset whose features are numbered rather than
+named (`observation.state | 7`) says nothing about which dimension is the
+gripper, so the button is disabled with that as its reason.
 
 ## Testing
 

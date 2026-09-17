@@ -19,7 +19,7 @@ type OverallCounts = { ok: number; empty: number; incomplete: number };
 type CorpusTapeProps = {
   groups: DatasetGroup[];
   overall: OverallCounts;
-  onSelect: (prefix: string) => void;
+  onSelectSource: (prefix: string) => void;
 };
 
 /**
@@ -32,13 +32,13 @@ type CorpusTapeProps = {
  * duration, the legend is episodes, and the gap between them is a real property
  * of the corpus that a row of separate totals cannot express.
  *
- * Segments are buttons, not decoration — clicking one drills into that source,
- * the same action as the category cards below.
+ * Segments are buttons, not decoration — clicking one filters the dataset
+ * list below to that source.
  */
 export default function CorpusTape({
   groups,
   overall,
-  onSelect,
+  onSelectSource,
 }: CorpusTapeProps) {
   const t = useT();
   const stats = useMemo(() => computeCorpusStats(groups), [groups]);
@@ -131,7 +131,7 @@ export default function CorpusTape({
             <button
               key={segment.prefix}
               type="button"
-              onClick={() => onSelect(segment.prefix)}
+              onClick={() => onSelectSource(segment.prefix)}
               onMouseEnter={() => setHovered(segment.prefix)}
               onMouseLeave={() => setHovered(null)}
               onFocus={() => setHovered(segment.prefix)}

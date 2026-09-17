@@ -7,7 +7,7 @@ import type {
   EpisodeLengthInfo,
   EpisodeLengthStats,
   CameraInfo,
-} from "@/app/[org]/[dataset]/[episode]/fetch-data";
+} from "@/types/episode-data";
 import { copyTextToClipboard } from "@/utils/clipboard";
 import { getDisplayNameForRepoId } from "@/utils/datasetRoute";
 import {

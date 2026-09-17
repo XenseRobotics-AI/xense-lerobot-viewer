@@ -28,6 +28,12 @@ export type CorpusSegment = {
    * usually the difference between real teleoperation and calibration clips.
    */
   avgEpisodeSeconds: number | null;
+  /**
+   * Distinct `robot_type` values recorded under this source, most-used first.
+   * Carried through from the group because the source panel is the only place
+   * left that describes a source as a whole.
+   */
+  robotTypes: string[];
 };
 
 export type CorpusStats = {
@@ -72,6 +78,7 @@ export function computeCorpusStats(groups: DatasetGroup[]): CorpusStats {
       bytes,
       share: 0,
       avgEpisodeSeconds: episodes > 0 ? (hours * 3600) / episodes : null,
+      robotTypes: group.robotTypes,
     };
   });
 

@@ -6,7 +6,6 @@ import {
   useEffect,
   useRef,
   useCallback,
-  lazy,
   Suspense,
   useLayoutEffect,
   useTransition,
@@ -63,24 +62,43 @@ import {
   yieldsSpaceShortcut,
 } from "@/utils/viewerShortcuts";
 import DatasetTagsEditor from "@/components/dataset-tags-editor";
+import { lazyWithChunkRecovery } from "@/utils/lazyChunkRecovery";
 
-const URDFViewer = lazy(() => import("@/components/urdf-viewer"));
-const ActionInsightsPanel = lazy(
+const URDFViewer = lazyWithChunkRecovery(
+  "urdf-viewer",
+  () => import("@/components/urdf-viewer"),
+);
+const ActionInsightsPanel = lazyWithChunkRecovery(
+  "action-insights-panel",
   () => import("@/components/action-insights-panel"),
 );
-const FilteringPanel = lazy(() => import("@/components/filtering-panel"));
-const DoctorPanel = lazy(() => import("@/components/doctor-panel"));
-const ParquetTablePanel = lazy(
+const FilteringPanel = lazyWithChunkRecovery(
+  "filtering-panel",
+  () => import("@/components/filtering-panel"),
+);
+const DoctorPanel = lazyWithChunkRecovery(
+  "doctor-panel",
+  () => import("@/components/doctor-panel"),
+);
+const ParquetTablePanel = lazyWithChunkRecovery(
+  "parquet-table-panel",
   () => import("@/components/parquet-table-panel"),
 );
-const DatasetReviewPanel = lazy(
+const DatasetReviewPanel = lazyWithChunkRecovery(
+  "dataset-review-panel",
   () => import("@/components/dataset-review-panel"),
 );
-const TacFlowPanel = lazy(() => import("@/components/tacflow-panel"));
+const TacFlowPanel = lazyWithChunkRecovery(
+  "tacflow-panel",
+  () => import("@/components/tacflow-panel"),
+);
 // Recharts is ~150KB gz and not above-the-fold (videos render first on the
 // Episodes tab). Lazy-load it so the initial chunk can ship faster and
 // videos start downloading in parallel with the chart bundle.
-const DataRecharts = lazy(() => import("@/components/data-recharts"));
+const DataRecharts = lazyWithChunkRecovery(
+  "data-recharts",
+  () => import("@/components/data-recharts"),
+);
 
 type EpisodeSwitchTiming = {
   targetEpisode: number;
@@ -1267,8 +1285,11 @@ function EpisodeViewerInner({
           {activeTab === "annotations" && (
             <div className="annotations-skin flex flex-1 min-h-0 flex-col gap-4">
               <div className="flex shrink-0 items-center gap-3">
-                <p className="text-base font-medium text-slate-200 truncate">
-                  {datasetInfo.repoId}
+                <p
+                  className="truncate text-base font-medium text-slate-200"
+                  title={datasetDisplayName}
+                >
+                  {datasetDisplayName}
                 </p>
                 <p className="text-[10px] uppercase tracking-wide text-slate-500 tabular">
                   {t("ep.episodeLabel", { id: episodeId })}
@@ -1429,6 +1450,40 @@ function EpisodeViewerInner({
               className={activeTab === "urdf" ? "contents" : "hidden"}
               aria-hidden={activeTab !== "urdf"}
             >
+              {/* The tab renders through `display: contents`, so this header is
+                  laid out as a sibling flex item above the viewport rather than
+                  inside it — which keeps it out of URDFViewer, whose own root is
+                  the `flex-1` element that has to keep filling the column. */}
+              <div className="flex shrink-0 items-center gap-3">
+                <Link
+                  href="/"
+                  aria-label={t("viewer.backToGroup")}
+                  title={t("viewer.backToGroup")}
+                  className="group inline-flex shrink-0 items-center rounded-md border border-white/10 bg-[var(--surface-1)]/60 p-1.5 text-slate-300 transition-colors hover:border-cyan-400/40 hover:text-cyan-100"
+                >
+                  <svg
+                    className="h-4 w-4 transition-transform group-hover:-translate-x-0.5"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    aria-hidden
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                </Link>
+                <p
+                  className="truncate text-base font-medium text-slate-200"
+                  title={datasetDisplayName}
+                >
+                  {datasetDisplayName}
+                </p>
+                <p className="text-[10px] uppercase tracking-wide text-slate-500 tabular">
+                  {t("ep.episodeLabel", { id: episodeId })}
+                </p>
+              </div>
               <Suspense fallback={<Loading />}>
                 <URDFViewer
                   key={datasetInfo.repoId}

@@ -47,6 +47,7 @@ export * from "./workbench-configuration.types";
 export type {
   ChartDataPoint,
   ChartDataGroup,
+  ChartSeriesRow,
   SeriesColumn,
   GroupStats,
 } from "./chart.types";

@@ -1,10 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import type {
-  EpisodeFrameInfo,
-  EpisodeFramesData,
-} from "@/app/[org]/[dataset]/[episode]/fetch-data";
+import type { EpisodeFrameInfo, EpisodeFramesData } from "@/types/episode-data";
 import { useFlaggedEpisodes } from "@/context/flagged-episodes-context";
 import { useT } from "@/context/locale-context";
 
