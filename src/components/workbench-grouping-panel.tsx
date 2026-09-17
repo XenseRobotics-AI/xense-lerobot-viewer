@@ -65,11 +65,6 @@ import {
   type WorkbenchRollupRow,
 } from "@/utils/workbenchRollup";
 import {
-  buildWorkbenchTrendRows,
-  getWorkbenchTrendTicks,
-  WORKBENCH_TREND_START_DATE,
-} from "@/utils/workbenchTrend";
-import {
   createWorkbenchReviewTask,
   workbenchCsv,
 } from "@/utils/workbenchActions";
@@ -157,6 +152,7 @@ const DATE_SHORTCUTS = [
 ] as const;
 
 const WORKBENCH_WORKSTATION_CONCEPT_START_DATE = "2026-08-22";
+const WORKBENCH_DAILY_TREND_START_DATE = "2026-07-01";
 const WORKBENCH_HEATMAP_DAY_LIMIT = 10;
 type Translator = (key: MessageKey, vars?: InterpolationVars) => string;
 
@@ -797,7 +793,6 @@ export default function WorkbenchGroupingPanel({
     remoteStatisticsTotal: 0,
   });
   const [loading, setLoading] = useState(true);
-  const [hasLoaded, setHasLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [localRefreshToken, setLocalRefreshToken] = useState(0);
   const [dataUpdatedAt, setDataUpdatedAt] = useState<string | null>(null);
@@ -910,6 +905,7 @@ export default function WorkbenchGroupingPanel({
     setStatisticsFilter(createWorkbenchStatisticsFilterSummary([]));
     if (loadedCategoryRef.current !== categoryParam) {
       categoryRangeCheckPendingRef.current = true;
+      setDatasets([]);
     }
     fetch(
       "/api/workbench/statistics?org=" +
@@ -955,7 +951,6 @@ export default function WorkbenchGroupingPanel({
           payload.categoryFilter ?? categoryFilter,
         );
         setDatasets(payload.datasets ?? []);
-        setHasLoaded(true);
         setHubScope({
           refreshedAt: payload.refreshedAt ?? null,
           hubTotal: payload.hubTotal ?? 0,
@@ -1030,8 +1025,6 @@ export default function WorkbenchGroupingPanel({
     statisticsSource,
     t,
   ]);
-  const showInitialLoading = loading && !hasLoaded;
-  const showBackgroundLoading = loading && hasLoaded;
 
   const rollupDatasets = useMemo<WorkbenchRollupDataset[]>(
     () =>
@@ -1230,61 +1223,20 @@ export default function WorkbenchGroupingPanel({
     () =>
       computeWorkbenchAdditionTimeline(workstationRollupDatasets, {
         startDate:
-          range.endDate && range.endDate <= WORKBENCH_TREND_START_DATE
+          range.endDate && range.endDate <= WORKBENCH_DAILY_TREND_START_DATE
             ? range.startDate
-            : WORKBENCH_TREND_START_DATE,
+            : WORKBENCH_DAILY_TREND_START_DATE,
         endDate: range.endDate,
       }),
     [range.endDate, range.startDate, workstationRollupDatasets],
   );
-  const lineChartRows = useMemo(
-    () =>
-      dailyTrendTimeline.rows.map((row) => ({
-        day: row.day,
-        hours: row.hours,
-        datasets: row.datasets,
-      })),
-    [dailyTrendTimeline.rows],
-  );
-  const dailyTrendChart = useMemo(
-    () =>
-      buildWorkbenchTrendRows(lineChartRows, {
-        startDate: dailyTrendTimeline.range.startDate,
-        endDateExclusive: dailyTrendTimeline.range.endDate,
-      }),
-    [
-      dailyTrendTimeline.range.endDate,
-      dailyTrendTimeline.range.startDate,
-      lineChartRows,
-    ],
-  );
-  const dailyTrendChartRef = useRef<HTMLDivElement>(null);
-  const [dailyTrendChartWidth, setDailyTrendChartWidth] = useState(0);
-  useEffect(() => {
-    const element = dailyTrendChartRef.current;
-    if (!element) return;
-    const updateWidth = () => {
-      setDailyTrendChartWidth(
-        Math.round(element.getBoundingClientRect().width),
-      );
-    };
-    updateWidth();
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", updateWidth);
-      return () => window.removeEventListener("resize", updateWidth);
-    }
-    const observer = new ResizeObserver(updateWidth);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-  const dailyTrendTicks = useMemo(
-    () => getWorkbenchTrendTicks(dailyTrendChart.rows, dailyTrendChartWidth),
-    [dailyTrendChart.rows, dailyTrendChartWidth],
-  );
-  const dailyTrendTickLabels = useMemo(
-    () => new Map(dailyTrendTicks.map((tick) => [tick.offset, tick.label])),
-    [dailyTrendTicks],
-  );
+  const lineChartRows = dailyTrendTimeline.rows.map((row) => ({
+    day: row.day.slice(5),
+    date: row.day,
+    hours: row.hours,
+    cumulativeHours: row.cumulativeHours,
+    datasets: row.datasets,
+  }));
 
   const sourceWorkstationDashboardRows = useMemo<
     WorkbenchDashboardAggregateRow[]
@@ -2533,15 +2485,13 @@ export default function WorkbenchGroupingPanel({
           </details>
         </section>
       )}
-      {!showInitialLoading &&
-        hubScope.refreshedAt === null &&
-        hubScope.hubTotal === 0 && (
-          <div className="rounded-md border border-amber-400/25 bg-amber-400/5 p-3 text-xs text-amber-200">
-            {t("workbench.hubCatalogEmpty")}{" "}
-            {t("workbench.refreshStatisticsFirst")}
-          </div>
-        )}
-      {!showInitialLoading && hubScope.hubTotal > 0 && (
+      {!loading && hubScope.refreshedAt === null && hubScope.hubTotal === 0 && (
+        <div className="rounded-md border border-amber-400/25 bg-amber-400/5 p-3 text-xs text-amber-200">
+          {t("workbench.hubCatalogEmpty")}{" "}
+          {t("workbench.refreshStatisticsFirst")}
+        </div>
+      )}
+      {!loading && hubScope.hubTotal > 0 && (
         <div className="rounded-md border border-cyan-400/15 bg-cyan-400/[0.04] p-3 text-xs text-cyan-100/80">
           {t("workbench.hubScope", {
             category: hubScope.categoryTotal.toLocaleString(),
@@ -2564,15 +2514,6 @@ export default function WorkbenchGroupingPanel({
         </div>
       )}
       <WorkbenchStatisticsFilterNotice filter={statisticsFilter} />
-      {showBackgroundLoading && (
-        <div
-          className="rounded-md border border-cyan-400/15 bg-cyan-400/[0.04] p-3 text-xs text-cyan-100/80"
-          role="status"
-          aria-live="polite"
-        >
-          {t("workbench.refreshingStatistics")}
-        </div>
-      )}
 
       {error && (
         <div className="rounded-md border border-amber-400/25 bg-amber-400/5 p-3 text-xs text-amber-200">
@@ -2580,7 +2521,7 @@ export default function WorkbenchGroupingPanel({
         </div>
       )}
 
-      {showInitialLoading ? (
+      {loading ? (
         <div className="rounded-md border border-white/10 bg-white/[0.03] p-4 text-xs text-slate-500">
           {t("workbench.loadingDashboard")}
         </div>
@@ -3008,27 +2949,16 @@ export default function WorkbenchGroupingPanel({
                 → {dailyTrendTimeline.range.endDate ?? t("workbench.latest")}
               </span>
             </div>
-            <div ref={dailyTrendChartRef} className="h-64 w-full">
+            <div className="h-64 w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={dailyTrendChart.rows}>
+                <LineChart data={lineChartRows}>
                   <CartesianGrid
                     stroke="rgba(255,255,255,0.06)"
                     strokeDasharray="3 3"
                   />
                   <XAxis
-                    type="number"
-                    dataKey="dayOffset"
-                    domain={[
-                      -0.5,
-                      Math.max(0, dailyTrendChart.rows.at(-1)?.dayOffset ?? 0) +
-                        0.5,
-                    ]}
-                    ticks={dailyTrendTicks.map((tick) => tick.offset)}
-                    tickFormatter={(value: number) =>
-                      dailyTrendTickLabels.get(Number(value)) ?? ""
-                    }
+                    dataKey="day"
                     tick={{ fill: "#94a3b8", fontSize: 10 }}
-                    tickLine={false}
                   />
                   <YAxis tick={{ fill: "#94a3b8", fontSize: 10 }} />
                   <Tooltip
@@ -3038,9 +2968,6 @@ export default function WorkbenchGroupingPanel({
                       borderRadius: 6,
                       color: "#e7ebf3",
                     }}
-                    labelFormatter={(_, payload) =>
-                      String(payload[0]?.payload?.day ?? "")
-                    }
                   />
                   <Line
                     type="monotone"
@@ -3050,23 +2977,18 @@ export default function WorkbenchGroupingPanel({
                     dot={(props: {
                       cx?: number;
                       cy?: number;
-                      payload?: {
-                        day?: string;
-                        hours?: number;
-                        hasActivity?: boolean;
-                      };
+                      payload?: { date?: string; hours?: number };
                     }) => {
                       if (
                         typeof props.cx !== "number" ||
                         typeof props.cy !== "number" ||
-                        !props.payload?.day ||
-                        !props.payload.hasActivity
+                        !props.payload?.date
                       ) {
                         return <g />;
                       }
                       return (
                         <circle
-                          key={`daily-trend-${props.payload.day}`}
+                          key={`daily-trend-${props.payload.date}`}
                           cx={props.cx}
                           cy={props.cy}
                           r={4}
@@ -3076,10 +2998,10 @@ export default function WorkbenchGroupingPanel({
                           role="button"
                           tabIndex={0}
                           aria-label={t("workbench.openDailyTrend", {
-                            date: props.payload.day,
+                            date: props.payload.date,
                           })}
                           onClick={() => {
-                            const day = props.payload?.day;
+                            const day = props.payload?.date;
                             if (!day) return;
                             openWorkbenchDrilldown({
                               title: `${t("workbench.dailyTrend")} · ${day}`,

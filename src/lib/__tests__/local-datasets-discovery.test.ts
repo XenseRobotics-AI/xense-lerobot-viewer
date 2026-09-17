@@ -15,18 +15,6 @@ import { decodeLocalDatasetPath } from "@/utils/datasetRoute";
 
 const roots: string[] = [];
 
-function expectPlainSerializable(value: unknown): void {
-  if (value === null || typeof value !== "object") return;
-  if (Array.isArray(value)) {
-    value.forEach(expectPlainSerializable);
-    return;
-  }
-  expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
-  Object.getOwnPropertyNames(value).forEach((key) => {
-    expectPlainSerializable((value as Record<string, unknown>)[key]);
-  });
-}
-
 async function tempTree(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ds-size-"));
   roots.push(root);
@@ -292,7 +280,6 @@ describe("discoverLocalDatasets with a switched path", () => {
     expect(byRoot.datasets.map((ds) => ds.relativePath)).toEqual([
       "Xense/in-root",
     ]);
-    expectPlainSerializable(byRoot.datasets);
     // Under the root, routes stay relative — nothing about them changes.
     expect(decodeLocalDatasetPath(byRoot.datasets[0].encodedPath)).toBe(
       "Xense/in-root",

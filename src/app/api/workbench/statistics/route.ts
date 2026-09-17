@@ -209,11 +209,8 @@ function localNumberOrRemote(
   >["datasets"][number],
   field: "total_episodes" | "total_frames" | "total_tasks" | "fps",
   remoteValue: unknown,
-  localSource: Awaited<
-    ReturnType<typeof discoverLocalDatasets>
-  >["datasets"][number] = dataset,
 ): number | null {
-  const localFieldExists = hasLocalDatasetInfoField(localSource, field);
+  const localFieldExists = dataset.localInfoFields?.has(field) ?? true;
   const local = localFieldExists ? asNumber(dataset[field]) : null;
   if (local !== null) return local;
   return asNumber(remoteValue);
@@ -234,17 +231,9 @@ function datasetHours(
     ReturnType<typeof discoverLocalDatasets>
   >["datasets"][number],
   remote: HfCatalogEntry | undefined,
-  localSource: Awaited<
-    ReturnType<typeof discoverLocalDatasets>
-  >["datasets"][number] = dataset,
 ): number {
-  const localFrames = localNumberOrRemote(
-    dataset,
-    "total_frames",
-    null,
-    localSource,
-  );
-  const localFps = localNumberOrRemote(dataset, "fps", null, localSource);
+  const localFrames = asNumber(dataset.total_frames);
+  const localFps = asNumber(dataset.fps);
   if (
     localFrames !== null &&
     localFrames > 0 &&
@@ -259,9 +248,8 @@ function datasetHours(
     dataset,
     "total_frames",
     remote?.totalFrames,
-    localSource,
   );
-  const fps = localNumberOrRemote(dataset, "fps", remote?.fps, localSource);
+  const fps = localNumberOrRemote(dataset, "fps", remote?.fps);
   return frames !== null && frames > 0 && fps !== null && fps > 0
     ? frames / fps / 3600
     : 0;
@@ -270,9 +258,6 @@ function datasetHours(
 function dailyAdditionsForDataset(
   dataset: LocalDataset & { remoteOnly?: boolean },
   remote: HfCatalogEntry | undefined,
-  localSource: Awaited<
-    ReturnType<typeof discoverLocalDatasets>
-  >["datasets"][number] = dataset,
 ): WorkbenchDailyAddition[] {
   const suffixDay = workbenchDatasetSuffixDay(
     dataset.relativePath,
@@ -289,22 +274,12 @@ function dailyAdditionsForDataset(
     {
       day: suffixDay,
       episodes: nonNegativeCount(
-        localNumberOrRemote(
-          dataset,
-          "total_episodes",
-          remote?.totalEpisodes,
-          localSource,
-        ),
+        localNumberOrRemote(dataset, "total_episodes", remote?.totalEpisodes),
       ),
       frames: nonNegativeCount(
-        localNumberOrRemote(
-          dataset,
-          "total_frames",
-          remote?.totalFrames,
-          localSource,
-        ),
+        localNumberOrRemote(dataset, "total_frames", remote?.totalFrames),
       ),
-      hours: roundHours(datasetHours(dataset, remote, localSource)),
+      hours: roundHours(datasetHours(dataset, remote)),
     },
   ];
 }
@@ -316,9 +291,6 @@ function applyCatalogMetadata(
   remote: HfCatalogEntry | undefined,
   hubSource: TacverseDatasetStatisticsSource | undefined,
   dailyAdditions: WorkbenchDailyAddition[] = [],
-  localSource: Awaited<
-    ReturnType<typeof discoverLocalDatasets>
-  >["datasets"][number] = dataset,
 ): WorkbenchDatasetSummary {
   const metadata = metadataFromCatalogEntry(remote);
   const source = workbenchDatasetSourceKey(dataset.relativePath);
@@ -338,28 +310,14 @@ function applyCatalogMetadata(
     codebase_version: dataset.codebase_version,
     robot_type: dataset.robot_type ?? remote?.robotType ?? null,
     total_episodes:
-      localNumberOrRemote(
-        dataset,
-        "total_episodes",
-        remote?.totalEpisodes,
-        localSource,
-      ) ?? 0,
+      localNumberOrRemote(dataset, "total_episodes", remote?.totalEpisodes) ??
+      0,
     total_frames:
-      localNumberOrRemote(
-        dataset,
-        "total_frames",
-        remote?.totalFrames,
-        localSource,
-      ) ?? 0,
+      localNumberOrRemote(dataset, "total_frames", remote?.totalFrames) ?? 0,
     total_tasks:
-      localNumberOrRemote(
-        dataset,
-        "total_tasks",
-        remote?.totalTasks,
-        localSource,
-      ) ?? 0,
-    fps: localNumberOrRemote(dataset, "fps", remote?.fps, localSource) ?? 0,
-    durationHours: datasetHours(dataset, remote, localSource),
+      localNumberOrRemote(dataset, "total_tasks", remote?.totalTasks) ?? 0,
+    fps: localNumberOrRemote(dataset, "fps", remote?.fps) ?? 0,
+    durationHours: datasetHours(dataset, remote),
     hubStorageBytes: metadata.hubStorageBytes,
     tasks: dataset.tasks,
     hf: metadata,
@@ -890,6 +848,10 @@ export async function GET(request: Request): Promise<Response> {
             path.join(discovery.root, ...dataset.relativePath.split("/")),
           ),
         };
+        Object.defineProperty(withTasks, "localInfoFields", {
+          value: dataset.localInfoFields,
+          enumerable: false,
+        });
         return applyCatalogMetadata(
           withTasks,
           remote?.entry,
@@ -946,6 +908,10 @@ export async function GET(request: Request): Promise<Response> {
           path.join(discovery.root, ...replayCandidate.relativePath.split("/")),
         ),
       };
+      Object.defineProperty(withTasks, "localInfoFields", {
+        value: replayCandidate.localInfoFields,
+        enumerable: false,
+      });
       displayReplayDataset = applyCatalogMetadata(
         withTasks,
         remote?.entry,

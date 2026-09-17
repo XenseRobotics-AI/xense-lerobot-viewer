@@ -125,7 +125,6 @@ export default function WorkbenchDatasetStatistics({
   const [payload, setPayload] =
     useState<TacverseDatasetStatisticsResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [hasLoaded, setHasLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
   const [query, setQuery] = useState("");
@@ -175,10 +174,7 @@ export default function WorkbenchDatasetStatistics({
         }
         return result;
       })
-      .then((result) => {
-        setPayload(result);
-        setHasLoaded(true);
-      })
+      .then(setPayload)
       .catch((reason: unknown) => {
         if (reason instanceof DOMException && reason.name === "AbortError") {
           return;
@@ -286,9 +282,8 @@ export default function WorkbenchDatasetStatistics({
       ),
     [issuesOnly, payload, query, sort],
   );
-  const showBackgroundLoading = loading && hasLoaded;
 
-  if (loading && !hasLoaded) {
+  if (loading) {
     return (
       <section className="rounded-xl border border-white/10 bg-[var(--surface-0)]/40 p-5 text-sm text-slate-400">
         {t("workbench.loadingDashboard")}
@@ -296,7 +291,7 @@ export default function WorkbenchDatasetStatistics({
     );
   }
 
-  if (!payload) {
+  if (error || !payload) {
     return (
       <section className="rounded-xl border border-amber-400/25 bg-amber-400/5 p-5 text-sm text-amber-200">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -323,29 +318,6 @@ export default function WorkbenchDatasetStatistics({
       aria-labelledby="dataset-statistics-title"
       className="rounded-lg border border-cyan-400/15 bg-[var(--surface-0)]/60 p-4 sm:p-5"
     >
-      {showBackgroundLoading && (
-        <div
-          className="mb-4 rounded-md border border-cyan-400/15 bg-cyan-400/[0.04] p-3 text-xs text-cyan-100/80"
-          role="status"
-          aria-live="polite"
-        >
-          {t("workbench.refreshingStatistics")}
-        </div>
-      )}
-      {error && (
-        <div className="mb-4 rounded-md border border-amber-400/25 bg-amber-400/5 p-3 text-xs text-amber-200">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <span>{error}</span>
-            <button
-              type="button"
-              onClick={() => setRetryToken((value) => value + 1)}
-              className="rounded-md border border-amber-300/30 px-2.5 py-1 text-xs text-amber-100 transition-colors hover:border-amber-200/70 hover:bg-amber-300/10"
-            >
-              {t("workbench.retry")}
-            </button>
-          </div>
-        </div>
-      )}
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2
