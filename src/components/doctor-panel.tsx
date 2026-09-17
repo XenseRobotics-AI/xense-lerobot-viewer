@@ -319,7 +319,7 @@ function CheckCard({
           </div>
           <span className="ml-auto shrink-0 text-[11px] tabular text-slate-500">
             {issueCount > 0
-              ? tp("home.groupIssues", issueCount)
+              ? tp("common.issueCount", issueCount)
               : t("doctor.clean")}
           </span>
         </button>

@@ -32,7 +32,7 @@ type SourcePanelProps = {
   delta: SourceDelta | null;
   since: string | null;
   spanDays: number | null;
-  onOpen: (prefix: string) => void;
+  onFilterTo: (prefix: string) => void;
 };
 
 type SyncState =
@@ -130,7 +130,7 @@ export default function SourcePanel({
   delta,
   since,
   spanDays,
-  onOpen,
+  onFilterTo,
 }: SourcePanelProps) {
   const t = useT();
   const [sync, setSync] = useState<SyncState>({ kind: "idle" });
@@ -199,6 +199,32 @@ export default function SourcePanel({
             />
             {segment.prefix}
           </p>
+          {/* A source directory is an owner, not a rig, and one can hold
+              several — TacVerse carries both TacCap and RDT captures. Capped at
+              two because this sits above the headline figure; the rest are
+              counted rather than wrapped onto a second row. */}
+          {segment.robotTypes.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-1">
+              {segment.robotTypes.slice(0, 2).map((robot) => (
+                <span
+                  key={robot}
+                  className="rounded bg-cyan-500/20 px-1.5 py-0.5 text-[10px] text-cyan-200 ring-1 ring-cyan-400/20"
+                >
+                  {robot}
+                </span>
+              ))}
+              {segment.robotTypes.length > 2 && (
+                <span
+                  className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-slate-300"
+                  title={segment.robotTypes.join(", ")}
+                >
+                  {t("source.robotsMore", {
+                    count: segment.robotTypes.length - 2,
+                  })}
+                </span>
+              )}
+            </div>
+          )}
           <p className="mt-1.5 flex items-baseline gap-1.5">
             <span className="tabular text-[clamp(2.2rem,6vw,3rem)] font-semibold leading-[0.85] tracking-[-0.035em] text-[var(--text-primary)]">
               {headline.value}
@@ -270,10 +296,10 @@ export default function SourcePanel({
         )}
         <button
           type="button"
-          onClick={() => onOpen(segment.prefix)}
+          onClick={() => onFilterTo(segment.prefix)}
           className="ml-auto rounded-md border border-white/10 px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] transition-colors hover:border-[var(--accent)]/50 hover:text-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
         >
-          {t("source.browseTasks", { count: segment.tasks })}
+          {t("source.filterToSource", { count: segment.tasks })}
         </button>
       </div>
 

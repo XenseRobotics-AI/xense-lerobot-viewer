@@ -35,7 +35,6 @@ const group = (prefix: string, datasets: LocalDatasetSummary[]): DatasetGroup =>
     datasets,
     counts: { ok: datasets.length, empty: 0, incomplete: 0 },
     totalEpisodes: datasets.reduce((s, d) => s + d.total_episodes, 0),
-    thumbnailVideoUrl: null,
   }) as DatasetGroup;
 
 describe("datasetHours", () => {

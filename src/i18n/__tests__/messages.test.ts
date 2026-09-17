@@ -79,8 +79,6 @@ describe("zh translation coverage", () => {
     // dictionaries carry the same text on purpose.
     "lang.switchToEn",
     "lang.switchToZh",
-    // Pure composition — both halves are translated separately.
-    "home.groupTitle",
     // Everything about an episode is written in English — the term matches the
     // URL (`episode_12`), the parquet columns and info.json.
     "common.epShort",
@@ -89,7 +87,6 @@ describe("zh translation coverage", () => {
     "nav.episodeItem",
     "insights.thEpisode",
     "insights.svScope",
-    "home.groupEpisodes",
     "grid.epCount",
     "tape.epSuffix",
     "tape.perEp",
@@ -106,7 +103,6 @@ describe("zh translation coverage", () => {
     "doctor.checksWord",
     "doctor.distBins",
     "grid.framesSuffix",
-    "home.groupFrames",
     "pq.columns",
     "pq.jumpTitle",
     "pq.rowGroups",

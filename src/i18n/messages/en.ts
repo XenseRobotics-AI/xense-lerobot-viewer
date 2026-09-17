@@ -38,6 +38,8 @@ export const en = {
   "common.healthy": "healthy",
   "common.incomplete": "incomplete",
   "common.empty": "empty",
+  "common.issueCount_one": "{count} issue",
+  "common.issueCount_other": "{count} issues",
   "common.cancel": "Cancel",
   "common.copy": "Copy",
   "common.clear": "Clear",
@@ -52,26 +54,10 @@ export const en = {
   // ── homepage: category landing ──────────────────────────────────────────
   "home.subtitle": "LeRobot Local Dataset Visualizer",
   "home.browsing": "Browsing {root}",
-  "home.filterPlaceholder": "Filter datasets by name",
   "home.scanErrors_one": "{count} path could not be scanned:",
   "home.scanErrors_other": "{count} paths could not be scanned:",
   "home.emptyTitle": "No LeRobot tasks found under {root}.",
   "home.emptyHint": "Make sure each task directory contains {file}.",
-  "home.noMatch": "No datasets match the current filter.",
-  "home.taskCount_one": "{count} task",
-  "home.taskCount_other": "{count} tasks",
-  "home.groupTitle": "{prefix} — {tasks}",
-  "home.groupEpisodes": "{value} episodes",
-  "home.groupFrames": "{value} frames",
-  "home.groupHealthy": "{count} healthy",
-  "home.groupIssues_one": "{count} issue",
-  "home.groupIssues_other": "{count} issues",
-  "home.groupRobotsMore": "+{count} more",
-
-  // ── homepage: dataset card grid (level 2) ───────────────────────────────
-  "grid.back": "Datasets",
-  "grid.browsingLine_one": "Browsing {root} · {count} task in this dataset",
-  "grid.browsingLine_other": "Browsing {root} · {count} tasks in this dataset",
   "grid.healthyCount": "{count} healthy",
   "grid.incompleteCount": "{count} incomplete (missing data/videos)",
   "grid.emptyCount": "{count} empty (0 episodes)",
@@ -88,6 +74,8 @@ export const en = {
   "grid.filterIssues": "Issues ({count})",
   "grid.filterPlaceholder": "Filter tasks by name or robot type",
   "grid.allRobots": "All robots ({count})",
+  "grid.datasetCount_one": "{count} dataset",
+  "grid.datasetCount_other": "{count} datasets",
   "grid.noMatch": "No tasks match the current filter.",
   "grid.sourceLabel": "Source",
   "grid.sourceAll": "All",
@@ -145,9 +133,7 @@ export const en = {
   "tape.perEp": "{value}/ep",
   "tape.activeSummary":
     "{prefix} · {tasks} tasks · {percent}% of recorded time",
-  "tape.hint": "Select a band to open that source",
-
-  // ── homepage: source panel (growth + Hugging Face sync) ─────────────────
+  "tape.hint": "Select a band to filter the list below",
   "source.noSnapshot":
     "No earlier snapshot yet — growth appears the next day this page is opened.",
   "source.unchanged": "Unchanged since {since}.",
@@ -158,7 +144,8 @@ export const en = {
   "source.perEpisode": "Per episode",
   "source.share": "Share",
   "source.needAttention": "need attention",
-  "source.browseTasks": "Browse {count} tasks",
+  "source.robotsMore": "+{count} more",
+  "source.filterToSource": "Show its {count} tasks below",
   "source.syncButton": "Sync from Hugging Face",
   "source.syncHint":
     "Downloads {source} through hf-mirror. Shows what it would pull first.",
