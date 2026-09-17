@@ -55,7 +55,6 @@ import {
   repoIdFromRouteParams,
   routePathFromRepoId,
 } from "@/utils/datasetRoute";
-import { getDatasetPrefix } from "@/utils/datasetGrouping";
 import { type DatasetTags, EMPTY_TAGS } from "@/lib/dataset-tags";
 import {
   blocksAllShortcuts,
@@ -394,21 +393,6 @@ function EpisodeViewerInner({
   const [chartEpisodeId, setChartEpisodeId] = useState<number | null>(null);
   const repoId = org && dataset ? repoIdFromRouteParams(org, dataset) : null;
   const datasetDisplayName = getDisplayNameForRepoId(datasetInfo.repoId);
-  /**
-   * Where the 3D Replay header's back arrow goes: the homepage grid scoped to
-   * this dataset's own source, which `LocalDatasetGrid` restores from `?org=`
-   * — landing on the listing the dataset was opened from rather than on the
-   * category cards above it.
-   *
-   * A dataset browsed outside the root has no relative path, so
-   * `datasetDisplayName` is absolute and `getDatasetPrefix` reads its leading
-   * `/` as an empty first segment. There is no source to name in that case, so
-   * fall back to the landing page.
-   */
-  const datasetGroupHref = (() => {
-    const prefix = getDatasetPrefix(datasetDisplayName);
-    return prefix ? `/?org=${encodeURIComponent(prefix)}` : "/";
-  })();
   // Compute the encoded URL segment from the in-memory repoId so the viewer can
   // reach the per-dataset routes (tags, parquet, …) without it being threaded
   // down from the page.
@@ -1386,7 +1370,7 @@ function EpisodeViewerInner({
                   the `flex-1` element that has to keep filling the column. */}
               <div className="flex shrink-0 items-center gap-3">
                 <Link
-                  href={datasetGroupHref}
+                  href="/"
                   aria-label={t("viewer.backToGroup")}
                   title={t("viewer.backToGroup")}
                   className="group inline-flex shrink-0 items-center rounded-md border border-white/10 bg-[var(--surface-1)]/60 p-1.5 text-slate-300 transition-colors hover:border-cyan-400/40 hover:text-cyan-100"

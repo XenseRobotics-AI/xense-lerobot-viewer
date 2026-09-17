@@ -33,18 +33,17 @@ export type DatasetGroup = {
   counts: { ok: number; empty: number; incomplete: number };
   totalEpisodes: number;
   totalFrames: number;
-  /** Summed bytes on disk — the primary key for category-card ordering. */
+  /** Summed bytes on disk — the primary key for source ordering. */
   totalBytes: number;
-  /** First non-null thumbnail among the group's datasets, used as the card art. */
-  thumbnailVideoUrl: string | null;
   /**
    * Distinct `robot_type` values in the group, most-used first.
    *
-   * Summarised here rather than in the card so the landing page can name the
-   * rig without opening the category: a source directory is an owner, not a
-   * robot, and one source can hold several (TacVerse carries both TacCap and
-   * RDT captures). Datasets with no declared robot type are simply absent —
-   * an empty array means "nothing declared", never "one unknown robot".
+   * Summarised per source rather than per dataset because a source directory
+   * is an owner, not a rig, and one can hold several (TacVerse carries both
+   * TacCap and RDT captures) — the dashboard's source panel is now the only
+   * place that says so. Datasets with no declared robot type are simply
+   * absent: an empty array means "nothing declared", never "one unknown
+   * robot".
    */
   robotTypes: string[];
 };
@@ -99,12 +98,17 @@ export function rankRobotTypes(datasets: LocalDatasetSummary[]): string[] {
 
 /**
  * Bucket datasets by prefix, aggregating per-group health counts and episode
- * totals, and picking the first available thumbnail as the category art.
+ * totals.
+ *
+ * Grouping is no longer how anyone browses — the homepage lists every dataset
+ * under the scanned path flat. What is left needs the buckets anyway: the
+ * corpus tape and the per-source dashboard panels are reported per source, the
+ * daily history file is keyed by it, and it is the Hugging Face org that Sync
+ * targets.
  *
  * Both levels are ordered largest-first: each group's datasets by
  * `compareDatasetsBySize`, and the groups themselves on the same keys summed
- * (bytes, then frames, then episodes) — which also means the category art comes
- * from the group's biggest dataset that has a thumbnail.
+ * (bytes, then frames, then episodes).
  */
 export function groupDatasetsByPrefix(
   datasets: LocalDatasetSummary[],
@@ -122,7 +126,6 @@ export function groupDatasetsByPrefix(
         totalEpisodes: 0,
         totalFrames: 0,
         totalBytes: 0,
-        thumbnailVideoUrl: null,
         robotTypes: [],
       };
       groups.set(prefix, group);
@@ -140,9 +143,6 @@ export function groupDatasetsByPrefix(
   const ordered = Array.from(groups.values());
   for (const group of ordered) {
     group.datasets.sort(compareDatasetsBySize);
-    group.thumbnailVideoUrl =
-      group.datasets.find((ds) => ds.thumbnailVideoUrl)?.thumbnailVideoUrl ??
-      null;
     group.robotTypes = rankRobotTypes(group.datasets);
   }
 

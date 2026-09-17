@@ -87,9 +87,11 @@ of `taccapGripperReplay.ts` — worked for it before any model existed. It now h
 a bundled model too; see **Bundled grippers** below.
 
 Where it surfaces: every dataset card carries the shape as a badge — neutral
-when it matches the robot type, amber when it does not — and the homepage
-category cards list the robot types present in each source, because a source
-directory is an owner rather than a rig and can hold several.
+when it matches the robot type, amber when it does not — and the dashboard's
+per-source panel lists the robot types present in that source, because a source
+directory is an owner rather than a rig and can hold several. That list rides on
+`CorpusSegment.robotTypes`; the source panel is the only place left that
+describes a source as a whole, so it is the only place it can be said.
 
 ### Bundled grippers (TacCap and RDT)
 
@@ -126,6 +128,25 @@ measurement exists; see `public/urdf/rdt-gripper/README.md`.
 
 One URDF serves both RDT arms: `Left_*` / `Right_*` in that model are the two
 jaws of a single gripper, not two arms.
+
+### Browsing is flat — one list per scanned path
+
+The homepage lists **every dataset under the currently scanned path at once**,
+ordered largest-first. There is no category level and no `?org=`.
+
+There used to be: `CategoryLanding` showed one card per path prefix and clicking
+one drilled into a scoped grid. The prefix was a presentation-layer invention —
+`discoverLocalDatasets` already returns one flat `LocalDatasetSummary[]`, and
+`getDatasetPrefix` is nothing but the first path segment — so the level bought a
+page the user had to pass through on the way in. Choosing which _set_ of
+datasets you see is the path switcher's job (below); narrowing within one is
+what the grid's own name/robot/tag/health/bucket/date filters are for.
+
+- `src/app/local-dataset-grid.tsx` is the page shell: header + `DatasetPathSwitcher`, `CorpusDashboard`, `RepoFetchPanel`, the scan-errors list, then one `DatasetCardGrid`. It renders a single `<main>`; the grid returns a fragment, so don't give it one of its own.
+- **The grid's text filter is a controlled prop**, owned by the shell. That is not tidiness: a corpus-tape band and the source panel's button call `onSelectSource(prefix)`, which sets the filter to that prefix and scrolls to the grid. They used to open the category page, and with it gone they had to mean something — filtering is the same narrowing with no extra page. The prefix is a whole leading path segment and the filter already matches `relativePath`, so it selects exactly that source.
+- **The prefix itself is very much alive, just not as navigation.** `groupDatasetsByPrefix` still keys `corpus-history.json`, still feeds the tape and the per-source dashboard panels, and is still the Hugging Face org that `runSync({ source })` targets. Do not delete it as "unused UI code".
+- Cards show the source above the task name (`getDatasetPrefix` / `getDatasetTaskName` off the same path). A flat list is no longer scoped to one source, so a bare task name is ambiguous — two sources can hold the same one. A single-segment path shows no source line rather than the literal `Ungrouped`.
+- Stale `/?org=…` links land on the full list. That is the intended degradation; nothing reads the param.
 
 ### Switching the scanned path
 
@@ -372,7 +393,7 @@ The **Doctor** tab (`src/components/doctor-panel.tsx`, immediately after Action 
 The homepage header is a tabbed dashboard: an **All sources** tab holding the corpus tape, plus one tab per top-level source (the directory prefix / HF org) with that source's own figures, its growth since the last snapshot, and its Sync button. Tabs are per _source_, never per task — there are ~4 sources against 231 tasks, and sync is an org-level operation.
 
 - **The tape is proportioned by recorded hours, not episode count.** An episode is an arbitrary slice; sources differ by an order of magnitude in mean episode length (see `avgEpisodeSeconds`), so episode counts are not comparable quantities and hours are. The legend deliberately shows episodes _and_ mean length beside the duration bar so the mismatch is visible.
-- **Card grids are ordered largest-first**, both levels: `compareDatasetsBySize` in `src/utils/datasetGrouping.ts` sorts on `sizeBytes` desc → `total_frames` desc → `total_episodes` desc → path, and `groupDatasetsByPrefix` ranks the category cards on the same keys summed (`totalBytes` first). **Bytes lead** — "how big is this dataset" is a storage question, and frames are only a proxy for it: on the real corpus TacVerse holds the most frames (2.9M) but 13 GB, while Vertax holds 1.6M frames and 40 GB, so the two keys genuinely disagree about which card comes first. Frames stay as the second key because `sizeBytes` is 0 for a directory that could not be walked, and those must not collapse to the bottom in path order. A group's card art is the thumbnail of its largest dataset that has one.
+- **The card grid is ordered largest-first**: `compareDatasetsBySize` in `src/utils/datasetGrouping.ts` sorts on `sizeBytes` desc → `total_frames` desc → `total_episodes` desc → path, and `groupDatasetsByPrefix` ranks the sources on the same keys summed (`totalBytes` first). **Bytes lead** — "how big is this dataset" is a storage question, and frames are only a proxy for it: on the real corpus TacVerse holds the most frames (2.9M) but 13 GB, while Vertax holds 1.6M frames and 40 GB, so the two keys genuinely disagree about which card comes first. Frames stay as the second key because `sizeBytes` is 0 for a directory that could not be walked, and those must not collapse to the bottom in path order.
 - **Two sync targets, one route.** `POST /api/local-datasets/sync` takes either `{ source }` (a whole org) or `{ repo: "owner/name" }` (one dataset), and the client's `SyncTarget` keeps them on one code path. The by-id target exists because the per-source button can only refresh a source already on disk — a dataset the machine has never held has no tab to press. Its panel (`repo-fetch-panel.tsx`) therefore sits on the homepage **outside** `CorpusDashboard`, which renders nothing when no source exists, and opens by default in exactly that case. The owner half of the id becomes the source directory, so a successful fetch is what makes a new source tab appear.
   Its listing pass calls `dataset_info(files_metadata=True)`, so the confirmation names a size and file count rather than "1 dataset pending" — deliberately **not** done on the org path, where it would be ~188 metadata calls before anything renders. A hand-typed id that does not resolve fails the listing outright instead of being conservatively treated as work the way an unresolvable org repo is: the id came from a keyboard, so "no such dataset" is the answer, not a download attempt.
 - **Storage is reported at all three levels**: `totalBytes` on the All-sources tile row, `bytes` per source (tab tile + tape legend), `sizeBytes` on each dataset card. Formatting goes through the one shared `formatBytes` in `src/utils/byteSize.ts` (binary units, read against `du`). `sync-progress.tsx` keeps a separate `formatTransferred` for live sync progress — that one is decimal on purpose, because it is read against what the Hub reports for the repo. The progress bars and the outcome line live there too, shared by both sync entry points: once bytes are moving the report is the same report. Storage is also in the daily snapshot, so the source panel shows a "since last snapshot" storage delta beside hours/episodes/tasks.
@@ -454,11 +475,11 @@ Every user-facing panel is translated (625 keys). To extend: add keys to both di
 | `src/lib/dataset-facets.ts`                                       | Pure browsing facets: bucket, capture dates, and the robot→shape table (`expectedShapeOf`, `shapeAnomalyOf`) — no `node:` imports                                  |
 | `src/lib/dataset-facets-server.ts`                                | Server half: reads capture dates off disk and derives shape from `info.json` features                                                                              |
 | `src/utils/corpusFilters.ts`                                      | Pure secondary filters for one category — bucket, capture date, odd-shape shortcut, and the chip counts                                                            |
-| `src/app/dataset-card-grid.tsx`                                   | The level-2 dataset grid: name/robot/tag filters, health + shape badges, per-card tag editor and Delete                                                            |
+| `src/app/dataset-card-grid.tsx`                                   | The dataset grid: name/robot/tag/health/bucket/date filters, shape badges, per-card tag editor and Delete; its text filter is a controlled prop                    |
 | `src/lib/local-datasets-discovery.ts`                             | Server-side scanner: walks the local root, returns datasets + `DatasetIntegrity`                                                                                   |
 | `src/lib/dataset-size-cache.ts`                                   | Remembered `directorySizeBytes` per dataset, fingerprinted on directory mtimes — 96% of a big location's scan                                                      |
 | `src/app/page.tsx`                                                | Server component → calls `discoverLocalDatasets()` → renders `LocalDatasetGrid`                                                                                    |
-| `src/app/local-dataset-grid.tsx`                                  | Client grid: filter, health filter, "Open episode N" quick-jump, card with health badge                                                                            |
+| `src/app/local-dataset-grid.tsx`                                  | The homepage shell: header + path switcher, corpus dashboard, HF-id panel, scan errors, and the one flat `DatasetCardGrid`                                         |
 | `src/app/_local/[encodedPath]/[episode]/page.tsx`                 | Server health probe + `EpisodeViewer` mount (the only live entry into the viewer)                                                                                  |
 | `src/app/api/local-datasets/route.ts`                             | `GET /api/local-datasets` — discovery API for clients                                                                                                              |
 | `src/app/api/local-datasets/[encodedPath]/[...filePath]/route.ts` | `GET`/`HEAD` for individual files, range-aware for video                                                                                                           |

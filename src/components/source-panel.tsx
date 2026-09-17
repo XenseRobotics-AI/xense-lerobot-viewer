@@ -32,7 +32,7 @@ type SourcePanelProps = {
   delta: SourceDelta | null;
   since: string | null;
   spanDays: number | null;
-  onOpen: (prefix: string) => void;
+  onFilterTo: (prefix: string) => void;
 };
 
 type SyncState =
@@ -130,7 +130,7 @@ export default function SourcePanel({
   delta,
   since,
   spanDays,
-  onOpen,
+  onFilterTo,
 }: SourcePanelProps) {
   const t = useT();
   const [sync, setSync] = useState<SyncState>({ kind: "idle" });
@@ -296,10 +296,10 @@ export default function SourcePanel({
         )}
         <button
           type="button"
-          onClick={() => onOpen(segment.prefix)}
+          onClick={() => onFilterTo(segment.prefix)}
           className="ml-auto rounded-md border border-white/10 px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] transition-colors hover:border-[var(--accent)]/50 hover:text-[var(--accent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)]"
         >
-          {t("source.browseTasks", { count: segment.tasks })}
+          {t("source.filterToSource", { count: segment.tasks })}
         </button>
       </div>
 
