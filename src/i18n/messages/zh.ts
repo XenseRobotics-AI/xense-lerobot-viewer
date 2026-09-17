@@ -47,6 +47,8 @@ export const zh: Record<MessageKey, string> = {
   "common.healthy": "正常",
   "common.incomplete": "不完整",
   "common.empty": "空",
+  "common.issueCount_one": "{count} 个异常",
+  "common.issueCount_other": "{count} 个异常",
   "common.cancel": "取消",
   "common.copy": "复制",
   "common.clear": "清空",
@@ -96,6 +98,8 @@ export const zh: Record<MessageKey, string> = {
   "grid.filterIssues": "异常（{count}）",
   "grid.filterPlaceholder": "按名称或机器人类型过滤任务",
   "grid.allRobots": "全部机器人（{count}）",
+  "grid.datasetCount_one": "{count} 个数据集",
+  "grid.datasetCount_other": "{count} 个数据集",
   "grid.noMatch": "没有任务符合当前过滤条件。",
   "grid.sourceLabel": "来源",
   "grid.sourceAll": "全部",
@@ -164,6 +168,8 @@ export const zh: Record<MessageKey, string> = {
   "source.share": "占比",
   "source.needAttention": "需要处理",
   "source.browseTasks": "浏览 {count} 个任务",
+  "source.robotsMore": "另有 {count} 种",
+  "source.filterToSource": "在下方筛出它的 {count} 个任务",
   "source.syncButton": "从 Hugging Face 同步",
   "source.syncHint": "通过 hf-mirror 下载 {source}。会先列出将要拉取的内容。",
   "source.checking": "正在向 Hub 查询 {source}…",
@@ -222,6 +228,10 @@ export const zh: Record<MessageKey, string> = {
   "pathswitch.use": "使用",
   "pathswitch.choose": "选择文件夹…",
   "pathswitch.choosing": "对话框已打开…",
+  "pathswitch.switching": "正在切换到 {path}，扫描中。",
+  "pathswitch.switchingHint":
+    "若目录很大且存储较慢（如外接硬盘），可能需要一分钟。",
+  "pathswitch.notSwitched": "仍在浏览默认根目录：{path} 已不是已知位置。",
   "pathswitch.dialogTitle": "选择数据集文件夹",
   "pathswitch.dialogUnavailable": "无法打开文件夹对话框：{reason}",
   "repofetch.another": "下载另一个",
@@ -283,6 +293,7 @@ export const zh: Record<MessageKey, string> = {
   "viewer.tab.workbenchTitle": "Workbench 风格的数据集统计与自定义质量检查",
   "viewer.tab.tacflow": "TacFlow",
   "viewer.tab.tacflowTitle": "运行固定的 TacFlow 触觉修复流水线",
+  "viewer.backToGroup": "返回数据集列表",
   "viewer.home": "首页",
 
   // ── episode viewer: body ────────────────────────────────────────────────
@@ -828,6 +839,7 @@ export const zh: Record<MessageKey, string> = {
     "TCP 坐标系：+X 向前、+Y 向左、+Z 向上（对应红/绿/蓝参考轴）。存在完整 head.xyz+r1-r6 时，黄色轨迹、头显示意模型和播放点坐标系会同步显示；头显以记录的 head 位姿为中心且面罩朝 +X，不附加未经标定的偏移。仅有头部视频不会生成轨迹。",
   "urdf.tacCapNoPose":
     "未找到可用于 TacCap 回放的完整 left_tcp/right_tcp xyz+r1-r6 轨迹。",
+  "urdf.legendTracks": "轨迹",
   "urdf.axisForward": "向前",
   "urdf.axisLeft": "向左",
   "urdf.axisUp": "向上",
@@ -1376,6 +1388,10 @@ export const zh: Record<MessageKey, string> = {
   "chart.threeDRotationAxes": "播放点坐标系：X 红色 · Y 绿色 · Z 蓝色",
   "chart.split": "拆分图表",
   "chart.combine": "合并显示",
+  "chart.gripperOnly": "仅夹爪开合",
+  "chart.gripperOnlyHint":
+    "隐藏夹爪开合以外的所有曲线，便于与视频中的夹取动作对照",
+  "chart.noGripper": "该数据集的特征中没有夹爪数据",
 
   // ── client-side failures rendered verbatim by the calling panel ─────────
   "err.doctorRequest": "Doctor 请求失败（{status}）。",

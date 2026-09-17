@@ -10,13 +10,17 @@ import {
   EMPTY_TAGS,
   normalizeTags,
 } from "@/lib/dataset-tags";
-import type { DatasetFacets } from "@/lib/dataset-facets";
-import { computeFacets } from "@/lib/dataset-facets-server";
 import { pickThumbnailVideoKey } from "@/lib/thumbnail-camera";
 import {
   readLocations,
   resolveBrowsePath,
 } from "@/lib/dataset-locations-store";
+import type { DatasetFacets } from "@/lib/dataset-facets";
+import { computeFacets } from "@/lib/dataset-facets-server";
+import {
+  createDatasetSizeResolver,
+  type DatasetSizeResolver,
+} from "@/lib/dataset-size-cache";
 import type { DatasetQualityTask } from "@/utils/datasetQualityChecks";
 
 export type { DatasetTags } from "@/lib/dataset-tags";
@@ -70,7 +74,14 @@ type LocalDatasetHardwareJson = {
 };
 
 export type LocalDatasetSummary = {
+  /** Path relative to the browsed directory — what the homepage groups on. */
   relativePath: string;
+  /**
+   * Route segment: base64url of the relative path when browsing the default
+   * root, of the **absolute** path when browsing anywhere else.
+   * `resolveServerLocalDatasetPath` accepts either, so the file routes serve
+   * both without change.
+   */
   encodedPath: string;
   codebase_version: string;
   robot_type: string | null;
@@ -91,7 +102,7 @@ export type LocalDatasetSummary = {
   thumbnailVideoUrl: string | null;
   integrity: DatasetIntegrity;
   tags: DatasetTags;
-  /** Prompt rows loaded by the Workbench-only statistics route. */
+  /** Prompt rows loaded by Workbench statistics routes, not homepage discovery. */
   tasks?: DatasetQualityTask[];
   /**
    * Derived browsing facets — bucket, capture dates, shape anomaly. Computed
@@ -251,6 +262,14 @@ export function readDatasetHardwareRobotId(input: unknown): string | null {
   return extractRobotId(input);
 }
 
+function getXumiEpisodes(input: unknown): unknown[] {
+  const parsed = asRecord(input);
+  if (!parsed) return [];
+  return Array.isArray(parsed.episodes) && parsed.episodes.length > 0
+    ? parsed.episodes
+    : [parsed];
+}
+
 function extractCollectorSerialNumbers(input: unknown): Set<string> {
   const values = new Set<string>();
   for (const episode of getXumiEpisodes(input)) {
@@ -273,14 +292,6 @@ export function readDatasetCollectorSerialNumber(
 ): string | null {
   const values = extractCollectorSerialNumbers(input);
   return values.size === 1 ? (values.values().next().value ?? null) : null;
-}
-
-function getXumiEpisodes(input: unknown): unknown[] {
-  const parsed = asRecord(input);
-  if (!parsed) return [];
-  return Array.isArray(parsed.episodes) && parsed.episodes.length > 0
-    ? parsed.episodes
-    : [parsed];
 }
 
 function extractXumiRobotId(input: unknown): string | null {
@@ -480,6 +491,7 @@ async function walkForDatasets(
   depth: number,
   found: LocalDatasetSummary[],
   errors: { path: string; message: string }[],
+  sizes: DatasetSizeResolver,
   useAbsoluteRoutes = false,
 ): Promise<void> {
   if (depth > MAX_SCAN_DEPTH) return;
@@ -511,7 +523,7 @@ async function walkForDatasets(
         probeIntegrity(currentDir, info),
         readDatasetTags(currentDir),
         readDatasetHardware(currentDir),
-        directorySizeBytes(currentDir),
+        sizes.sizeOf(currentDir),
         computeFacets(
           currentDir,
           relativePath,
@@ -579,6 +591,7 @@ async function walkForDatasets(
           depth + 1,
           found,
           errors,
+          sizes,
           useAbsoluteRoutes,
         ),
       ),
@@ -657,7 +670,19 @@ export async function discoverLocalDatasets(
 
   const datasets: LocalDatasetSummary[] = [];
   const errors: { path: string; message: string }[] = [];
-  await walkForDatasets(browsePath, browsePath, 0, datasets, errors, !isRoot);
+  // Sizes come from the store when the dataset has not moved since it was last
+  // counted; see `dataset-size-cache.ts` for why that matters on a big archive.
+  const sizes = await createDatasetSizeResolver(root, directorySizeBytes);
+  await walkForDatasets(
+    browsePath,
+    browsePath,
+    0,
+    datasets,
+    errors,
+    sizes,
+    !isRoot,
+  );
+  await sizes.flush();
   datasets.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 
   return { root, browsePath, locations: paths, datasets, errors };

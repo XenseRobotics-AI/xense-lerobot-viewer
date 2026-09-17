@@ -11,6 +11,13 @@ export interface ChartDataPoint {
 // Chart data group
 export type ChartDataGroup = ChartDataPoint[];
 
+/**
+ * One row as the graph components consume it: a `ChartDataPoint` without the
+ * required `timestamp`, because a row merged or filtered across groups is not
+ * guaranteed to carry one.
+ */
+export type ChartSeriesRow = Record<string, number | Record<string, number>>;
+
 // Series column definition
 export interface SeriesColumn {
   key: string;

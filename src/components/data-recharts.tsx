@@ -20,15 +20,20 @@ import {
 import { useT } from "@/context/locale-context";
 import { hasEpisodePoseTrajectories } from "@/utils/poseTrajectory3d";
 import { CHART_CONFIG } from "@/utils/constants";
-import { evenlySampleArray } from "@/utils/sampling";
+import {
+  gripperSeriesKeys,
+  selectGripperSeriesRows,
+} from "@/utils/gripperSeries";
 import { lazyWithChunkRecovery } from "@/utils/lazyChunkRecovery";
+import { evenlySampleArray } from "@/utils/sampling";
+import type { ChartSeriesRow } from "@/types/chart.types";
 
 const EpisodePose3DViewer = lazyWithChunkRecovery(
   "episode-pose-3d-viewer",
   () => import("@/components/episode-pose-3d-viewer"),
 );
 
-type ChartRow = Record<string, number | Record<string, number>>;
+type ChartRow = ChartSeriesRow;
 
 type DataGraphProps = {
   data: ChartRow[][];
@@ -170,6 +175,7 @@ export const DataRecharts = React.memo(
     const t = useT();
     const [hoveredTime, setHoveredTime] = useState<number | null>(null);
     const [expanded, setExpanded] = useState(false);
+    const [gripperOnly, setGripperOnly] = useState(false);
     const [mode, setMode] = useState<EpisodeGraphMode>("position");
     const hasVelocityData = velocityData.length > 0;
     const hasThreeDData = useMemo(
@@ -177,6 +183,15 @@ export const DataRecharts = React.memo(
       [flatData],
     );
     const activeData = mode === "velocity" ? velocityData : data;
+    const hasGripperSeries = useMemo(
+      () => gripperSeriesKeys(activeData).length > 0,
+      [activeData],
+    );
+    // Derived rather than an effect that clears the flag: velocity groups carry
+    // no gripper series, so switching modes would otherwise render one empty
+    // chart for the frame before the effect ran. The preference survives the
+    // round trip back to Position.
+    const gripperFocused = gripperOnly && hasGripperSeries && mode !== "threeD";
 
     useEffect(() => {
       if (typeof onChartsReady === "function") onChartsReady();
@@ -188,8 +203,13 @@ export const DataRecharts = React.memo(
     }, [hasThreeDData, hasVelocityData, mode]);
 
     const combinedData = useMemo(
-      () => (expanded ? mergeGroups(activeData) : []),
-      [activeData, expanded],
+      () => (expanded && !gripperFocused ? mergeGroups(activeData) : []),
+      [activeData, expanded, gripperFocused],
+    );
+
+    const gripperData = useMemo(
+      () => (gripperFocused ? selectGripperSeriesRows(activeData) : []),
+      [activeData, gripperFocused],
     );
 
     if (!Array.isArray(data) || data.length === 0) return null;
@@ -240,46 +260,86 @@ export const DataRecharts = React.memo(
             })}
           </div>
 
-          {mode !== "threeD" && activeData.length > 1 && (
-            <button
-              type="button"
-              onClick={() => setExpanded((v) => !v)}
-              className={`text-xs px-2.5 py-1 rounded transition-colors flex items-center gap-1.5 ${
-                expanded
-                  ? "bg-cyan-400/15 text-cyan-300 border border-cyan-400/40"
-                  : "bg-[var(--surface-1)]/60 text-slate-400 hover:text-slate-200 border border-white/10/50"
-              }`}
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+          <div className="flex flex-wrap items-center gap-2">
+            {mode !== "threeD" && (
+              <button
+                type="button"
+                onClick={() => setGripperOnly((v) => !v)}
+                disabled={!hasGripperSeries}
+                aria-pressed={gripperFocused}
+                title={
+                  hasGripperSeries
+                    ? t("chart.gripperOnlyHint")
+                    : t("chart.noGripper")
+                }
+                className={`text-xs px-2.5 py-1 rounded transition-colors flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-40 ${
+                  gripperFocused
+                    ? "bg-cyan-400/15 text-cyan-300 border border-cyan-400/40"
+                    : "bg-[var(--surface-1)]/60 text-slate-400 hover:text-slate-200 border border-white/10/50"
+                }`}
               >
-                {expanded ? (
-                  <>
-                    <polyline points="4 14 10 14 10 20" />
-                    <polyline points="20 10 14 10 14 4" />
-                    <line x1="14" y1="10" x2="21" y2="3" />
-                    <line x1="3" y1="21" x2="10" y2="14" />
-                  </>
-                ) : (
-                  <>
-                    <polyline points="15 3 21 3 21 9" />
-                    <polyline points="9 21 3 21 3 15" />
-                    <line x1="21" y1="3" x2="14" y2="10" />
-                    <line x1="3" y1="21" x2="10" y2="14" />
-                  </>
-                )}
-              </svg>
-              {expanded ? t("chart.split") : t("chart.combine")}
-            </button>
-          )}
+                {/* Two jaws closing on a workpiece. */}
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <line x1="3" y1="12" x2="9" y2="12" />
+                  <polyline points="6 8 10 12 6 16" />
+                  <line x1="21" y1="12" x2="15" y2="12" />
+                  <polyline points="18 8 14 12 18 16" />
+                </svg>
+                {t("chart.gripperOnly")}
+              </button>
+            )}
+
+            {mode !== "threeD" && !gripperFocused && activeData.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                className={`text-xs px-2.5 py-1 rounded transition-colors flex items-center gap-1.5 ${
+                  expanded
+                    ? "bg-cyan-400/15 text-cyan-300 border border-cyan-400/40"
+                    : "bg-[var(--surface-1)]/60 text-slate-400 hover:text-slate-200 border border-white/10/50"
+                }`}
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  {expanded ? (
+                    <>
+                      <polyline points="4 14 10 14 10 20" />
+                      <polyline points="20 10 14 10 14 4" />
+                      <line x1="14" y1="10" x2="21" y2="3" />
+                      <line x1="3" y1="21" x2="10" y2="14" />
+                    </>
+                  ) : (
+                    <>
+                      <polyline points="15 3 21 3 21 9" />
+                      <polyline points="9 21 3 21 3 15" />
+                      <line x1="21" y1="3" x2="14" y2="10" />
+                      <line x1="3" y1="21" x2="10" y2="14" />
+                    </>
+                  )}
+                </svg>
+                {expanded ? t("chart.split") : t("chart.combine")}
+              </button>
+            )}
+          </div>
         </div>
 
         {mode === "threeD" ? (
@@ -292,6 +352,13 @@ export const DataRecharts = React.memo(
           >
             <EpisodePose3DViewer rows={flatData} fps={fps} />
           </React.Suspense>
+        ) : gripperFocused ? (
+          <SingleDataGraph
+            key={`${mode}-gripper`}
+            data={gripperData}
+            hoveredTime={hoveredTime}
+            setHoveredTime={setHoveredTime}
+          />
         ) : expanded ? (
           <SingleDataGraph
             data={combinedData}

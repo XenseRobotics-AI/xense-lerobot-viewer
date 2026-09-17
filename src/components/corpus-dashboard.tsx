@@ -14,7 +14,11 @@ type CorpusDashboardProps = {
   groups: DatasetGroup[];
   overall: OverallCounts;
   delta: DailyDelta;
-  onSelect: (prefix: string) => void;
+  /**
+   * Narrow the dataset list below to one source. It used to open a page of
+   * that source's own; with the list flat, the same gesture sets its filter.
+   */
+  onSelectSource: (prefix: string) => void;
 };
 
 const ALL = "__all__";
@@ -32,7 +36,7 @@ export default function CorpusDashboard({
   groups,
   overall,
   delta,
-  onSelect,
+  onSelectSource,
 }: CorpusDashboardProps) {
   const t = useT();
   const stats = useMemo(() => computeCorpusStats(groups), [groups]);
@@ -92,7 +96,11 @@ export default function CorpusDashboard({
 
       <div className="px-5 py-5 sm:px-6">
         {active === null ? (
-          <CorpusTape groups={groups} overall={overall} onSelect={onSelect} />
+          <CorpusTape
+            groups={groups}
+            overall={overall}
+            onSelectSource={onSelectSource}
+          />
         ) : (
           <SourcePanel
             segment={active}
@@ -107,7 +115,7 @@ export default function CorpusDashboard({
             delta={delta.bySource[active.prefix] ?? null}
             since={delta.since}
             spanDays={delta.spanDays}
-            onOpen={onSelect}
+            onFilterTo={onSelectSource}
           />
         )}
       </div>

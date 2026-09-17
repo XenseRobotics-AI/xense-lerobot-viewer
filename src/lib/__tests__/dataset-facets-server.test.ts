@@ -25,7 +25,7 @@ describe("readCaptureDates", () => {
       ],
     });
     // sessions.json and the -0704 name both disagree; the manifest wins.
-    await writeMeta(dir, "meta/tacflow/sessions.json", {
+    await writeMeta(dir, "meta/sessions.json", {
       sessions: [{ source: "taccap-g1-x-0704" }],
     });
     const got = await readCaptureDates(dir);
@@ -36,7 +36,7 @@ describe("readCaptureDates", () => {
 
   test("falls back to sessions.json source names", async () => {
     const dir = path.join(await scratch(), "taccap-g1-x");
-    await writeMeta(dir, "meta/tacflow/sessions.json", {
+    await writeMeta(dir, "meta/sessions.json", {
       sessions: [
         { source: "taccap-g1-x-0815" },
         { source: "taccap-g1-x-0822" },
@@ -46,6 +46,31 @@ describe("readCaptureDates", () => {
     expect(got.dateEvidence).toBe("sessions");
     expect(got.capturedFrom).toBe("2026-08-15");
     expect(got.capturedTo).toBe("2026-08-22");
+  });
+
+  // TacFlow D103 moved sessions.json out of meta/tacflow/. The engine hard-cut
+  // to the new path, but the viewer serves both: a dataset on a machine that
+  // has not run the migration yet must not silently lose its capture dates.
+  test("still reads the pre-D103 meta/tacflow/sessions.json", async () => {
+    const dir = path.join(await scratch(), "taccap-g1-legacy");
+    await writeMeta(dir, "meta/tacflow/sessions.json", {
+      sessions: [{ source: "taccap-g1-legacy-0815" }],
+    });
+    const got = await readCaptureDates(dir);
+    expect(got.dateEvidence).toBe("sessions");
+    expect(got.capturedFrom).toBe("2026-08-15");
+  });
+
+  test("prefers the new path when a stale copy sits at the old one", async () => {
+    const dir = path.join(await scratch(), "taccap-g1-both");
+    await writeMeta(dir, "meta/sessions.json", {
+      sessions: [{ source: "taccap-g1-both-0822" }],
+    });
+    await writeMeta(dir, "meta/tacflow/sessions.json", {
+      sessions: [{ source: "taccap-g1-both-0101" }],
+    });
+    const got = await readCaptureDates(dir);
+    expect(got.capturedFrom).toBe("2026-08-22");
   });
 
   test("falls back to the directory name last", async () => {

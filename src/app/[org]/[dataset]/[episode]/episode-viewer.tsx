@@ -1285,8 +1285,11 @@ function EpisodeViewerInner({
           {activeTab === "annotations" && (
             <div className="annotations-skin flex flex-1 min-h-0 flex-col gap-4">
               <div className="flex shrink-0 items-center gap-3">
-                <p className="text-base font-medium text-slate-200 truncate">
-                  {datasetInfo.repoId}
+                <p
+                  className="truncate text-base font-medium text-slate-200"
+                  title={datasetDisplayName}
+                >
+                  {datasetDisplayName}
                 </p>
                 <p className="text-[10px] uppercase tracking-wide text-slate-500 tabular">
                   {t("ep.episodeLabel", { id: episodeId })}
@@ -1447,6 +1450,40 @@ function EpisodeViewerInner({
               className={activeTab === "urdf" ? "contents" : "hidden"}
               aria-hidden={activeTab !== "urdf"}
             >
+              {/* The tab renders through `display: contents`, so this header is
+                  laid out as a sibling flex item above the viewport rather than
+                  inside it — which keeps it out of URDFViewer, whose own root is
+                  the `flex-1` element that has to keep filling the column. */}
+              <div className="flex shrink-0 items-center gap-3">
+                <Link
+                  href="/"
+                  aria-label={t("viewer.backToGroup")}
+                  title={t("viewer.backToGroup")}
+                  className="group inline-flex shrink-0 items-center rounded-md border border-white/10 bg-[var(--surface-1)]/60 p-1.5 text-slate-300 transition-colors hover:border-cyan-400/40 hover:text-cyan-100"
+                >
+                  <svg
+                    className="h-4 w-4 transition-transform group-hover:-translate-x-0.5"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    aria-hidden
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                </Link>
+                <p
+                  className="truncate text-base font-medium text-slate-200"
+                  title={datasetDisplayName}
+                >
+                  {datasetDisplayName}
+                </p>
+                <p className="text-[10px] uppercase tracking-wide text-slate-500 tabular">
+                  {t("ep.episodeLabel", { id: episodeId })}
+                </p>
+              </div>
               <Suspense fallback={<Loading />}>
                 <URDFViewer
                   key={datasetInfo.repoId}

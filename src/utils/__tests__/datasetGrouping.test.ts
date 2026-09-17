@@ -178,30 +178,6 @@ describe("groupDatasetsByPrefix", () => {
     expect(groups[0].totalFrames).toBe(800);
   });
 
-  test("picks the first non-null thumbnail as the group art", () => {
-    const groups = groupDatasetsByPrefix([
-      makeDataset("Xense/a", { thumbnailVideoUrl: null }),
-      makeDataset("Xense/b", { thumbnailVideoUrl: "/api/thumb/b.mp4" }),
-      makeDataset("Xense/c", { thumbnailVideoUrl: "/api/thumb/c.mp4" }),
-    ]);
-    expect(groups[0].thumbnailVideoUrl).toBe("/api/thumb/b.mp4");
-  });
-
-  test("group art comes from the largest dataset that has a thumbnail", () => {
-    const groups = groupDatasetsByPrefix([
-      makeDataset("Xense/a", {
-        total_frames: 100,
-        thumbnailVideoUrl: "/api/thumb/a.mp4",
-      }),
-      makeDataset("Xense/b", { total_frames: 9_000, thumbnailVideoUrl: null }),
-      makeDataset("Xense/c", {
-        total_frames: 5_000,
-        thumbnailVideoUrl: "/api/thumb/c.mp4",
-      }),
-    ]);
-    expect(groups[0].thumbnailVideoUrl).toBe("/api/thumb/c.mp4");
-  });
-
   test("groups single-segment datasets under UNGROUPED_PREFIX", () => {
     const groups = groupDatasetsByPrefix([makeDataset("loose_dataset")]);
     expect(groups[0].prefix).toBe(UNGROUPED_PREFIX);
