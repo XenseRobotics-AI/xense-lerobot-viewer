@@ -108,6 +108,8 @@ export type WorkbenchRollupDataset = Pick<
   durationHours?: number | null;
   /** Storage reported by the Hub; distinct from local `sizeBytes`. */
   hubStorageBytes?: number | null;
+  hubRepoId?: string | null;
+  hubPath?: string | null;
   dailyAdditions?: WorkbenchDailyAddition[];
   tacflowScore?: import("@/types/workbench-score.types").WorkbenchDatasetScore;
 };
@@ -734,6 +736,20 @@ export function workbenchSourceRepoId(relativePath: string): string {
   return `${segments[0]}/${segments[segments.length - 1]}`;
 }
 
+export function workbenchDatasetSourceRepoId(
+  dataset: Pick<
+    WorkbenchRollupDataset,
+    "relativePath" | "hubSource" | "hubRepoId" | "hubPath"
+  >,
+): string {
+  const hubRepoId = dataset.hubRepoId?.trim();
+  if (dataset.hubSource === "modelscope" && hubRepoId) {
+    const hubPath = dataset.hubPath?.trim().replace(/^\/+|\/+$/gu, "");
+    return hubPath ? `${hubRepoId}/${hubPath}` : hubRepoId;
+  }
+  return workbenchSourceRepoId(dataset.relativePath);
+}
+
 export function workbenchGroupSourceRepoIds(
   datasets: readonly WorkbenchRollupDataset[],
   dimension: WorkbenchRollupDimension,
@@ -761,7 +777,7 @@ export function workbenchGroupSourceRepoIds(
     }
     const group = workbenchRollupLabel(dataset, dimension);
     const repos = groups.get(group) ?? new Set<string>();
-    repos.add(workbenchSourceRepoId(dataset.relativePath));
+    repos.add(workbenchDatasetSourceRepoId(dataset));
     groups.set(group, repos);
   }
 

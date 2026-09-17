@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   MODELSCOPE_DEFAULT_REPO,
+  MODELSCOPE_LEGACY_REPO,
   resolveModelScopeTarget,
 } from "@/utils/modelscopeValidation";
 
@@ -16,14 +17,23 @@ describe("ModelScope repository validation", () => {
     delete process.env.MODELSCOPE_DATASET_REPO;
     expect(resolveModelScopeTarget("TacVerse")).toEqual({
       owner: "XenseRobotics",
-      name: "TacVerse",
+      name: "TacVerse-Raw",
       repoId: MODELSCOPE_DEFAULT_REPO,
       logicalOrg: "TacVerse",
     });
   });
 
-  test("accepts an explicit owner/repository identifier", () => {
-    expect(resolveModelScopeTarget("XenseRobotics/TacVerse")).toMatchObject({
+  test("maps the current raw repository to the TacVerse logical organization", () => {
+    expect(resolveModelScopeTarget("TacVerse-Raw")).toMatchObject({
+      owner: "XenseRobotics",
+      name: "TacVerse-Raw",
+      repoId: MODELSCOPE_DEFAULT_REPO,
+      logicalOrg: "TacVerse",
+    });
+  });
+
+  test("accepts the legacy explicit owner/repository identifier", () => {
+    expect(resolveModelScopeTarget(MODELSCOPE_LEGACY_REPO)).toMatchObject({
       owner: "XenseRobotics",
       name: "TacVerse",
       repoId: "XenseRobotics/TacVerse",

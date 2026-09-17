@@ -17,7 +17,6 @@ export type WorkbenchDisplaySlideId =
   | "workstation-detail"
   | "personnel-workload"
   | "workstation-heatmap"
-  | "daily-trend"
   | "top-groups"
   | "3d-replay"
   | "taccap-video";
@@ -51,11 +50,6 @@ export const WORKBENCH_DISPLAY_SLIDES: readonly WorkbenchDisplaySlideConfig[] =
       id: "workstation-heatmap" as const,
       title: "Workstation day heatmap",
       durationMs: 12_000,
-    }),
-    Object.freeze({
-      id: "daily-trend" as const,
-      title: "Daily trend",
-      durationMs: 11_000,
     }),
     Object.freeze({
       id: "top-groups" as const,
@@ -212,12 +206,6 @@ export type WorkbenchDisplayHeatmapRow = Readonly<{
   hoursByDay: Readonly<Record<string, number>>;
 }>;
 
-export type WorkbenchDisplayTrendRow = Readonly<{
-  day: string;
-  hours: number;
-  datasets: number;
-}>;
-
 export type WorkbenchDisplayTopGroup = Readonly<{
   group: string;
   hours: number;
@@ -369,7 +357,6 @@ export type WorkbenchDisplaySnapshot = Readonly<{
   unattributedHours: number;
   heatmapDays: readonly string[];
   heatmapRows: readonly WorkbenchDisplayHeatmapRow[];
-  trend: readonly WorkbenchDisplayTrendRow[];
   topGroups: readonly WorkbenchDisplayTopGroup[];
   replay?: WorkbenchDisplayReplaySnapshot;
 }>;
@@ -399,7 +386,6 @@ export type WorkbenchDisplaySnapshotInput = {
   unattributedHours?: number;
   heatmapDays: readonly string[];
   heatmapRows: readonly WorkbenchDisplayHeatmapRow[];
-  trend: readonly WorkbenchDisplayTrendRow[];
   topGroups: readonly WorkbenchDisplayTopGroup[];
   replay?: WorkbenchDisplayReplaySnapshot;
 };
@@ -604,11 +590,6 @@ export function createWorkbenchDisplaySnapshot(
       )
       .slice(0, WORKBENCH_DISPLAY_HEATMAP_ROW_LIMIT),
   );
-  const trend = freezeArray(
-    input.trend
-      .map((row) => Object.freeze({ ...row }))
-      .sort((left, right) => left.day.localeCompare(right.day)),
-  );
   const topGroups = getWorkbenchTopGroups(input.topGroups).map((group) =>
     Object.freeze({ ...group }),
   );
@@ -642,7 +623,6 @@ export function createWorkbenchDisplaySnapshot(
     unattributedHours: finiteOrZero(input.unattributedHours ?? 0),
     heatmapDays,
     heatmapRows,
-    trend,
     topGroups: freezeArray(topGroups),
     replay: input.replay ? freezeReplaySnapshot(input.replay) : undefined,
   });

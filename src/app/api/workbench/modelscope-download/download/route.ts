@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import {
   downloadModelScopeDataset,
+  ModelScopeAccessDeniedError,
   ModelScopeDownloadCancelled,
   ModelScopeDownloadConflict,
   modelScopeDownloadTargetKey,
@@ -116,6 +117,12 @@ export async function POST(request: NextRequest): Promise<Response> {
             send({
               type: "error",
               code: "REVISION_CONFLICT",
+              error: redactModelScopeDownloadError(error, parsed.token),
+            });
+          } else if (error instanceof ModelScopeAccessDeniedError) {
+            send({
+              type: "error",
+              code: error.code,
               error: redactModelScopeDownloadError(error, parsed.token),
             });
           } else {

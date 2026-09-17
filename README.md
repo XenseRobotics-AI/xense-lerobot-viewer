@@ -16,7 +16,7 @@ This fork removes the Hugging Face Hub remote-loading path; everything reads fro
 - **Subtask labeling** (Pi-style segmentation): an Episodes-tab panel for labeling contiguous subtask ranges that persist until the next one, saved to `meta/annotations.json`. An **Export** button compiles them into lerobot-native per-frame `subtask_index` + `meta/subtasks.parquet` — the layer that produces a trainable `sample["subtask"]`.
 - **Parquet browser**: a raw table view of any `.parquet` in the dataset — file picker, column picker, paged rows, cell expansion, CSV export. Parsing happens server-side, so a 100 MB v3 data file pages without shipping the whole row group to the browser.
 - **Doctor**: read-only, dataset-wide diagnostics immediately after Action Insights. Its native TypeScript engine provides 13 checks over metadata, timing, actions, dimension-level continuity, optional configurable TCP linear/angular speed limits, video containers, statistics, episode consistency, training readiness, anomalies, and portability; the speed check is enabled explicitly in the Doctor panel, it needs no Python runtime, and it can send affected episode IDs into the existing flagged-episode workflow.
-- **Multi-Hub dataset statistics**: the Workbench dataset statistics view can read Hugging Face, ModelScope, or both catalogs at once. Hugging Face remains the default. ModelScope supports nested repositories such as `XenseRobotics/TacVerse`: the parent repository is discovered through its owner, then each child containing `<dataset>/meta/info.json` is reported as a `TacVerse/<dataset>` Workbench row. Set `MODELSCOPE_API_TOKEN` for private ModelScope datasets, or save a local token from Workbench → Configuration. A token saved in Workbench takes precedence over the environment variable and is never included in shared configuration.
+- **Multi-Hub dataset statistics**: the Workbench dataset statistics view can read Hugging Face, ModelScope, or both catalogs at once. Hugging Face remains the default. ModelScope supports nested repositories such as `XenseRobotics/TacVerse-Raw`: the parent repository is discovered through its owner, then each child containing `<dataset>/meta/info.json` is reported as a `TacVerse/<dataset>` Workbench row. Set `MODELSCOPE_API_TOKEN` for private ModelScope datasets, or save a local token from Workbench → Configuration. A token saved in Workbench takes precedence over the environment variable and is never included in shared configuration.
 - **3D URDF replay** for SO-100, SO-101, OpenArm, G1, and bimanual TacCap data-collection grippers. TacCap replay treats recorded poses as canonical TCP by default; the `Tracker → TCP` button applies the measured or dataset-provided extrinsic only when selected manually. It animates both finger joints, conditionally replays complete `head.xyz+r1-r6` trajectories with a self-contained schematic HMD, and labels the world axes (+X forward, +Y left, +Z up); its URDF/STL assets are bundled under `public/urdf/taccap-grippers`. Other robot assets load from the public Hugging Face `lerobot/robot-urdfs` bucket. Recorded cameras replay alongside the model as synchronized overlays — grouped into left / top-center / right by `left`, `right` and `head` in the feature name — and each tile can be dragged to resize, clicked to bring to front, or double-clicked to reset.
 - **Per-card "Open episode N" shortcut**: jump straight to a specific episode from the homepage card.
 - **Keyboard playback control**: `Space` plays/pauses, `↑`/`↓` step between episodes, and `←`/`→` seek ±5 s in 3D replay. The shortcuts keep working after you click the sidebar or a replay control, and still yield to text fields and to buttons that need `Space` themselves.
@@ -56,11 +56,13 @@ variable before starting the app:
 MODELSCOPE_API_TOKEN=ms_xxxxxxxxxxxxxxxxx bun dev
 ```
 
-The default ModelScope repository is `XenseRobotics/TacVerse`. To point the
+The default ModelScope repository is `XenseRobotics/TacVerse-Raw`. To point the
 viewer at another nested ModelScope repository, set
 `MODELSCOPE_DATASET_REPO=owner/repository` before starting the server. The
 Workbench keeps the repository name (`TacVerse`) as its logical organization,
 so local datasets continue to live under `<LOCAL_DATASET_ROOT>/TacVerse`.
+The previous repository `XenseRobotics/TacVerse` is still accepted when passed
+explicitly.
 
 Or open Workbench → Configuration and save a token in the local Workbench.
 The local Workbench token takes precedence over `MODELSCOPE_API_TOKEN`; it is

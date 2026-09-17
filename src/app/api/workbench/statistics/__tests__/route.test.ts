@@ -1005,11 +1005,11 @@ describe("Workbench statistics route", () => {
     ] as const;
     await writeCatalog("modelscope-catalog", {
       org: "TacVerse",
-      hubRepoId: "XenseRobotics/TacVerse",
+      hubRepoId: "XenseRobotics/TacVerse-Raw",
       refreshedAt: "2026-09-15T16:00:00Z",
       datasets: datasets.map(([name, totalEpisodes, totalFrames, fps]) => ({
         repoId: `TacVerse/${name}`,
-        hubRepoId: "XenseRobotics/TacVerse",
+        hubRepoId: "XenseRobotics/TacVerse-Raw",
         hubPath: name,
         totalEpisodes,
         totalFrames,
@@ -1030,6 +1030,8 @@ describe("Workbench statistics route", () => {
         relativePath: string;
         total_episodes: number;
         total_frames: number;
+        hubRepoId: string | null;
+        hubPath: string | null;
         capturedFrom: string | null;
         remoteOnly?: boolean;
         dailyAdditions: Array<{
@@ -1060,6 +1062,8 @@ describe("Workbench statistics route", () => {
       expect(row).toMatchObject({
         total_episodes: totalEpisodes,
         total_frames: totalFrames,
+        hubRepoId: "XenseRobotics/TacVerse-Raw",
+        hubPath: name,
         capturedFrom: "2026-09-15",
         collectorSerialNumber: "TCGU01A31Z0015B",
         remoteOnly: true,
@@ -1106,12 +1110,12 @@ describe("Workbench statistics route", () => {
     );
     await writeCatalog("modelscope-catalog", {
       org: "TacVerse",
-      hubRepoId: "XenseRobotics/TacVerse",
+      hubRepoId: "XenseRobotics/TacVerse-Raw",
       refreshedAt: "2026-09-15T08:00:00Z",
       datasets: [
         {
           repoId: datasetPath,
-          hubRepoId: "XenseRobotics/TacVerse",
+          hubRepoId: "XenseRobotics/TacVerse-Raw",
           hubPath: "collection/xtac-umi-g1-install-wire-harness-260915",
           totalEpisodes: 12,
           totalFrames: 43_200,
@@ -1139,6 +1143,8 @@ describe("Workbench statistics route", () => {
     expect(payload.datasets).toEqual([
       expect.objectContaining({
         relativePath: datasetPath,
+        hubRepoId: "XenseRobotics/TacVerse-Raw",
+        hubPath: "collection/xtac-umi-g1-install-wire-harness-260915",
         total_episodes: 12,
         total_frames: 43_200,
         durationHours: 1.2,
@@ -1170,12 +1176,12 @@ describe("Workbench statistics route", () => {
     });
     await writeCatalog("modelscope-catalog", {
       org: "TacVerse",
-      hubRepoId: "XenseRobotics/TacVerse",
+      hubRepoId: "XenseRobotics/TacVerse-Raw",
       refreshedAt: "2026-09-15T08:00:00Z",
       datasets: [
         {
           repoId: datasetPath,
-          hubRepoId: "XenseRobotics/TacVerse",
+          hubRepoId: "XenseRobotics/TacVerse-Raw",
           hubPath: "xtac-umi-g1-press-rubber-plug-260915",
           totalEpisodes: 8,
           totalFrames: 28_800,
@@ -1196,6 +1202,8 @@ describe("Workbench statistics route", () => {
     expect(payload.datasets).toEqual([
       expect.objectContaining({
         relativePath: datasetPath,
+        hubRepoId: "XenseRobotics/TacVerse-Raw",
+        hubPath: "xtac-umi-g1-press-rubber-plug-260915",
         robotId: null,
         collectorSerialNumber: null,
         leftGripperSn: null,

@@ -20,8 +20,6 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Line,
-  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -45,6 +43,7 @@ import {
   computeWorkbenchSelectedStorageBytes,
   WORKBENCH_DATASET_SOURCE_KEYS,
   countHalfOpenDays,
+  workbenchDatasetSourceRepoId,
   getWorkbenchDatasetWorkstation,
   getWorkbenchDatasetIdentity,
   getWorkbenchDefaultDateTimeRange,
@@ -58,7 +57,6 @@ import {
   workbenchDatasetRangeContributions,
   workbenchDatasetSourceKey,
   workbenchDatasetSourceLabel,
-  workbenchSourceRepoId,
   type WorkbenchDailyAddition,
   type WorkbenchDatasetSourceKey,
   type WorkbenchRollupDataset,
@@ -121,6 +119,7 @@ import type {
 } from "@/utils/tacverseDatasetStatistics";
 import {
   legacyPersonnelConfigFromConfiguration,
+  resolveWorkbenchDatasetDevice,
   workbenchMappingsFromConfiguration,
   workbenchPersonnelEmailGroups,
 } from "@/utils/workbenchConfiguration";
@@ -152,7 +151,6 @@ const DATE_SHORTCUTS = [
 ] as const;
 
 const WORKBENCH_WORKSTATION_CONCEPT_START_DATE = "2026-08-22";
-const WORKBENCH_DAILY_TREND_START_DATE = "2026-07-01";
 const WORKBENCH_HEATMAP_DAY_LIMIT = 10;
 type Translator = (key: MessageKey, vars?: InterpolationVars) => string;
 
@@ -175,6 +173,8 @@ type WorkbenchDataset = LocalDatasetSummary & {
   uploaderDisplayName?: string | null;
   durationHours?: number | null;
   hubStorageBytes?: number | null;
+  hubRepoId?: string | null;
+  hubPath?: string | null;
   dailyAdditions?: WorkbenchDailyAddition[];
 };
 
@@ -1037,6 +1037,8 @@ export default function WorkbenchGroupingPanel({
           dataset.hf?.uploaderDisplayName ??
           null,
         hubStorageBytes: dataset.hubStorageBytes ?? null,
+        hubRepoId: dataset.hubRepoId ?? null,
+        hubPath: dataset.hubPath ?? null,
       })),
     [datasets],
   );
@@ -1168,11 +1170,18 @@ export default function WorkbenchGroupingPanel({
     }
     return [...days].sort().slice(-WORKBENCH_HEATMAP_DAY_LIMIT);
   }, [workstationHeatmapRange, workstationRollupDatasets]);
-  const heatmapRows = useMemo<HeatmapRow[]>(() => {
-    const rows = new Map<string, HeatmapRow>();
-    const visibleDaySet = new Set(heatmapDays);
-    for (const dataset of workstationRollupDatasets) {
-      const workstation =
+  const workstationForDatasetDay = useCallback(
+    (dataset: WorkbenchRollupDataset, day?: string) => {
+      if (workbenchConfiguration?.config && day) {
+        return (
+          resolveWorkbenchDatasetDevice(
+            dataset,
+            workbenchConfiguration.config,
+            day,
+          ).workstation ?? t("workbench.unassigned")
+        );
+      }
+      return (
         getWorkbenchDatasetWorkstation(
           dataset,
           [workstationDraft, workstationMappings, workstationDefaults],
@@ -1181,12 +1190,24 @@ export default function WorkbenchGroupingPanel({
             workstationLegacyMappings,
             workstationLegacyDefaults,
           ],
-        ) ?? t("workbench.unassigned");
-      const row: HeatmapRow = rows.get(workstation) ?? {
-        workstation,
-        hoursByDay: {},
-        totalHours: 0,
-      };
+        ) ?? t("workbench.unassigned")
+      );
+    },
+    [
+      workbenchConfiguration,
+      workstationDefaults,
+      workstationDraft,
+      workstationLegacyDefaults,
+      workstationLegacyDraft,
+      workstationLegacyMappings,
+      workstationMappings,
+      t,
+    ],
+  );
+  const heatmapRows = useMemo<HeatmapRow[]>(() => {
+    const rows = new Map<string, HeatmapRow>();
+    const visibleDaySet = new Set(heatmapDays);
+    for (const dataset of workstationRollupDatasets) {
       for (const addition of workbenchDatasetRangeContributions(
         dataset,
         workstationHeatmapRange,
@@ -1194,11 +1215,17 @@ export default function WorkbenchGroupingPanel({
         if (!visibleDaySet.has(addition.day)) continue;
         const hours = Number(addition.hours);
         if (!Number.isFinite(hours) || hours <= 0) continue;
+        const workstation = workstationForDatasetDay(dataset, addition.day);
+        const row: HeatmapRow = rows.get(workstation) ?? {
+          workstation,
+          hoursByDay: {},
+          totalHours: 0,
+        };
         row.hoursByDay[addition.day] =
           (row.hoursByDay[addition.day] ?? 0) + hours;
         row.totalHours += hours;
+        rows.set(workstation, row);
       }
-      rows.set(workstation, row);
     }
     return Array.from(rows.values())
       .filter((row) => row.totalHours > 0)
@@ -1211,33 +1238,8 @@ export default function WorkbenchGroupingPanel({
     heatmapDays,
     workstationHeatmapRange,
     workstationRollupDatasets,
-    workstationDefaults,
-    workstationDraft,
-    workstationLegacyDefaults,
-    workstationLegacyDraft,
-    workstationLegacyMappings,
-    workstationMappings,
-    t,
+    workstationForDatasetDay,
   ]);
-  const dailyTrendTimeline = useMemo(
-    () =>
-      computeWorkbenchAdditionTimeline(workstationRollupDatasets, {
-        startDate:
-          range.endDate && range.endDate <= WORKBENCH_DAILY_TREND_START_DATE
-            ? range.startDate
-            : WORKBENCH_DAILY_TREND_START_DATE,
-        endDate: range.endDate,
-      }),
-    [range.endDate, range.startDate, workstationRollupDatasets],
-  );
-  const lineChartRows = dailyTrendTimeline.rows.map((row) => ({
-    day: row.day.slice(5),
-    date: row.day,
-    hours: row.hours,
-    cumulativeHours: row.cumulativeHours,
-    datasets: row.datasets,
-  }));
-
   const sourceWorkstationDashboardRows = useMemo<
     WorkbenchDashboardAggregateRow[]
   >(() => {
@@ -1252,59 +1254,50 @@ export default function WorkbenchGroupingPanel({
         dataset.source ?? workbenchDatasetSourceKey(dataset.relativePath);
       const sourceLabel =
         dataset.sourceLabel ?? workbenchDatasetSourceLabel(sourceKey);
-      const workstation =
-        getWorkbenchDatasetWorkstation(
-          dataset,
-          [workstationDraft, workstationMappings, workstationDefaults],
-          [
-            workstationLegacyDraft,
-            workstationLegacyMappings,
-            workstationLegacyDefaults,
-          ],
-        ) ?? t("workbench.unassigned");
-      const key = [sourceKey, workstation].join("\u0000");
-      const current = grouped.get(key) ?? {
-        group: `${sourceLabel} · ${workstation}`,
-        count: 0,
-        episodes: 0,
-        frames: 0,
-        hours: 0,
-        pctHours: 0,
-        robotId: null,
-        leftGripperSn: null,
-        sourceKey,
-        sourceLabel,
-        sourceKeys: [sourceKey],
-        sourceLabels: [sourceLabel],
-        workstation,
-        sourceRepoIds: [],
-        sourceRepos: [],
-        dailyHours: {},
-        collectorSerialNumber: null,
-        datasetPaths: new Set<string>(),
-      };
-      if (!current.datasetPaths.has(dataset.relativePath)) {
-        current.datasetPaths.add(dataset.relativePath);
-        current.count += 1;
-        const repoId = workbenchSourceRepoId(dataset.relativePath);
-        if (!current.sourceRepoIds.includes(repoId)) {
-          current.sourceRepoIds.push(repoId);
-        }
-        const sourceRepoKey = `${dataset.hubSource ?? "huggingface"}:${repoId}`;
-        if (
-          !current.sourceRepos.some(
-            (repo) =>
-              `${repo.hubSource ?? "huggingface"}:${repo.repoId}` ===
-              sourceRepoKey,
-          )
-        ) {
-          current.sourceRepos.push({
-            repoId,
-            hubSource: dataset.hubSource ?? undefined,
-          });
-        }
-      }
       for (const addition of additions) {
+        const workstation = workstationForDatasetDay(dataset, addition.day);
+        const key = [sourceKey, workstation].join("\u0000");
+        const current = grouped.get(key) ?? {
+          group: `${sourceLabel} · ${workstation}`,
+          count: 0,
+          episodes: 0,
+          frames: 0,
+          hours: 0,
+          pctHours: 0,
+          robotId: null,
+          leftGripperSn: null,
+          sourceKey,
+          sourceLabel,
+          sourceKeys: [sourceKey],
+          sourceLabels: [sourceLabel],
+          workstation,
+          sourceRepoIds: [],
+          sourceRepos: [],
+          dailyHours: {},
+          collectorSerialNumber: null,
+          datasetPaths: new Set<string>(),
+        };
+        if (!current.datasetPaths.has(dataset.relativePath)) {
+          current.datasetPaths.add(dataset.relativePath);
+          current.count += 1;
+          const repoId = workbenchDatasetSourceRepoId(dataset);
+          if (!current.sourceRepoIds.includes(repoId)) {
+            current.sourceRepoIds.push(repoId);
+          }
+          const sourceRepoKey = `${dataset.hubSource ?? "huggingface"}:${repoId}`;
+          if (
+            !current.sourceRepos.some(
+              (repo) =>
+                `${repo.hubSource ?? "huggingface"}:${repo.repoId}` ===
+                sourceRepoKey,
+            )
+          ) {
+            current.sourceRepos.push({
+              repoId,
+              hubSource: dataset.hubSource ?? undefined,
+            });
+          }
+        }
         current.episodes += Number.isFinite(Number(addition.episodes))
           ? Math.max(0, Math.trunc(Number(addition.episodes)))
           : 0;
@@ -1316,8 +1309,8 @@ export default function WorkbenchGroupingPanel({
         current.hours += hours;
         current.dailyHours[addition.day] =
           (current.dailyHours[addition.day] ?? 0) + hours;
+        grouped.set(key, current);
       }
-      grouped.set(key, current);
     }
     return Array.from(grouped.values()).map(({ datasetPaths, ...row }) => {
       void datasetPaths;
@@ -1332,17 +1325,7 @@ export default function WorkbenchGroupingPanel({
         ),
       };
     });
-  }, [
-    range,
-    workstationDefaults,
-    workstationDraft,
-    workstationLegacyDefaults,
-    workstationLegacyDraft,
-    workstationLegacyMappings,
-    workstationMappings,
-    workstationRollupDatasets,
-    t,
-  ]);
+  }, [range, workstationForDatasetDay, workstationRollupDatasets]);
 
   const workstationDashboardRows = useMemo<WorkbenchDashboardRow[]>(() => {
     type GroupedRow = WorkbenchDashboardAggregateRow & {
@@ -1454,28 +1437,12 @@ export default function WorkbenchGroupingPanel({
   const datasetsForWorkstation = useCallback(
     (workstation: string) =>
       selectedWorkbenchDatasets.filter((dataset) => {
-        const mappedWorkstation =
-          getWorkbenchDatasetWorkstation(
-            dataset,
-            [workstationDraft, workstationMappings, workstationDefaults],
-            [
-              workstationLegacyDraft,
-              workstationLegacyMappings,
-              workstationLegacyDefaults,
-            ],
-          ) ?? t("workbench.unassigned");
-        return mappedWorkstation === workstation;
+        return workbenchDatasetRangeContributions(dataset, range).some(
+          (addition) =>
+            workstationForDatasetDay(dataset, addition.day) === workstation,
+        );
       }),
-    [
-      selectedWorkbenchDatasets,
-      workstationDefaults,
-      workstationDraft,
-      workstationLegacyDefaults,
-      workstationLegacyDraft,
-      workstationLegacyMappings,
-      workstationMappings,
-      t,
-    ],
+    [selectedWorkbenchDatasets, range, workstationForDatasetDay],
   );
 
   const visibleRobotDashboardRows = useMemo(() => {
@@ -1550,27 +1517,19 @@ export default function WorkbenchGroupingPanel({
     for (const dataset of workstationRollupDatasets) {
       const key = getWorkbenchDatasetIdentity(dataset);
       if (!key) continue;
-      const workstation = getWorkbenchDatasetWorkstation(
+      const firstAddition = workbenchDatasetRangeContributions(
         dataset,
-        [workstationDraft, workstationMappings, workstationDefaults],
-        [
-          workstationLegacyDraft,
-          workstationLegacyMappings,
-          workstationLegacyDefaults,
-        ],
-      );
-      if (workstation) mappings[key] = workstation;
+        range,
+      )[0];
+      const workstation = firstAddition
+        ? workstationForDatasetDay(dataset, firstAddition.day)
+        : null;
+      if (workstation && workstation !== t("workbench.unassigned")) {
+        mappings[key] = workstation;
+      }
     }
     return mappings;
-  }, [
-    workstationDefaults,
-    workstationDraft,
-    workstationLegacyDefaults,
-    workstationLegacyDraft,
-    workstationLegacyMappings,
-    workstationMappings,
-    workstationRollupDatasets,
-  ]);
+  }, [range, t, workstationForDatasetDay, workstationRollupDatasets]);
   const datasetScores = useMemo(() => {
     const scores = new Map<string, WorkbenchDatasetScore>();
     for (const dataset of workstationRollupDatasets) {
@@ -1650,19 +1609,6 @@ export default function WorkbenchGroupingPanel({
         row.email,
       ]);
     }
-    for (const row of dailyTrendTimeline.rows) {
-      rows.push([
-        "daily-trend",
-        row.day,
-        "",
-        row.hours,
-        row.datasets,
-        "",
-        "",
-        "",
-        "",
-      ]);
-    }
     const csv = workbenchCsv(
       [
         "section",
@@ -1690,7 +1636,6 @@ export default function WorkbenchGroupingPanel({
     organization,
     personnelRollup.rows,
     range.startDate,
-    dailyTrendTimeline,
     visibleRobotDashboardRows,
     t,
   ]);
@@ -2190,11 +2135,6 @@ export default function WorkbenchGroupingPanel({
             totalHours: row.totalHours,
             hoursByDay: row.hoursByDay,
           })),
-          trend: dailyTrendTimeline.rows.map((row) => ({
-            day: row.day,
-            hours: row.hours,
-            datasets: row.datasets,
-          })),
           topGroups: topWorkstationRows.map((row) => ({
             group: row.group,
             hours: row.hours,
@@ -2234,7 +2174,6 @@ export default function WorkbenchGroupingPanel({
     workstationDashboardRows,
     selectedDatasetPaths.length,
     topWorkstationRows,
-    dailyTrendTimeline,
     selectedStorageBytes,
     targetHours,
     totalTimeline.total.episodes,
@@ -2427,7 +2366,12 @@ export default function WorkbenchGroupingPanel({
             <button
               type="button"
               onClick={() => setMappingEditorOpen((value) => !value)}
-              className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100"
+              aria-pressed={mappingEditorOpen}
+              className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
+                mappingEditorOpen
+                  ? "border-cyan-300/60 bg-cyan-300/[0.14] text-cyan-50 shadow-[0_0_0_1px_rgba(103,232,249,0.22)]"
+                  : "border-white/10 bg-white/[0.025] text-slate-300 hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100"
+              }`}
             >
               <FiSettings aria-hidden="true" className="h-3.5 w-3.5" />
               {t("workbench.configuration")}
@@ -2435,11 +2379,26 @@ export default function WorkbenchGroupingPanel({
             <button
               type="button"
               onClick={() => setRewardEditorOpen((value) => !value)}
-              className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2 text-xs font-medium text-slate-300 transition-colors hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100"
+              aria-pressed={rewardEditorOpen}
+              className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
+                rewardEditorOpen
+                  ? "border-amber-300/60 bg-amber-300/[0.14] text-amber-50 shadow-[0_0_0_1px_rgba(252,211,77,0.22)]"
+                  : "border-white/10 bg-white/[0.025] text-slate-300 hover:border-cyan-300/50 hover:bg-cyan-400/[0.06] hover:text-cyan-100"
+              }`}
             >
               <FiAward aria-hidden="true" className="h-3.5 w-3.5" />
               {t("workbench.rewardRules")}
             </button>
+            {(mappingEditorOpen || rewardEditorOpen) && (
+              <span className="inline-flex items-center gap-2 rounded-lg border border-emerald-300/30 bg-emerald-300/[0.08] px-3 py-2 text-xs font-medium text-emerald-100">
+                <span className="h-2 w-2 rounded-full bg-emerald-300" />
+                {t("workbench.settingsModeActive", {
+                  mode: mappingEditorOpen
+                    ? t("workbench.configuration")
+                    : t("workbench.rewardRules"),
+                })}
+              </span>
+            )}
             {isWorkbenchOrganizationDisplayPath(pathname) && (
               <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-violet-300/25 bg-violet-300/[0.06] px-3 py-2 text-xs font-medium text-violet-200">
                 <input
@@ -2893,22 +2852,9 @@ export default function WorkbenchGroupingPanel({
                                 day,
                                 datasets: sourceFilteredLocalDatasets.filter(
                                   (dataset) => {
-                                    const mappedWorkstation =
-                                      getWorkbenchDatasetWorkstation(
-                                        dataset,
-                                        [
-                                          workstationDraft,
-                                          workstationMappings,
-                                          workstationDefaults,
-                                        ],
-                                        [
-                                          workstationLegacyDraft,
-                                          workstationLegacyMappings,
-                                          workstationLegacyDefaults,
-                                        ],
-                                      ) ?? t("workbench.unassigned");
                                     return (
-                                      mappedWorkstation === row.workstation &&
+                                      workstationForDatasetDay(dataset, day) ===
+                                        row.workstation &&
                                       workbenchDatasetRangeContributions(
                                         dataset,
                                         workstationHeatmapRange,
@@ -2937,108 +2883,6 @@ export default function WorkbenchGroupingPanel({
                 </div>
               </div>
             )}
-          </section>
-
-          <section className="rounded-md border border-white/10 bg-[var(--surface-1)]/35 p-4">
-            <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-              <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
-                {t("workbench.dailyTrend")}
-              </h4>
-              <span className="text-[10px] text-slate-500">
-                {dailyTrendTimeline.range.startDate ?? t("workbench.beginning")}{" "}
-                → {dailyTrendTimeline.range.endDate ?? t("workbench.latest")}
-              </span>
-            </div>
-            <div className="h-64 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={lineChartRows}>
-                  <CartesianGrid
-                    stroke="rgba(255,255,255,0.06)"
-                    strokeDasharray="3 3"
-                  />
-                  <XAxis
-                    dataKey="day"
-                    tick={{ fill: "#94a3b8", fontSize: 10 }}
-                  />
-                  <YAxis tick={{ fill: "#94a3b8", fontSize: 10 }} />
-                  <Tooltip
-                    contentStyle={{
-                      background: "#0d1220",
-                      border: "1px solid rgba(255,255,255,0.1)",
-                      borderRadius: 6,
-                      color: "#e7ebf3",
-                    }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="hours"
-                    stroke="#38bdf8"
-                    strokeWidth={2}
-                    dot={(props: {
-                      cx?: number;
-                      cy?: number;
-                      payload?: { date?: string; hours?: number };
-                    }) => {
-                      if (
-                        typeof props.cx !== "number" ||
-                        typeof props.cy !== "number" ||
-                        !props.payload?.date
-                      ) {
-                        return <g />;
-                      }
-                      return (
-                        <circle
-                          key={`daily-trend-${props.payload.date}`}
-                          cx={props.cx}
-                          cy={props.cy}
-                          r={4}
-                          fill="#38bdf8"
-                          stroke="#e0f2fe"
-                          strokeWidth={1}
-                          role="button"
-                          tabIndex={0}
-                          aria-label={t("workbench.openDailyTrend", {
-                            date: props.payload.date,
-                          })}
-                          onClick={() => {
-                            const day = props.payload?.date;
-                            if (!day) return;
-                            openWorkbenchDrilldown({
-                              title: `${t("workbench.dailyTrend")} · ${day}`,
-                              detail: `${formatHours(props.payload?.hours ?? 0)} ${t("common.hours")}`,
-                              day,
-                              datasets: sourceFilteredLocalDatasets.filter(
-                                (dataset) =>
-                                  workbenchDatasetRangeContributions(
-                                    dataset,
-                                    dailyTrendTimeline.range,
-                                  ).some((addition) => addition.day === day),
-                              ),
-                              episodeId: 0,
-                            });
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key !== "Enter" && event.key !== " ")
-                              return;
-                            event.preventDefault();
-                            event.currentTarget.dispatchEvent(
-                              new MouseEvent("click", { bubbles: true }),
-                            );
-                          }}
-                        />
-                      );
-                    }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="cumulativeHours"
-                    stroke="#94a3b8"
-                    strokeWidth={1.5}
-                    dot={false}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
           </section>
 
           <section className="rounded-md border border-white/10 bg-[var(--surface-1)]/35 p-4">

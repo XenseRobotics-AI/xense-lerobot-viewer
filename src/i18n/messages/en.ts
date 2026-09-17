@@ -896,6 +896,8 @@ export const en = {
   "workbench.workstationMappings": "Workstation mappings",
   "workbench.personnelMapping": "Personnel mapping",
   "workbench.rewardRules": "Reward rules",
+  "workbench.settingsMode": "Settings mode",
+  "workbench.settingsModeActive": "{mode} settings are open",
   "workbench.includeReplay": "Include 3D Replay",
   "workbench.dataSourcesAria": "Workbench data sources",
   "workbench.datasetsAwaitingDate":
@@ -940,19 +942,11 @@ export const en = {
   "workbench.pagePersonnel": "Page {page} / {pages} · {count} personnel",
   "workbench.noPersonnelWorkload": "No personnel workload in this range",
   "workbench.noDataSince": "No daily additions since {date}",
-  "workbench.noDailyTrendData": "No daily trend data in this range",
   "workbench.windowMeta":
     "{start} → {end} · Window {page} / {pages} · Top {count}",
   "workbench.noWorkstationDayData": "No workstation day data in this range",
-  "workbench.dailyTrend": "Daily trend",
   "workbench.reportingDay_one": "{count} reporting day",
   "workbench.reportingDay_other": "{count} reporting days",
-  "workbench.dailyHours": "Daily hours",
-  "workbench.dailyTarget": "Daily target {hours}",
-  "workbench.cumulativeHours": "Cumulative hours",
-  "workbench.selectedReportingRange": "Selected reporting range",
-  "workbench.dailyTargetGroups": "Daily target · {count} groups",
-  "workbench.peakDay": "Peak day",
   "workbench.topGroups": "Top groups",
   "workbench.topGroupsMeta": "Workstation · {range} · Top {count}",
   "workbench.noGroupData": "No group data in this range",
@@ -1255,7 +1249,7 @@ export const en = {
   "workbench.hfDownloadRepoHint":
     "Use owner/repo, or owner/repo/folder for a single folder dataset.",
   "workbench.hfDownloadModelScopeRepoHint":
-    "Use TacVerse/path/to/dataset, or XenseRobotics/TacVerse/path/to/dataset.",
+    "Use TacVerse/path/to/dataset, XenseRobotics/TacVerse-Raw/path/to/dataset, or the legacy XenseRobotics/TacVerse/path/to/dataset.",
   "workbench.hfDownloadRoot": "Download root",
   "workbench.hfDownloadBrowse": "Browse…",
   "workbench.hfDownloadChooseRoot": "Choose the LeRobot download root",
@@ -1434,7 +1428,6 @@ export const en = {
   "workbench.exportCsv": "Export CSV",
   "workbench.copyShareLink": "Copy share link",
   "workbench.noWorkstationFilterMatch": "No workstation rows match the filter.",
-  "workbench.openDailyTrend": "Open daily trend for {date}",
 
   // ── charts (Episodes tab) ───────────────────────────────────────────────
   "chart.aria": "Episode chart data",

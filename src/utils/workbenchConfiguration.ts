@@ -73,6 +73,7 @@ export function suggestWorkbenchDeviceType(
 }
 
 export const WORKBENCH_STATIC_ROLE_EFFECTIVE_DATE = "1970-01-01";
+export const WORKBENCH_STATIC_DEVICE_EFFECTIVE_DATE = "1970-01-01";
 
 export function nextWorkbenchPersonId(
   people: readonly Pick<WorkbenchConfigurationV2["people"][number], "id">[],
@@ -94,8 +95,18 @@ function workstationIsReferenced(
 ): boolean {
   return (
     config.devices.some((device) => device.workstationId === workstationId) ||
+    config.devices.some((device) =>
+      (device.assignmentHistory ?? []).some(
+        (record) => record.workstationId === workstationId,
+      ),
+    ) ||
     config.legacyDeviceAliases.some(
       (alias) => alias.workstationId === workstationId,
+    ) ||
+    config.legacyDeviceAliases.some((alias) =>
+      (alias.assignmentHistory ?? []).some(
+        (record) => record.workstationId === workstationId,
+      ),
     ) ||
     config.staffingHistory.some(
       (record) => record.workstationId === workstationId,
@@ -111,16 +122,51 @@ export function pruneWorkbenchWorkstations(
   );
 }
 
+function setWorkbenchDeviceAssignment(
+  device: WorkbenchConfigurationV2["devices"][number],
+  workstationId: string | null,
+  effectiveDate: string,
+): void {
+  const day = isWorkbenchConfigurationDay(effectiveDate)
+    ? effectiveDate
+    : WORKBENCH_STATIC_DEVICE_EFFECTIVE_DATE;
+  device.assignmentHistory = (device.assignmentHistory ?? []).filter(
+    (record) => record.effectiveDate !== day,
+  );
+  device.assignmentHistory.push({ effectiveDate: day, workstationId });
+  device.assignmentHistory.sort((left, right) =>
+    left.effectiveDate.localeCompare(right.effectiveDate),
+  );
+}
+
+function ensureWorkbenchDeviceAssignmentHistory(
+  device: WorkbenchConfigurationV2["devices"][number],
+): void {
+  if ((device.assignmentHistory ?? []).length > 0 || !device.workstationId) {
+    device.assignmentHistory ??= [];
+    return;
+  }
+  device.assignmentHistory = [
+    {
+      effectiveDate: WORKBENCH_STATIC_DEVICE_EFFECTIVE_DATE,
+      workstationId: device.workstationId,
+    },
+  ];
+}
+
 export function setWorkbenchDeviceWorkstation(
   config: WorkbenchConfigurationV2,
   deviceId: string,
   rawName: string,
+  effectiveDate = WORKBENCH_STATIC_DEVICE_EFFECTIVE_DATE,
 ): void {
   const device = config.devices.find((entry) => entry.id === deviceId);
   if (!device) return;
+  ensureWorkbenchDeviceAssignmentHistory(device);
   const name = cleanString(rawName);
   if (!name) {
     device.workstationId = null;
+    setWorkbenchDeviceAssignment(device, null, effectiveDate);
     pruneWorkbenchWorkstations(config);
     return;
   }
@@ -134,6 +180,7 @@ export function setWorkbenchDeviceWorkstation(
     config.workstations.push(workstation);
   }
   device.workstationId = workstation.id;
+  setWorkbenchDeviceAssignment(device, workstation.id, effectiveDate);
   pruneWorkbenchWorkstations(config);
 }
 
@@ -185,6 +232,11 @@ export function workbenchStaffingWorkstations(
   const visibleIds = new Set([
     ...config.devices.flatMap((device) =>
       device.workstationId ? [device.workstationId] : [],
+    ),
+    ...config.devices.flatMap((device) =>
+      (device.assignmentHistory ?? []).flatMap((record) =>
+        record.workstationId ? [record.workstationId] : [],
+      ),
     ),
     ...config.staffingHistory.map((record) => record.workstationId),
   ]);
@@ -292,9 +344,56 @@ export type WorkbenchDatasetDeviceResolution = {
   }>;
 };
 
+function latestDeviceAssignment(
+  assignments: readonly {
+    effectiveDate: string;
+    workstationId: string | null;
+  }[],
+  day?: string,
+): string | null | undefined {
+  const selected = assignments
+    .filter((entry) => !day || entry.effectiveDate <= day)
+    .sort((left, right) =>
+      left.effectiveDate.localeCompare(right.effectiveDate),
+    )
+    .at(-1);
+  return selected ? selected.workstationId : undefined;
+}
+
+export function resolveWorkbenchDeviceWorkstationId(
+  device: Pick<
+    WorkbenchConfigurationV2["devices"][number],
+    "workstationId" | "assignmentHistory"
+  >,
+  day?: string,
+): string | null {
+  const assigned = latestDeviceAssignment(device.assignmentHistory ?? [], day);
+  return assigned !== undefined ? assigned : (device.workstationId ?? null);
+}
+
+export function resolveWorkbenchAliasWorkstationId(
+  alias: Pick<
+    WorkbenchConfigurationV2["legacyDeviceAliases"][number],
+    "workstationId" | "assignmentHistory"
+  >,
+  linkedDevice?: Pick<
+    WorkbenchConfigurationV2["devices"][number],
+    "workstationId" | "assignmentHistory"
+  > | null,
+  day?: string,
+): string | null {
+  const assigned = latestDeviceAssignment(alias.assignmentHistory ?? [], day);
+  if (assigned !== undefined) return assigned;
+  const linked = linkedDevice
+    ? resolveWorkbenchDeviceWorkstationId(linkedDevice, day)
+    : null;
+  return alias.workstationId ?? linked ?? null;
+}
+
 export function resolveWorkbenchDatasetDevice(
   dataset: DatasetDeviceEvidence,
   config: WorkbenchConfigurationV2,
+  day?: string,
 ): WorkbenchDatasetDeviceResolution {
   const workstationNames = new Map(
     config.workstations.map((workstation) => [
@@ -332,11 +431,13 @@ export function resolveWorkbenchDatasetDevice(
     const identifier = cleanString(candidate.identifier);
     if (!identifier) continue;
     const device = devices.get([candidate.source, identifier].join("\u0000"));
-    if (!device?.workstationId) continue;
+    if (!device) continue;
+    const workstationId = resolveWorkbenchDeviceWorkstationId(device, day);
+    if (!workstationId) continue;
     const value = {
       source: candidate.source,
       identifier,
-      workstationId: device.workstationId,
+      workstationId,
       deviceId: device.id,
     };
     candidates.push(value);
@@ -349,7 +450,11 @@ export function resolveWorkbenchDatasetDevice(
     const linked = alias?.deviceId
       ? config.devices.find((device) => device.id === alias.deviceId)
       : null;
-    const workstationId = alias?.workstationId ?? linked?.workstationId ?? null;
+    const workstationId = alias
+      ? resolveWorkbenchAliasWorkstationId(alias, linked, day)
+      : linked
+        ? resolveWorkbenchDeviceWorkstationId(linked, day)
+        : null;
     if (workstationId) {
       const value = {
         source: "left_gripper_sn" as const,
@@ -378,6 +483,7 @@ export function resolveWorkbenchDatasetDevice(
 
 export function workbenchMappingsFromConfiguration(
   config: WorkbenchConfigurationV2,
+  day?: string,
 ): {
   mappings: Record<string, string>;
   legacyMappings: Record<string, string>;
@@ -392,14 +498,17 @@ export function workbenchMappingsFromConfiguration(
   const mappings: Record<string, string> = {};
   const legacyMappings: Record<string, string> = {};
   for (const device of config.devices) {
-    const name = device.workstationId
-      ? names.get(device.workstationId)
-      : undefined;
+    const workstationId = resolveWorkbenchDeviceWorkstationId(device, day);
+    const name = workstationId ? names.get(workstationId) : undefined;
     if (name) mappings[device.identifier] = name;
   }
   for (const alias of config.legacyDeviceAliases) {
     const linked = alias.deviceId ? devices.get(alias.deviceId) : undefined;
-    const workstationId = alias.workstationId ?? linked?.workstationId ?? null;
+    const workstationId = resolveWorkbenchAliasWorkstationId(
+      alias,
+      linked,
+      day,
+    );
     const name = workstationId ? names.get(workstationId) : undefined;
     if (name) legacyMappings[alias.identifier] = name;
   }
@@ -615,6 +724,14 @@ export function migrateLegacyWorkbenchConfiguration(
       source: "robot_id",
       identifier,
       workstationId: workstationIds.has(workstation) ? workstation : null,
+      assignmentHistory: workstationIds.has(workstation)
+        ? [
+            {
+              effectiveDate: WORKBENCH_STATIC_DEVICE_EFFECTIVE_DATE,
+              workstationId: workstation,
+            },
+          ]
+        : [],
     });
   }
   for (const identifier of [...collectorIds].sort()) {
@@ -625,6 +742,14 @@ export function migrateLegacyWorkbenchConfiguration(
       source: "collector_sn",
       identifier,
       workstationId: workstationIds.has(workstation) ? workstation : null,
+      assignmentHistory: workstationIds.has(workstation)
+        ? [
+            {
+              effectiveDate: WORKBENCH_STATIC_DEVICE_EFFECTIVE_DATE,
+              workstationId: workstation,
+            },
+          ]
+        : [],
     });
   }
 
@@ -653,6 +778,14 @@ export function migrateLegacyWorkbenchConfiguration(
       identifier,
       deviceId: linkedDevice?.id ?? null,
       workstationId: workstationIds.has(workstation) ? workstation : null,
+      assignmentHistory: workstationIds.has(workstation)
+        ? [
+            {
+              effectiveDate: WORKBENCH_STATIC_DEVICE_EFFECTIVE_DATE,
+              workstationId: workstation,
+            },
+          ]
+        : [],
     });
   }
 
@@ -665,6 +798,14 @@ export function migrateLegacyWorkbenchConfiguration(
     );
     if (aliasWorkstations.size === 1) {
       device.workstationId = aliasWorkstations.values().next().value ?? null;
+      device.assignmentHistory = device.workstationId
+        ? [
+            {
+              effectiveDate: WORKBENCH_STATIC_DEVICE_EFFECTIVE_DATE,
+              workstationId: device.workstationId,
+            },
+          ]
+        : [];
     }
   }
 
@@ -783,6 +924,71 @@ function normalizedRequired(value: unknown, label: string): string {
   return normalized;
 }
 
+function normalizeDeviceAssignmentHistory(
+  raw: Record<string, unknown>,
+  fallbackWorkstationId: string | null,
+  ownerLabel: string,
+  path: string,
+  workstationIds: ReadonlySet<string>,
+  diagnostics: WorkbenchConfigurationDiagnostic[],
+): WorkbenchConfigurationV2["devices"][number]["assignmentHistory"] {
+  const rawHistory = Array.isArray(raw.assignmentHistory)
+    ? raw.assignmentHistory
+    : [];
+  const source =
+    rawHistory.length > 0
+      ? rawHistory
+      : fallbackWorkstationId
+        ? [
+            {
+              effectiveDate: WORKBENCH_STATIC_DEVICE_EFFECTIVE_DATE,
+              workstationId: fallbackWorkstationId,
+            },
+          ]
+        : [];
+  const dates = new Set<string>();
+  return source
+    .flatMap((entry, index) => {
+      if (!isRecord(entry)) {
+        invalidStructure(
+          `${ownerLabel} assignment ${index + 1} must be an object.`,
+          `${path}.assignmentHistory[${index}]`,
+        );
+      }
+      const effectiveDate = cleanString(entry.effectiveDate);
+      const workstationId = cleanString(entry.workstationId) || null;
+      if (!isWorkbenchConfigurationDay(effectiveDate)) {
+        diagnostics.push({
+          severity: "error",
+          code: "INVALID_DATE",
+          message: `Invalid assignment effective date: ${effectiveDate}.`,
+          path: `${path}.assignmentHistory[${index}].effectiveDate`,
+        });
+      }
+      if (dates.has(effectiveDate)) {
+        diagnostics.push({
+          severity: "error",
+          code: "DUPLICATE_DEVICE_ASSIGNMENT_HISTORY",
+          message: `Duplicate assignment date ${effectiveDate} for ${ownerLabel}.`,
+          path: `${path}.assignmentHistory`,
+        });
+      }
+      if (workstationId && !workstationIds.has(workstationId)) {
+        diagnostics.push({
+          severity: "error",
+          code: "UNKNOWN_WORKSTATION",
+          message: `${ownerLabel} references unknown workstation ${workstationId}.`,
+          path: `${path}.assignmentHistory[${index}].workstationId`,
+        });
+      }
+      dates.add(effectiveDate);
+      return [{ effectiveDate, workstationId }];
+    })
+    .sort((left, right) =>
+      left.effectiveDate.localeCompare(right.effectiveDate),
+    );
+}
+
 export function validateWorkbenchConfiguration(
   input: unknown,
   observedDevices: readonly WorkbenchObservedDevice[] = [],
@@ -868,7 +1074,20 @@ export function validateWorkbenchConfiguration(
     );
     const type = raw.type as WorkbenchDeviceType;
     const source = raw.source as WorkbenchDeviceSource;
-    const workstationId = cleanString(raw.workstationId) || null;
+    const fallbackWorkstationId = cleanString(raw.workstationId) || null;
+    const assignmentHistory = normalizeDeviceAssignmentHistory(
+      raw,
+      fallbackWorkstationId,
+      `Device ${identifier}`,
+      `devices[${index}]`,
+      workstationIds,
+      diagnostics,
+    );
+    const latestWorkstationId = latestDeviceAssignment(assignmentHistory ?? []);
+    const workstationId =
+      latestWorkstationId !== undefined
+        ? latestWorkstationId
+        : fallbackWorkstationId;
     if (!(WORKBENCH_DEVICE_TYPES as readonly unknown[]).includes(type))
       diagnostics.push({
         severity: "error",
@@ -913,7 +1132,7 @@ export function validateWorkbenchConfiguration(
       });
     deviceIds.add(id);
     identifiers.add(identifier);
-    return { id, type, source, identifier, workstationId };
+    return { id, type, source, identifier, workstationId, assignmentHistory };
   });
 
   const aliasIds = new Set<string>();
@@ -931,7 +1150,22 @@ export function validateWorkbenchConfiguration(
         `Legacy alias ${index + 1} identifier`,
       );
       const deviceId = cleanString(raw.deviceId) || null;
-      const workstationId = cleanString(raw.workstationId) || null;
+      const fallbackWorkstationId = cleanString(raw.workstationId) || null;
+      const assignmentHistory = normalizeDeviceAssignmentHistory(
+        raw,
+        fallbackWorkstationId,
+        `Alias ${identifier}`,
+        `legacyDeviceAliases[${index}]`,
+        workstationIds,
+        diagnostics,
+      );
+      const latestWorkstationId = latestDeviceAssignment(
+        assignmentHistory ?? [],
+      );
+      const workstationId =
+        latestWorkstationId !== undefined
+          ? latestWorkstationId
+          : fallbackWorkstationId;
       if (aliasIds.has(id)) {
         diagnostics.push({
           severity: "error",
@@ -966,7 +1200,7 @@ export function validateWorkbenchConfiguration(
       }
       aliasIds.add(id);
       identifiers.add(identifier);
-      return { id, identifier, deviceId, workstationId };
+      return { id, identifier, deviceId, workstationId, assignmentHistory };
     },
   );
 

@@ -246,7 +246,7 @@ function rowFromCatalog(
           source,
           rowType: "child" as const,
           repoId: `${entry.repoId}/${childPath}`,
-          hubRepoId: entry.repoId,
+          hubRepoId: base.hubRepoId,
           hubPath: childPath,
           hubUrl: hubUrl(
             source,

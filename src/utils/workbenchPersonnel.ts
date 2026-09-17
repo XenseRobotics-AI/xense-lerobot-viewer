@@ -28,6 +28,7 @@ import type {
 } from "@/types/workbench-score.types";
 import type { WorkbenchConfigurationV2 } from "@/types/workbench-configuration.types";
 import {
+  resolveWorkbenchDatasetDevice,
   resolveWorkbenchPersonRole,
   resolveWorkbenchStaffing,
 } from "@/utils/workbenchConfiguration";
@@ -166,6 +167,21 @@ function qualityMembersForDay(
   });
 }
 
+function workstationForDatasetDay(
+  dataset: WorkbenchRollupDataset,
+  workstationMappings: Readonly<Record<string, string>>,
+  personnelConfig: WorkbenchPersonnelRollupConfig,
+  day: string,
+): string {
+  if (isUnifiedConfiguration(personnelConfig)) {
+    return (
+      resolveWorkbenchDatasetDevice(dataset, personnelConfig, day)
+        .workstation ?? ""
+    );
+  }
+  return getWorkbenchDatasetWorkstation(dataset, [workstationMappings]) ?? "";
+}
+
 export function computeWorkbenchPersonnelRollup(
   datasets: readonly WorkbenchRollupDataset[],
   workstationMappings: Readonly<Record<string, string>>,
@@ -178,8 +194,6 @@ export function computeWorkbenchPersonnelRollup(
   const workstationEpisodes = new Map<string, number>();
   const datasetAdditions = new Map<string, WorkbenchDailyAddition[]>();
   for (const dataset of datasets) {
-    const workstation =
-      getWorkbenchDatasetWorkstation(dataset, [workstationMappings]) ?? "";
     const additions = workbenchDatasetRangeContributions(dataset, range).filter(
       (addition) => {
         const hours = Number(addition.hours);
@@ -191,6 +205,12 @@ export function computeWorkbenchPersonnelRollup(
     for (const addition of additions) {
       const hours = Number(addition.hours);
       const episodes = Number(addition.episodes);
+      const workstation = workstationForDatasetDay(
+        dataset,
+        workstationMappings,
+        personnelConfig,
+        addition.day,
+      );
       const key = [addition.day, workstation || "—"].join("\u0000");
       workstationHours.set(key, (workstationHours.get(key) ?? 0) + hours);
       if (Number.isFinite(episodes) && episodes > 0) {

@@ -20,16 +20,6 @@ import { TacCapReplayScene } from "@/components/taccap-replay-scene";
 import UrdfVideoOverlay from "@/components/urdf-video-overlay";
 import * as THREE from "three";
 import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import {
   FiChevronLeft,
   FiChevronRight,
   FiPause,
@@ -48,7 +38,6 @@ import {
   getWorkbenchDisplayClockRemaining,
   getWorkbenchDisplaySlideIndex,
   getWorkbenchHeatmapWindow,
-  getWorkbenchDisplayDailyTargetHours,
   getWorkbenchDisplayRewardTone,
   getWorkbenchOverviewActiveCardIndex,
   pauseWorkbenchDisplayClock,
@@ -132,8 +121,6 @@ function displaySlideTitle(id: WorkbenchDisplaySlideId, t: Translator): string {
       return t("workbench.personnelWorkload");
     case "workstation-heatmap":
       return t("workbench.workstationDayHeatmap");
-    case "daily-trend":
-      return t("workbench.dailyTrend");
     case "top-groups":
       return t("workbench.topGroups");
     case "3d-replay":
@@ -731,141 +718,6 @@ function WorkstationHeatmapSlide({
   );
 }
 
-const DailyTrendSlide = memo(function DailyTrendSlide({
-  snapshot,
-  reducedMotion,
-  total,
-}: {
-  snapshot: WorkbenchDisplaySnapshot;
-  reducedMotion: boolean;
-  total: number;
-}) {
-  const t = useT();
-  const chartRows = snapshot.trend.map((row) => ({
-    ...row,
-    label: row.day.slice(5),
-  }));
-  const peakHours = Math.max(0, ...snapshot.trend.map((row) => row.hours));
-  const dailyTargetHours = getWorkbenchDisplayDailyTargetHours(
-    snapshot.dailyTargetHours,
-    snapshot.workstations.length,
-  );
-
-  return (
-    <section className={styles.slideSection}>
-      <SlideHeading
-        index={4}
-        total={total}
-        title={t("workbench.dailyTrend")}
-        meta={`${"2026-07-01"} → ${snapshot.dateRange.endDate ?? t("workbench.latest")} · ${t(snapshot.trend.length === 1 ? "workbench.reportingDay_one" : "workbench.reportingDay_other", { count: snapshot.trend.length })}`}
-      />
-      {chartRows.length === 0 ? (
-        <EmptySlide range={formatRange(snapshot, t)}>
-          {t("workbench.noDailyTrendData")}
-        </EmptySlide>
-      ) : (
-        <div className={styles.trendLayout}>
-          <div className={styles.chartFrame}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart
-                data={chartRows}
-                margin={{ top: 18, right: 22, bottom: 10, left: 4 }}
-              >
-                <CartesianGrid
-                  vertical={false}
-                  stroke="rgba(148, 163, 184, 0.13)"
-                  strokeDasharray="4 6"
-                />
-                <XAxis
-                  dataKey="label"
-                  minTickGap={34}
-                  tick={{ fill: "#87919f", fontSize: 14 }}
-                  tickLine={false}
-                  axisLine={{ stroke: "rgba(148, 163, 184, 0.18)" }}
-                />
-                <YAxis
-                  width={58}
-                  tick={{ fill: "#87919f", fontSize: 14 }}
-                  tickLine={false}
-                  axisLine={false}
-                  tickFormatter={(value: number) => `${value}h`}
-                />
-                <Tooltip
-                  cursor={{ stroke: "rgba(34, 211, 238, 0.28)" }}
-                  contentStyle={{
-                    background: "#171b20",
-                    border: "1px solid rgba(255,255,255,0.12)",
-                    borderRadius: 8,
-                    color: "#f1f5f9",
-                    fontSize: 14,
-                  }}
-                  formatter={(value) => [
-                    formatHours(Number(value ?? 0)),
-                    t("workbench.dailyHours"),
-                  ]}
-                  labelFormatter={(_, payload) =>
-                    String(payload[0]?.payload?.day ?? "")
-                  }
-                />
-                {dailyTargetHours > 0 && (
-                  <ReferenceLine
-                    y={dailyTargetHours}
-                    stroke="#fbbf24"
-                    strokeDasharray="8 7"
-                    strokeWidth={1.5}
-                    label={{
-                      value: t("workbench.dailyTarget", {
-                        hours: formatHours(dailyTargetHours),
-                      }),
-                      fill: "#fbbf24",
-                      fontSize: 13,
-                      position: "insideTopRight",
-                    }}
-                  />
-                )}
-                <Line
-                  type="monotone"
-                  dataKey="hours"
-                  stroke="#22d3ee"
-                  strokeWidth={4}
-                  dot={{ r: 4, fill: "#171b20", strokeWidth: 3 }}
-                  activeDot={{ r: 7, fill: "#22d3ee" }}
-                  isAnimationActive={!reducedMotion}
-                  animationDuration={1_500}
-                  animationEasing="ease-out"
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-          <aside className={styles.trendMetrics}>
-            <div className={styles.largeMetric}>
-              <span>{t("workbench.cumulativeHours")}</span>
-              <strong>
-                {formatHours(snapshot.summary.selectedRangeHours)}
-              </strong>
-              <small>{t("workbench.selectedReportingRange")}</small>
-            </div>
-            <div className={styles.smallMetrics}>
-              <div>
-                <span>
-                  {t("workbench.dailyTargetGroups", {
-                    count: formatCount(snapshot.workstations.length),
-                  })}
-                </span>
-                <strong>{formatHours(dailyTargetHours)}</strong>
-              </div>
-              <div>
-                <span>{t("workbench.peakDay")}</span>
-                <strong>{formatHours(peakHours)}</strong>
-              </div>
-            </div>
-          </aside>
-        </div>
-      )}
-    </section>
-  );
-});
-
 const ignoreTacCapModelReady = () => undefined;
 
 function TacCapReplaySlide({
@@ -1424,14 +1276,6 @@ export default function WorkbenchDisplay({
             snapshot={snapshot}
             elapsedMs={elapsedMs}
             windowCursor={heatmapCursorRef.current}
-            total={slides.length}
-          />
-        );
-      case "daily-trend":
-        return (
-          <DailyTrendSlide
-            snapshot={snapshot}
-            reducedMotion={reducedMotion}
             total={slides.length}
           />
         );

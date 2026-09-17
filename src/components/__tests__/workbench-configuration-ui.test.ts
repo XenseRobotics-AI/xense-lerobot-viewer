@@ -13,6 +13,8 @@ describe("Workbench unified Configuration UI", () => {
     expect(panel).toContain("<WorkbenchConfigurationEditor");
     expect(panel).not.toContain("<WorkbenchPersonnelMappingEditor");
     expect(panel).toContain('t("workbench.rewardRules")');
+    expect(panel).toContain("aria-pressed={mappingEditorOpen}");
+    expect(panel).toContain('t("workbench.settingsModeActive"');
   });
 
   test("shares one draft across three tabs and protects unsaved changes", async () => {
@@ -38,6 +40,8 @@ describe("Workbench unified Configuration UI", () => {
     expect(editor).toContain("nextWorkbenchPersonId");
     expect(editor).toContain("removeWorkbenchPerson");
     expect(editor).toContain("resolveWorkbenchStaffing");
+    expect(editor).toContain("resolveWorkbenchDeviceWorkstationId");
+    expect(editor).toContain("setWorkbenchDeviceWorkstation(");
     expect(editor).toContain('"inactive"');
     expect(editor).toContain("originalCollectors");
     expect(editor).toContain("collector-");

@@ -9,14 +9,17 @@ let root: string;
 const previousRoot = process.env.LOCAL_DATASET_ROOT;
 const originalFetch = globalThis.fetch;
 let requestedUrls: string[] = [];
+let requestedHeaders: Headers[] = [];
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "modelscope-catalog-route-"));
   process.env.LOCAL_DATASET_ROOT = root;
   requestedUrls = [];
-  globalThis.fetch = (async (input: string | URL) => {
+  requestedHeaders = [];
+  globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
     requestedUrls.push(url);
+    requestedHeaders.push(new Headers(init?.headers));
     if (url.includes("/openapi/v1/datasets?")) {
       return Response.json({
         success: true,
@@ -161,6 +164,7 @@ describe("ModelScope catalog route", () => {
     expect(requestedUrls).toContain(
       "https://modelscope.cn/openapi/v1/datasets?owner=XenseRobotics&page_number=1&page_size=50&sort=last_modified",
     );
+    expect(requestedHeaders[0].get("cookie")).toBeNull();
     expect(requestedUrls).toContain(
       "https://modelscope.cn/api/v1/datasets/XenseRobotics/TacVerse/repo/tree?Root=&PageNumber=1&PageSize=50&Revision=master",
     );
@@ -207,5 +211,76 @@ describe("ModelScope catalog route", () => {
       hubRepoId: "XenseRobotics/TacVerse",
       datasets: [{ downloads: null, storageBytes: null }],
     });
+  });
+
+  test("reports ModelScope access denial with a stable error code", async () => {
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      requestedHeaders.push(new Headers(init?.headers));
+      if (url.includes("/openapi/v1/datasets?")) {
+        return Response.json({
+          success: true,
+          data: {
+            datasets: [{ id: "XenseRobotics/TacVerse" }],
+            total_count: 1,
+          },
+        });
+      }
+      if (url.includes("/repo/tree?")) {
+        return Response.json(
+          {
+            RequestId: "test",
+            Code: 10020101037,
+            Message: "无权访问该数据集",
+            Data: null,
+          },
+          { status: 403 },
+        );
+      }
+      throw new Error(`Unexpected ModelScope request: ${url}`);
+    }) as typeof fetch;
+
+    const response = await POST(
+      new NextRequest("http://localhost/api/modelscope/catalog", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ org: "XenseRobotics/TacVerse" }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const events = (await response.text())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      code: "MODELSCOPE_ACCESS_DENIED",
+      error: expect.stringContaining("ModelScope 无权访问该数据集"),
+    });
+  });
+
+  test("sends the SDK-compatible ModelScope session cookie when a token is provided", async () => {
+    const response = await POST(
+      new NextRequest("http://localhost/api/modelscope/catalog", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          org: "XenseRobotics/TacVerse",
+          token: "ms_test_cookie",
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(requestedHeaders[0].get("authorization")).toBe(
+      "Bearer ms_test_cookie",
+    );
+    expect(requestedHeaders[0].get("token")).toBe("ms_test_cookie");
+    expect(requestedHeaders[0].get("cookie")).toBe(
+      "m_session_id=ms_test_cookie",
+    );
   });
 });

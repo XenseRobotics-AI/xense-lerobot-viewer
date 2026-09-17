@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import {
   defaultModelScopeDownloadRoot,
+  ModelScopeAccessDeniedError,
   parseModelScopeDownloadRequest,
   runModelScopeDownloadCheck,
 } from "@/lib/modelscope-download-runtime";
@@ -46,9 +47,18 @@ export async function POST(request: NextRequest): Promise<Response> {
       { headers: noStoreHeaders() },
     );
   } catch (error) {
-    const status = error instanceof TypeError ? 400 : 502;
+    const status =
+      error instanceof TypeError
+        ? 400
+        : error instanceof ModelScopeAccessDeniedError
+          ? 403
+          : 502;
     return Response.json(
-      { error: error instanceof Error ? error.message : String(error) },
+      {
+        error: error instanceof Error ? error.message : String(error),
+        code:
+          error instanceof ModelScopeAccessDeniedError ? error.code : undefined,
+      },
       { status, headers: noStoreHeaders() },
     );
   }

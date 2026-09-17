@@ -12,6 +12,7 @@ import type {
 import {
   nextWorkbenchPersonId,
   pruneWorkbenchWorkstations,
+  resolveWorkbenchDeviceWorkstationId,
   removeWorkbenchDevice,
   removeWorkbenchPerson,
   resolveWorkbenchPersonRole,
@@ -365,6 +366,15 @@ export default function WorkbenchConfigurationEditor({
 
       {tab === "devices" && (
         <div className="mt-4 space-y-5">
+          <label className="flex items-center gap-2 text-xs text-slate-400">
+            {zh ? "工位生效日期" : "Workstation effective date"}
+            <input
+              type="date"
+              value={day}
+              onChange={(event) => setDay(event.target.value)}
+              className="input w-auto"
+            />
+          </label>
           <ConfigTable
             title={zh ? "设备实例" : "Device instances"}
             headers={[
@@ -422,12 +432,19 @@ export default function WorkbenchConfigurationEditor({
                   <WorkstationInput
                     value={
                       draft.workstations.find(
-                        (station) => station.id === device.workstationId,
+                        (station) =>
+                          station.id ===
+                          resolveWorkbenchDeviceWorkstationId(device, day),
                       )?.name ?? ""
                     }
                     onCommit={(value) =>
                       update((next) =>
-                        setWorkbenchDeviceWorkstation(next, device.id, value),
+                        setWorkbenchDeviceWorkstation(
+                          next,
+                          device.id,
+                          value,
+                          day,
+                        ),
                       )
                     }
                   />
@@ -456,6 +473,7 @@ export default function WorkbenchConfigurationEditor({
                   type: "umi_gripper",
                   source: "robot_id",
                   workstationId: null,
+                  assignmentHistory: [],
                 }),
               )
             }
@@ -497,6 +515,7 @@ export default function WorkbenchConfigurationEditor({
                           type,
                           source: workbenchDeviceSourceForType(type),
                           workstationId: null,
+                          assignmentHistory: [],
                         });
                       })
                     }

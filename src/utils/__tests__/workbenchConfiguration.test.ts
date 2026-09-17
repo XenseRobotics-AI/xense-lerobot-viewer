@@ -8,6 +8,7 @@ import {
   removeWorkbenchDevice,
   removeWorkbenchPerson,
   resolveWorkbenchDatasetDevice,
+  resolveWorkbenchDeviceWorkstationId,
   resolveWorkbenchPersonRole,
   resolveWorkbenchStaffing,
   setWorkbenchDeviceWorkstation,
@@ -264,6 +265,72 @@ describe("Workbench configuration v2", () => {
     expect(resolveWorkbenchPersonRole(config.people[0], "2026-09-05")).toBe(
       "developer",
     );
+  });
+
+  test("applies device workstation changes from their effective date forward", () => {
+    const config = baseConfiguration();
+    config.staffingHistory[0].originalCollectors = 1;
+    config.staffingHistory[0].members = [
+      { personId: "collector", qualityWeight: 1 },
+    ];
+    config.staffingHistory.push({
+      workstationId: "NO",
+      effectiveDate: "2026-09-03",
+      status: "active",
+      originalCollectors: 1,
+      members: [{ personId: "collector", qualityWeight: 1 }],
+    });
+    setWorkbenchDeviceWorkstation(config, "robot", "NO", "2026-09-03");
+    const normalized = validateWorkbenchConfiguration(config).config;
+
+    expect(
+      resolveWorkbenchDeviceWorkstationId(normalized.devices[0], "2026-09-02"),
+    ).toBe("A1");
+    expect(
+      resolveWorkbenchDeviceWorkstationId(normalized.devices[0], "2026-09-03"),
+    ).toBe("NO");
+    expect(
+      resolveWorkbenchDatasetDevice(
+        { robotId: "bi_taccap_8" },
+        normalized,
+        "2026-09-02",
+      ).workstation,
+    ).toBe("A1");
+    expect(
+      resolveWorkbenchDatasetDevice(
+        { robotId: "bi_taccap_8" },
+        normalized,
+        "2026-09-03",
+      ).workstation,
+    ).toBe("NO");
+
+    const result = computeWorkbenchPersonnelRollup(
+      [
+        {
+          relativePath: "TacVerse/task-0901",
+          total_episodes: 2,
+          total_frames: 2,
+          fps: 30,
+          robot_type: "bi_taccap",
+          sizeBytes: 0,
+          robotId: "bi_taccap_8",
+          dailyAdditions: [
+            { day: "2026-09-02", hours: 8, episodes: 1, frames: 1 },
+            { day: "2026-09-03", hours: 8, episodes: 1, frames: 1 },
+          ],
+        },
+      ],
+      {},
+      normalized,
+      { startDate: "2026-09-02", endDate: "2026-09-04" },
+      { enabled: false, dailyTargetHours: 8, levels: [] },
+    );
+
+    expect(result.rows[0]).toMatchObject({
+      personId: "collector",
+      hours: 16,
+      workstations: ["A1", "NO"],
+    });
   });
 
   test("creates, reuses, suffixes, and prunes hidden workstation records", () => {

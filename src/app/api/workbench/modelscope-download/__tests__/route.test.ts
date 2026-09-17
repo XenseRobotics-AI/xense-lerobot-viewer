@@ -209,7 +209,56 @@ describe("ModelScope download routes", () => {
     expect(download.status).toBe(403);
   });
 
-  test("checks a nested dataset and normalizes physical ModelScope paths", async () => {
+  test("returns 403 when ModelScope denies dataset access", async () => {
+    globalThis.fetch = (async (input: string | URL) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.includes("/repo/tree?")) {
+        return Response.json(
+          {
+            RequestId: "test",
+            Code: 10020101037,
+            Message: "无权访问该数据集",
+            Data: null,
+          },
+          { status: 403 },
+        );
+      }
+      throw new Error(`Unexpected ModelScope request: ${url}`);
+    }) as typeof fetch;
+
+    const response = await CHECK(
+      request("http://localhost/api/workbench/modelscope-download/check", {
+        ...valid,
+        destinationRoot: root,
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      code: "MODELSCOPE_ACCESS_DENIED",
+      error: expect.stringContaining("ModelScope 无权访问该数据集"),
+    });
+  });
+
+  test("checks a nested dataset against the raw default repository", async () => {
+    const response = await CHECK(
+      request("http://localhost/api/workbench/modelscope-download/check", {
+        ...valid,
+        destinationRoot: root,
+      }),
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      source: "TacVerse/nested/example",
+      repoId: "TacVerse/nested/example",
+      hubRepoId: "XenseRobotics/TacVerse-Raw",
+      repoPath: "nested/example",
+      targetPath: path.join(root, "TacVerse", "nested", "example"),
+    });
+  });
+
+  test("normalizes legacy physical ModelScope paths", async () => {
     const response = await CHECK(
       request("http://localhost/api/workbench/modelscope-download/check", {
         ...valid,
@@ -259,7 +308,7 @@ describe("ModelScope download routes", () => {
       type: "result",
       result: {
         source: "TacVerse/nested/example",
-        hubRepoId: "XenseRobotics/TacVerse",
+        hubRepoId: "XenseRobotics/TacVerse-Raw",
         repoPath: "nested/example",
         fileCount: 4,
         concurrency: 2,
@@ -287,7 +336,7 @@ describe("ModelScope download routes", () => {
     );
     expect(state).toMatchObject({
       source: "TacVerse/nested/example",
-      hubRepoId: "XenseRobotics/TacVerse",
+      hubRepoId: "XenseRobotics/TacVerse-Raw",
       repoPath: "nested/example",
       fullSha: check.revisionSha,
       metaSha: check.revisionSha,

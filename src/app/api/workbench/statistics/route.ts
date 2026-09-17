@@ -6,10 +6,7 @@ import {
   readModelScopeDeviceEvidence,
   readRawModelScopeCatalog,
 } from "@/lib/modelscope-catalog-cache";
-import {
-  discoverLocalDatasets,
-  hasLocalDatasetInfoField,
-} from "@/lib/local-datasets-discovery";
+import { discoverLocalDatasets } from "@/lib/local-datasets-discovery";
 import { EMPTY_TAGS } from "@/lib/dataset-tags";
 import { EMPTY_FACETS, type DatasetFacets } from "@/lib/dataset-facets";
 import { readWorkbenchConfiguration } from "@/lib/workbench-configuration-store";
@@ -91,6 +88,8 @@ type WorkbenchDatasetSummary = Awaited<
   uploaderDisplayName?: string | null;
   durationHours?: number | null;
   hubStorageBytes?: number | null;
+  hubRepoId?: string | null;
+  hubPath?: string | null;
   dailyAdditions?: WorkbenchDailyAddition[];
   tacflowScore?: WorkbenchDatasetScore;
   hubSource?: TacverseDatasetStatisticsSource;
@@ -209,8 +208,11 @@ function localNumberOrRemote(
   >["datasets"][number],
   field: "total_episodes" | "total_frames" | "total_tasks" | "fps",
   remoteValue: unknown,
+  localSource: Awaited<
+    ReturnType<typeof discoverLocalDatasets>
+  >["datasets"][number] = dataset,
 ): number | null {
-  const localFieldExists = dataset.localInfoFields?.has(field) ?? true;
+  const localFieldExists = localSource.localInfoFields?.has(field) ?? true;
   const local = localFieldExists ? asNumber(dataset[field]) : null;
   if (local !== null) return local;
   return asNumber(remoteValue);
@@ -231,9 +233,17 @@ function datasetHours(
     ReturnType<typeof discoverLocalDatasets>
   >["datasets"][number],
   remote: HfCatalogEntry | undefined,
+  localSource: Awaited<
+    ReturnType<typeof discoverLocalDatasets>
+  >["datasets"][number] = dataset,
 ): number {
-  const localFrames = asNumber(dataset.total_frames);
-  const localFps = asNumber(dataset.fps);
+  const localFrames = localNumberOrRemote(
+    dataset,
+    "total_frames",
+    null,
+    localSource,
+  );
+  const localFps = localNumberOrRemote(dataset, "fps", null, localSource);
   if (
     localFrames !== null &&
     localFrames > 0 &&
@@ -248,8 +258,9 @@ function datasetHours(
     dataset,
     "total_frames",
     remote?.totalFrames,
+    localSource,
   );
-  const fps = localNumberOrRemote(dataset, "fps", remote?.fps);
+  const fps = localNumberOrRemote(dataset, "fps", remote?.fps, localSource);
   return frames !== null && frames > 0 && fps !== null && fps > 0
     ? frames / fps / 3600
     : 0;
@@ -258,6 +269,9 @@ function datasetHours(
 function dailyAdditionsForDataset(
   dataset: LocalDataset & { remoteOnly?: boolean },
   remote: HfCatalogEntry | undefined,
+  localSource: Awaited<
+    ReturnType<typeof discoverLocalDatasets>
+  >["datasets"][number] = dataset,
 ): WorkbenchDailyAddition[] {
   const suffixDay = workbenchDatasetSuffixDay(
     dataset.relativePath,
@@ -274,12 +288,22 @@ function dailyAdditionsForDataset(
     {
       day: suffixDay,
       episodes: nonNegativeCount(
-        localNumberOrRemote(dataset, "total_episodes", remote?.totalEpisodes),
+        localNumberOrRemote(
+          dataset,
+          "total_episodes",
+          remote?.totalEpisodes,
+          localSource,
+        ),
       ),
       frames: nonNegativeCount(
-        localNumberOrRemote(dataset, "total_frames", remote?.totalFrames),
+        localNumberOrRemote(
+          dataset,
+          "total_frames",
+          remote?.totalFrames,
+          localSource,
+        ),
       ),
-      hours: roundHours(datasetHours(dataset, remote)),
+      hours: roundHours(datasetHours(dataset, remote, localSource)),
     },
   ];
 }
@@ -291,6 +315,9 @@ function applyCatalogMetadata(
   remote: HfCatalogEntry | undefined,
   hubSource: TacverseDatasetStatisticsSource | undefined,
   dailyAdditions: WorkbenchDailyAddition[] = [],
+  localSource: Awaited<
+    ReturnType<typeof discoverLocalDatasets>
+  >["datasets"][number] = dataset,
 ): WorkbenchDatasetSummary {
   const metadata = metadataFromCatalogEntry(remote);
   const source = workbenchDatasetSourceKey(dataset.relativePath);
@@ -310,14 +337,28 @@ function applyCatalogMetadata(
     codebase_version: dataset.codebase_version,
     robot_type: dataset.robot_type ?? remote?.robotType ?? null,
     total_episodes:
-      localNumberOrRemote(dataset, "total_episodes", remote?.totalEpisodes) ??
-      0,
+      localNumberOrRemote(
+        dataset,
+        "total_episodes",
+        remote?.totalEpisodes,
+        localSource,
+      ) ?? 0,
     total_frames:
-      localNumberOrRemote(dataset, "total_frames", remote?.totalFrames) ?? 0,
+      localNumberOrRemote(
+        dataset,
+        "total_frames",
+        remote?.totalFrames,
+        localSource,
+      ) ?? 0,
     total_tasks:
-      localNumberOrRemote(dataset, "total_tasks", remote?.totalTasks) ?? 0,
-    fps: localNumberOrRemote(dataset, "fps", remote?.fps) ?? 0,
-    durationHours: datasetHours(dataset, remote),
+      localNumberOrRemote(
+        dataset,
+        "total_tasks",
+        remote?.totalTasks,
+        localSource,
+      ) ?? 0,
+    fps: localNumberOrRemote(dataset, "fps", remote?.fps, localSource) ?? 0,
+    durationHours: datasetHours(dataset, remote, localSource),
     hubStorageBytes: metadata.hubStorageBytes,
     tasks: dataset.tasks,
     hf: metadata,
@@ -326,6 +367,18 @@ function applyCatalogMetadata(
     uploaderDisplayName: metadata.uploaderDisplayName,
     dailyAdditions,
     hubSource,
+    hubRepoId:
+      hubSource === "modelscope"
+        ? typeof remote?.hubRepoId === "string"
+          ? remote.hubRepoId
+          : null
+        : null,
+    hubPath:
+      hubSource === "modelscope"
+        ? typeof remote?.hubPath === "string"
+          ? remote.hubPath
+          : null
+        : null,
   };
 }
 

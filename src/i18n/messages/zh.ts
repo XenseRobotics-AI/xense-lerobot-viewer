@@ -863,6 +863,8 @@ export const zh: Record<MessageKey, string> = {
   "workbench.workstationMappings": "工位映射",
   "workbench.personnelMapping": "人员映射",
   "workbench.rewardRules": "奖励规则",
+  "workbench.settingsMode": "设置模式",
+  "workbench.settingsModeActive": "正在设置：{mode}",
   "workbench.includeReplay": "包含 3D Replay",
   "workbench.dataSourcesAria": "Workbench 数据来源",
   "workbench.datasetsAwaitingDate": "等待确认日期的 Workbench 数据集",
@@ -905,19 +907,11 @@ export const zh: Record<MessageKey, string> = {
   "workbench.pagePersonnel": "第 {page} / {pages} 页 · {count} 名人员",
   "workbench.noPersonnelWorkload": "该区间没有人员工作量",
   "workbench.noDataSince": "自 {date} 起没有每日新增",
-  "workbench.noDailyTrendData": "该区间没有每日趋势数据",
   "workbench.windowMeta":
     "{start} → {end} · 窗口 {page} / {pages} · 前 {count}",
   "workbench.noWorkstationDayData": "该区间没有工位日数据",
-  "workbench.dailyTrend": "每日趋势",
   "workbench.reportingDay_one": "{count} 个统计日",
   "workbench.reportingDay_other": "{count} 个统计日",
-  "workbench.dailyHours": "每日时长",
-  "workbench.dailyTarget": "每日目标 {hours}",
-  "workbench.cumulativeHours": "累计时长",
-  "workbench.selectedReportingRange": "所选统计区间",
-  "workbench.dailyTargetGroups": "每日目标 · {count} 个分组",
-  "workbench.peakDay": "峰值日",
   "workbench.topGroups": "分组排行",
   "workbench.topGroupsMeta": "工位 · {range} · 前 {count}",
   "workbench.noGroupData": "该区间没有分组数据",
@@ -1201,7 +1195,7 @@ export const zh: Record<MessageKey, string> = {
   "workbench.hfDownloadRepoHint":
     "使用 owner/repo；单个 Folder 子数据集使用 owner/repo/folder。",
   "workbench.hfDownloadModelScopeRepoHint":
-    "使用 TacVerse/path/to/dataset，或 XenseRobotics/TacVerse/path/to/dataset。",
+    "使用 TacVerse/path/to/dataset、XenseRobotics/TacVerse-Raw/path/to/dataset，或旧路径 XenseRobotics/TacVerse/path/to/dataset。",
   "workbench.hfDownloadRoot": "下载根目录",
   "workbench.hfDownloadBrowse": "浏览…",
   "workbench.hfDownloadChooseRoot": "选择 LeRobot 下载根目录",
@@ -1363,7 +1357,6 @@ export const zh: Record<MessageKey, string> = {
   "workbench.exportCsv": "导出 CSV",
   "workbench.copyShareLink": "复制分享链接",
   "workbench.noWorkstationFilterMatch": "没有工位行符合过滤条件。",
-  "workbench.openDailyTrend": "打开 {date} 的每日趋势",
 
   // ── charts (Episodes tab) ───────────────────────────────────────────────
   "chart.aria": "Episode 图表数据",

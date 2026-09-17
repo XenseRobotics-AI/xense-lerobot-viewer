@@ -60,6 +60,15 @@ type ModelScopeTreeResponse = {
   TotalCount?: unknown;
 };
 
+class ModelScopeAccessDeniedError extends Error {
+  readonly code = "MODELSCOPE_ACCESS_DENIED";
+
+  constructor(message = "ModelScope dataset access denied.") {
+    super(message);
+    this.name = "ModelScopeAccessDeniedError";
+  }
+}
+
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -81,6 +90,22 @@ function safeError(value: unknown, token: string | null): string {
   return token ? message.split(token).join("[REDACTED]") : message;
 }
 
+function isAccessDeniedMessage(value: string): boolean {
+  return /无权访问|access\s*denied|forbidden|unauthori[sz]ed/iu.test(value);
+}
+
+function modelScopeRequestError(status: number, detail: string): Error {
+  if (status === 401 || status === 403 || isAccessDeniedMessage(detail)) {
+    return new ModelScopeAccessDeniedError(
+      "ModelScope 无权访问该数据集。请确认已保存有权限的 ModelScope Token，且账号已获准访问该数据集。",
+    );
+  }
+  const suffix = detail
+    ? `: ${detail.replace(/\s+/gu, " ").slice(0, 240)}`
+    : "";
+  return new Error(`ModelScope request failed (${status})${suffix}.`);
+}
+
 function resolveUrl(target: ModelScopeDatasetTarget, filename: string): string {
   const encoded = target.repoId.split("/").map(encodeURIComponent).join("/");
   const encodedFile = filename.split("/").map(encodeURIComponent).join("/");
@@ -97,7 +122,13 @@ function validNestedDatasetPath(value: string): boolean {
 }
 
 function authHeaders(token: string | null): HeadersInit {
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  return token
+    ? {
+        Authorization: `Bearer ${token}`,
+        Cookie: `m_session_id=${encodeURIComponent(token)}`,
+        Token: token,
+      }
+    : {};
 }
 
 async function fetchJson(
@@ -118,12 +149,7 @@ async function fetchJson(
     });
     if (!response.ok) {
       const detail = (await response.text().catch(() => "")).trim();
-      const suffix = detail
-        ? `: ${detail.replace(/\s+/gu, " ").slice(0, 240)}`
-        : "";
-      throw new Error(
-        `ModelScope request failed (${response.status})${suffix}.`,
-      );
+      throw modelScopeRequestError(response.status, detail);
     }
     return await response.json();
   } finally {
@@ -344,10 +370,15 @@ async function listTree(
       !payload.Data ||
       !Array.isArray(payload.Data.Files)
     ) {
-      throw new Error(
+      const message =
         stringOrNull(payload?.Message) ||
-          "ModelScope returned an invalid repository tree.",
-      );
+        "ModelScope returned an invalid repository tree.";
+      if (isAccessDeniedMessage(message)) {
+        throw new ModelScopeAccessDeniedError(
+          "ModelScope 无权访问该数据集。请确认已保存有权限的 ModelScope Token，且账号已获准访问该数据集。",
+        );
+      }
+      throw new Error(message);
     }
     const files = payload.Data.Files.filter(
       (file): file is ModelScopeTreeFile =>
@@ -618,8 +649,10 @@ export async function POST(request: NextRequest): Promise<Response> {
           await fs.rename(temporary, cache);
           send({ type: "result", result: catalog });
         } catch (error: unknown) {
+          const denied = error instanceof ModelScopeAccessDeniedError;
           send({
             type: "error",
+            code: denied ? error.code : "MODELSCOPE_CATALOG_FAILED",
             error: safeError(error, token),
           });
         } finally {

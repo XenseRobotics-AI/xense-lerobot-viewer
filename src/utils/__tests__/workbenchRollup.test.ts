@@ -31,6 +31,7 @@ import {
   workbenchAdditionDatasetPaths,
   workbenchDatasetSuffixDay,
   workbenchDatasetRangeContributions,
+  workbenchDatasetSourceRepoId,
   workbenchDatasetSourceKey,
   workbenchDayKey,
   workbenchGroupAdditionDatasetNames,
@@ -591,6 +592,18 @@ describe("normalizeWorkbenchDateRange", () => {
 });
 
 describe("workbench source repo ids", () => {
+  test("uses the true ModelScope repository and path when available", () => {
+    const item = dataset("TacVerse/nested/example-0917", {
+      hubSource: "modelscope",
+      hubRepoId: "XenseRobotics/TacVerse-Raw",
+      hubPath: "nested/example-0917",
+    });
+
+    expect(workbenchDatasetSourceRepoId(item)).toBe(
+      "XenseRobotics/TacVerse-Raw/nested/example-0917",
+    );
+  });
+
   test("returns sorted full Hub repo ids for each robot_id group", () => {
     const repos = workbenchGroupSourceRepoIds(
       [
@@ -634,6 +647,28 @@ describe("workbench source repo ids", () => {
       "TacVerse/z-last-0828",
     ]);
     expect(repos.get("robot-b")).toEqual(["TacVerse/robot-b-0828"]);
+  });
+
+  test("groups by true ModelScope source repos instead of local logical paths", () => {
+    const repos = workbenchGroupSourceRepoIds(
+      [
+        dataset("TacVerse/nested/example-0917", {
+          hubSource: "modelscope",
+          hubRepoId: "XenseRobotics/TacVerse-Raw",
+          hubPath: "nested/example-0917",
+          robotId: "robot-a",
+          dailyAdditions: [
+            { day: "2026-09-17", episodes: 1, frames: 3600, hours: 0.1 },
+          ],
+        }),
+      ],
+      "robot_id",
+      { startDate: "2026-09-17", endDate: "2026-09-18" },
+    );
+
+    expect(repos.get("robot-a")).toEqual([
+      "XenseRobotics/TacVerse-Raw/nested/example-0917",
+    ]);
   });
 });
 

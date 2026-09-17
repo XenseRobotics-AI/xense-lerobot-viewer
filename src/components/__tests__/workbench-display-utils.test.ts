@@ -48,7 +48,6 @@ function snapshotInput(
     workstations: [],
     heatmapDays: [],
     heatmapRows: [],
-    trend: [],
     topGroups: [],
     ...overrides,
   };
@@ -61,14 +60,13 @@ describe("Workbench display slide sequence", () => {
       "workstation-detail",
       "personnel-workload",
       "workstation-heatmap",
-      "daily-trend",
       "top-groups",
       "taccap-video",
     ]);
     expect(WORKBENCH_DISPLAY_SLIDES.map((slide) => slide.durationMs)).toEqual([
-      9_000, 15_000, 15_000, 12_000, 11_000, 11_000, 20_000,
+      9_000, 15_000, 15_000, 12_000, 11_000, 20_000,
     ]);
-    expect(WORKBENCH_DISPLAY_TOTAL_DURATION_MS).toBe(93_000);
+    expect(WORKBENCH_DISPLAY_TOTAL_DURATION_MS).toBe(82_000);
   });
 
   test("ships the showcase asset at its Next.js static path", async () => {
@@ -79,7 +77,7 @@ describe("Workbench display slide sequence", () => {
 
   test("moves manually in either direction and wraps at both ends", () => {
     expect(getWorkbenchDisplaySlideIndex(0, 1)).toBe(1);
-    expect(getWorkbenchDisplaySlideIndex(0, -1)).toBe(6);
+    expect(getWorkbenchDisplaySlideIndex(0, -1)).toBe(5);
     expect(getWorkbenchDisplaySlideIndex(3, 1)).toBe(4);
   });
 
@@ -92,15 +90,11 @@ describe("Workbench display slide sequence", () => {
       slideIndex: 1,
       slideElapsedMs: 0,
     });
-    expect(getWorkbenchDisplaySlideAtElapsed(72_999)).toEqual({
+    expect(getWorkbenchDisplaySlideAtElapsed(81_999)).toEqual({
       slideIndex: 5,
-      slideElapsedMs: 10_999,
+      slideElapsedMs: 19_999,
     });
-    expect(getWorkbenchDisplaySlideAtElapsed(73_000)).toEqual({
-      slideIndex: 6,
-      slideElapsedMs: 0,
-    });
-    expect(getWorkbenchDisplaySlideAtElapsed(93_000)).toEqual({
+    expect(getWorkbenchDisplaySlideAtElapsed(82_000)).toEqual({
       slideIndex: 0,
       slideElapsedMs: 0,
     });
@@ -357,7 +351,6 @@ describe("Workbench display snapshot", () => {
     });
     expect(snapshot.workstations).toEqual([]);
     expect(snapshot.heatmapRows).toEqual([]);
-    expect(snapshot.trend).toEqual([]);
     expect(snapshot.topGroups).toEqual([]);
   });
 });
@@ -537,23 +530,22 @@ describe("TacCap Workbench replay", () => {
       "workstation-detail",
       "personnel-workload",
       "workstation-heatmap",
-      "daily-trend",
       "top-groups",
       "3d-replay",
       "taccap-video",
     ]);
-    expect(slides[6].durationMs).toBe(15_000);
-    expect(slides[7].durationMs).toBe(20_000);
-    expect(WORKBENCH_DISPLAY_REPLAY_TOTAL_DURATION_MS).toBe(108_000);
-    expect(getWorkbenchDisplaySlideAtElapsed(87_999, slides)).toEqual({
-      slideIndex: 6,
+    expect(slides[5].durationMs).toBe(15_000);
+    expect(slides[6].durationMs).toBe(20_000);
+    expect(WORKBENCH_DISPLAY_REPLAY_TOTAL_DURATION_MS).toBe(97_000);
+    expect(getWorkbenchDisplaySlideAtElapsed(76_999, slides)).toEqual({
+      slideIndex: 5,
       slideElapsedMs: 14_999,
     });
     expect(getWorkbenchDisplaySlideAtElapsed(88_000, slides)).toEqual({
-      slideIndex: 7,
-      slideElapsedMs: 0,
+      slideIndex: 6,
+      slideElapsedMs: 11_000,
     });
-    expect(getWorkbenchDisplaySlideAtElapsed(108_000, slides)).toEqual({
+    expect(getWorkbenchDisplaySlideAtElapsed(97_000, slides)).toEqual({
       slideIndex: 0,
       slideElapsedMs: 0,
     });
@@ -562,16 +554,16 @@ describe("TacCap Workbench replay", () => {
   test("switches to the final video when a short replay window ends", () => {
     const slides = getWorkbenchDisplaySlides(true, 8.5);
 
-    expect(slides[6]).toMatchObject({
+    expect(slides[5]).toMatchObject({
       id: "3d-replay",
       durationMs: 8_500,
     });
-    expect(getWorkbenchDisplaySlideAtElapsed(80_999, slides)).toEqual({
-      slideIndex: 6,
+    expect(getWorkbenchDisplaySlideAtElapsed(69_999, slides)).toEqual({
+      slideIndex: 5,
       slideElapsedMs: 7_999,
     });
-    expect(getWorkbenchDisplaySlideAtElapsed(81_500, slides)).toEqual({
-      slideIndex: 7,
+    expect(getWorkbenchDisplaySlideAtElapsed(70_500, slides)).toEqual({
+      slideIndex: 6,
       slideElapsedMs: 0,
     });
   });

@@ -30,13 +30,22 @@ export type WorkbenchDeviceV2 = {
   /** Determined by type; exposed so malformed documents can be diagnosed. */
   source: WorkbenchDeviceSource;
   identifier: string;
+  /** Latest value for legacy consumers; day-aware code must use assignmentHistory. */
   workstationId: string | null;
+  assignmentHistory?: WorkbenchDeviceAssignmentV2[];
 };
 
 export type WorkbenchLegacyDeviceAliasV2 = {
   id: string;
   identifier: string;
   deviceId: string | null;
+  /** Latest explicit alias value; day-aware code must use assignmentHistory. */
+  workstationId: string | null;
+  assignmentHistory?: WorkbenchDeviceAssignmentV2[];
+};
+
+export type WorkbenchDeviceAssignmentV2 = {
+  effectiveDate: string;
   workstationId: string | null;
 };
 

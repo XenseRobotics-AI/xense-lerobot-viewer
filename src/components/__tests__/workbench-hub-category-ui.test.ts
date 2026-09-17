@@ -140,6 +140,7 @@ describe("Workbench Hub category UI contract", () => {
     expect(grouping).toContain('label: "HF"');
     expect(grouping).toContain('label: "ModelScope"');
     expect(grouping).toContain("hubSource: dataset.hubSource");
+    expect(grouping).toContain("workbenchDatasetSourceRepoId(dataset)");
     expect(grouping).toContain("<SourceReposCell repos={row.sourceRepos} />");
   });
 });

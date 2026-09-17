@@ -409,7 +409,7 @@ describe("TacVerse dataset statistics route", () => {
       datasets: [
         {
           repoId: "TacVerse/taccap-g1-valid-task-0905",
-          hubRepoId: "XenseRobotics/TacVerse",
+          hubRepoId: "XenseRobotics/TacVerse-Raw",
           hubPath: "taccap-g1-valid-task-0905",
           totalEpisodes: 15,
           totalFrames: 54_000,
@@ -435,10 +435,10 @@ describe("TacVerse dataset statistics route", () => {
       source: "modelscope",
       episodes: 15,
       frames: 54_000,
-      hubRepoId: "XenseRobotics/TacVerse",
+      hubRepoId: "XenseRobotics/TacVerse-Raw",
       hubPath: "taccap-g1-valid-task-0905",
       hubUrl:
-        "https://modelscope.cn/datasets/XenseRobotics/TacVerse/tree/master/taccap-g1-valid-task-0905",
+        "https://modelscope.cn/datasets/XenseRobotics/TacVerse-Raw/tree/master/taccap-g1-valid-task-0905",
       localStatus: "downloaded",
     });
 
