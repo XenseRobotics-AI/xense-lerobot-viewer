@@ -290,6 +290,7 @@ export const en = {
   "viewer.tab.parquet": "Parquet",
   "viewer.tab.parquetTitle":
     "Browse the raw contents of any parquet file in this dataset",
+  "viewer.backToGroup": "Back to the dataset list",
   "viewer.home": "Home",
 
   // ── episode viewer: body ────────────────────────────────────────────────
