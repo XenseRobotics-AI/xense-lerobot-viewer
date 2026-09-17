@@ -158,6 +158,7 @@ export const en = {
   "source.perEpisode": "Per episode",
   "source.share": "Share",
   "source.needAttention": "need attention",
+  "source.robotsMore": "+{count} more",
   "source.browseTasks": "Browse {count} tasks",
   "source.syncButton": "Sync from Hugging Face",
   "source.syncHint":

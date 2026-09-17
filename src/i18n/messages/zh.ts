@@ -163,6 +163,7 @@ export const zh: Record<MessageKey, string> = {
   "source.perEpisode": "Per episode",
   "source.share": "占比",
   "source.needAttention": "需要处理",
+  "source.robotsMore": "另有 {count} 种",
   "source.browseTasks": "浏览 {count} 个任务",
   "source.syncButton": "从 Hugging Face 同步",
   "source.syncHint": "通过 hf-mirror 下载 {source}。会先列出将要拉取的内容。",
