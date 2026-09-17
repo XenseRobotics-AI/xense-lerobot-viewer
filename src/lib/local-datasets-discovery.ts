@@ -112,6 +112,30 @@ export type LocalDatasetsResponse = {
   errors: { path: string; message: string }[];
 };
 
+export type SerializableLocalDatasetSummary = Omit<
+  LocalDatasetSummary,
+  "localInfoFields"
+>;
+
+export type SerializableLocalDatasetsResponse = Omit<
+  LocalDatasetsResponse,
+  "datasets"
+> & {
+  datasets: SerializableLocalDatasetSummary[];
+};
+
+export function toSerializableLocalDatasetsResponse(
+  data: LocalDatasetsResponse,
+): SerializableLocalDatasetsResponse {
+  return {
+    ...data,
+    datasets: data.datasets.map((dataset) => {
+      const { localInfoFields: _localInfoFields, ...serializable } = dataset;
+      return serializable;
+    }),
+  };
+}
+
 async function readDatasetInfo(
   datasetDir: string,
 ): Promise<LocalDatasetInfoJson | null> {
