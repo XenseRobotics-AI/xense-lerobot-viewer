@@ -33,8 +33,10 @@ describe("Workbench dataset download tools UI contract", () => {
 
   test("defaults to all files and requires check plus confirmation", async () => {
     const panel = await source("hf-download-panel.tsx");
-    expect(panel).toContain('useState<DownloadProvider>("huggingface")');
-    expect(panel).toContain('useState<DownloadScope>("all")');
+    expect(panel).toContain('provider: "huggingface"');
+    expect(panel).toContain('scope: "all"');
+    expect(panel).toContain("useSyncExternalStore");
+    expect(panel).toContain("downloadPanelState");
     expect(panel).toContain("DEFAULT_DOWNLOAD_CONCURRENCY");
     expect(panel).toContain('type="range"');
     expect(panel).toContain("workbench.hfDownloadConcurrency");
@@ -64,7 +66,7 @@ describe("Workbench dataset download tools UI contract", () => {
       "readModelScopeDownloadRoot",
       "/api/local-datasets/pick-folder",
       'role="progressbar"',
-      "abortRef.current?.abort()",
+      "downloadAbortRef.current?.abort()",
       "result.backupPath",
       "result.revisionSha",
       "result.metaOnly",

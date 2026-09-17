@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  type SetStateAction,
+  useCallback,
+  useEffect,
+  useMemo,
+  useSyncExternalStore,
+} from "react";
 import { useT } from "@/context/locale-context";
 import {
   formatTransferRate,
@@ -78,6 +84,129 @@ const DEFAULT_QUEUE_CONCURRENCY = 2;
 const MIN_QUEUE_CONCURRENCY = 1;
 const MAX_QUEUE_CONCURRENCY = 3;
 
+type DownloadPanelState = {
+  provider: DownloadProvider;
+  source: string;
+  root: string;
+  scope: DownloadScope;
+  concurrency: number;
+  queueText: string;
+  queueConcurrency: number;
+  queueItems: HfDownloadQueueItem[];
+  queueConfirmed: boolean;
+  queueChecking: boolean;
+  queueRunning: boolean;
+  check: DownloadCheck | null;
+  checkedRequest: DownloadRequest | null;
+  confirmed: boolean;
+  checking: boolean;
+  downloading: boolean;
+  progress: DownloadProgress | null;
+  result: DownloadResult | null;
+  error: string | null;
+  browseMessage: string | null;
+};
+
+const downloadPanelListeners = new Set<() => void>();
+const downloadAbortRef: { current: AbortController | null } = {
+  current: null,
+};
+let downloadPanelState: DownloadPanelState = {
+  provider: "huggingface",
+  source: "",
+  root: "",
+  scope: "all",
+  concurrency: DEFAULT_DOWNLOAD_CONCURRENCY,
+  queueText: "",
+  queueConcurrency: DEFAULT_QUEUE_CONCURRENCY,
+  queueItems: [],
+  queueConfirmed: false,
+  queueChecking: false,
+  queueRunning: false,
+  check: null,
+  checkedRequest: null,
+  confirmed: false,
+  checking: false,
+  downloading: false,
+  progress: null,
+  result: null,
+  error: null,
+  browseMessage: null,
+};
+
+function subscribeDownloadPanel(listener: () => void): () => void {
+  downloadPanelListeners.add(listener);
+  return () => downloadPanelListeners.delete(listener);
+}
+
+function getDownloadPanelSnapshot(): DownloadPanelState {
+  return downloadPanelState;
+}
+
+function setDownloadPanelState(
+  patch:
+    | Partial<DownloadPanelState>
+    | ((current: DownloadPanelState) => Partial<DownloadPanelState>),
+): void {
+  const nextPatch =
+    typeof patch === "function" ? patch(downloadPanelState) : patch;
+  downloadPanelState = { ...downloadPanelState, ...nextPatch };
+  for (const listener of downloadPanelListeners) listener();
+}
+
+function useDownloadPanelField<K extends keyof DownloadPanelState>(
+  key: K,
+): [
+  DownloadPanelState[K],
+  (value: SetStateAction<DownloadPanelState[K]>) => void,
+] {
+  const snapshot = useSyncExternalStore(
+    subscribeDownloadPanel,
+    getDownloadPanelSnapshot,
+    getDownloadPanelSnapshot,
+  );
+  const setValue = useCallback(
+    (value: SetStateAction<DownloadPanelState[K]>) => {
+      setDownloadPanelState((current) => {
+        const previous = current[key];
+        const next =
+          typeof value === "function"
+            ? (
+                value as (
+                  previous: DownloadPanelState[K],
+                ) => DownloadPanelState[K]
+              )(previous)
+            : value;
+        return { [key]: next } as Partial<DownloadPanelState>;
+      });
+    },
+    [key],
+  );
+  return [snapshot[key], setValue];
+}
+
+function resetSingleDownloadState(): void {
+  setDownloadPanelState({
+    check: null,
+    checkedRequest: null,
+    confirmed: false,
+    result: null,
+    progress: null,
+  });
+}
+
+function resetQueueDownloadState(): void {
+  setDownloadPanelState({
+    queueItems: [],
+    queueConfirmed: false,
+  });
+}
+
+function resetDownloadPlanState(): void {
+  resetSingleDownloadState();
+  resetQueueDownloadState();
+}
+
 function parseQueueSources(value: string): string[] {
   const seen = new Set<string>();
   const sources: string[] = [];
@@ -139,31 +268,31 @@ export default function HfDownloadPanel({
   initialSource = "",
 }: HfDownloadPanelProps) {
   const t = useT();
-  const [provider, setProvider] = useState<DownloadProvider>("huggingface");
-  const [source, setSource] = useState(initialSource);
-  const [root, setRoot] = useState("");
-  const [scope, setScope] = useState<DownloadScope>("all");
-  const [concurrency, setConcurrency] = useState(DEFAULT_DOWNLOAD_CONCURRENCY);
-  const [queueText, setQueueText] = useState("");
-  const [queueConcurrency, setQueueConcurrency] = useState(
-    DEFAULT_QUEUE_CONCURRENCY,
-  );
-  const [queueItems, setQueueItems] = useState<HfDownloadQueueItem[]>([]);
-  const [queueConfirmed, setQueueConfirmed] = useState(false);
-  const [queueChecking, setQueueChecking] = useState(false);
-  const [queueRunning, setQueueRunning] = useState(false);
-  const [check, setCheck] = useState<DownloadCheck | null>(null);
-  const [checkedRequest, setCheckedRequest] = useState<DownloadRequest | null>(
-    null,
-  );
-  const [confirmed, setConfirmed] = useState(false);
-  const [checking, setChecking] = useState(false);
-  const [downloading, setDownloading] = useState(false);
-  const [progress, setProgress] = useState<DownloadProgress | null>(null);
-  const [result, setResult] = useState<DownloadResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [browseMessage, setBrowseMessage] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const [provider, setProvider] = useDownloadPanelField("provider");
+  const [source, setSource] = useDownloadPanelField("source");
+  const [root, setRoot] = useDownloadPanelField("root");
+  const [scope, setScope] = useDownloadPanelField("scope");
+  const [concurrency, setConcurrency] = useDownloadPanelField("concurrency");
+  const [queueText, setQueueText] = useDownloadPanelField("queueText");
+  const [queueConcurrency, setQueueConcurrency] =
+    useDownloadPanelField("queueConcurrency");
+  const [queueItems, setQueueItems] = useDownloadPanelField("queueItems");
+  const [queueConfirmed, setQueueConfirmed] =
+    useDownloadPanelField("queueConfirmed");
+  const [queueChecking, setQueueChecking] =
+    useDownloadPanelField("queueChecking");
+  const [queueRunning, setQueueRunning] = useDownloadPanelField("queueRunning");
+  const [check, setCheck] = useDownloadPanelField("check");
+  const [checkedRequest, setCheckedRequest] =
+    useDownloadPanelField("checkedRequest");
+  const [confirmed, setConfirmed] = useDownloadPanelField("confirmed");
+  const [checking, setChecking] = useDownloadPanelField("checking");
+  const [downloading, setDownloading] = useDownloadPanelField("downloading");
+  const [progress, setProgress] = useDownloadPanelField("progress");
+  const [result, setResult] = useDownloadPanelField("result");
+  const [error, setError] = useDownloadPanelField("error");
+  const [browseMessage, setBrowseMessage] =
+    useDownloadPanelField("browseMessage");
   const targetPreview = useMemo(
     () => previewTarget(root, source, provider),
     [provider, root, source],
@@ -191,6 +320,12 @@ export default function HfDownloadPanel({
   const busy = checking || downloading || queueChecking || queueRunning;
 
   useEffect(() => {
+    if (initialSource && !downloadPanelState.source) {
+      setDownloadPanelState({ source: initialSource });
+    }
+  }, [initialSource]);
+
+  useEffect(() => {
     const controller = new AbortController();
     const readRoot =
       provider === "huggingface"
@@ -206,7 +341,7 @@ export default function HfDownloadPanel({
 
   useEffect(() => {
     const abortOnPageExit = () => {
-      abortRef.current?.abort();
+      downloadAbortRef.current?.abort();
     };
     // Keep downloads alive while the tab is merely backgrounded. pagehide
     // and beforeunload fire when the viewer is closed or navigated away.
@@ -217,19 +352,6 @@ export default function HfDownloadPanel({
       window.removeEventListener("beforeunload", abortOnPageExit);
     };
   }, []);
-
-  useEffect(() => {
-    setCheck(null);
-    setCheckedRequest(null);
-    setConfirmed(false);
-    setResult(null);
-    setProgress(null);
-  }, [concurrency, endpoint, provider, root, scope, source, token]);
-
-  useEffect(() => {
-    setQueueItems([]);
-    setQueueConfirmed(false);
-  }, [concurrency, endpoint, provider, queueText, root, scope, token]);
 
   const request = (sourceOverride = source.trim()): DownloadRequest => {
     const base = {
@@ -267,8 +389,10 @@ export default function HfDownloadPanel({
         throw new Error(
           payload.reason || `Folder picker failed (${response.status}).`,
         );
-      if (payload.kind === "picked" && payload.path) setRoot(payload.path);
-      else if (payload.kind === "unavailable")
+      if (payload.kind === "picked" && payload.path) {
+        setRoot(payload.path);
+        resetDownloadPlanState();
+      } else if (payload.kind === "unavailable")
         setBrowseMessage(
           payload.reason || t("workbench.hfDownloadBrowseUnavailable"),
         );
@@ -278,9 +402,9 @@ export default function HfDownloadPanel({
   };
 
   const runCheck = async () => {
-    abortRef.current?.abort();
+    downloadAbortRef.current?.abort();
     const controller = new AbortController();
-    abortRef.current = controller;
+    downloadAbortRef.current = controller;
     setChecking(true);
     setError(null);
     setResult(null);
@@ -304,7 +428,8 @@ export default function HfDownloadPanel({
         setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       if (!controller.signal.aborted) setChecking(false);
-      if (abortRef.current === controller) abortRef.current = null;
+      if (downloadAbortRef.current === controller)
+        downloadAbortRef.current = null;
     }
   };
 
@@ -325,9 +450,9 @@ export default function HfDownloadPanel({
       setError(t("workbench.hfDownloadQueueEmpty"));
       return;
     }
-    abortRef.current?.abort();
+    downloadAbortRef.current?.abort();
     const controller = new AbortController();
-    abortRef.current = controller;
+    downloadAbortRef.current = controller;
     setQueueChecking(true);
     setError(null);
     setQueueConfirmed(false);
@@ -381,14 +506,15 @@ export default function HfDownloadPanel({
         setError(t("workbench.hfDownloadCancelled"));
       }
       setQueueChecking(false);
-      if (abortRef.current === controller) abortRef.current = null;
+      if (downloadAbortRef.current === controller)
+        downloadAbortRef.current = null;
     }
   };
 
   const runDownload = async () => {
     if (!check || !checkedRequest || !confirmed) return;
     const controller = new AbortController();
-    abortRef.current = controller;
+    downloadAbortRef.current = controller;
     setDownloading(true);
     setError(null);
     setResult(null);
@@ -431,7 +557,8 @@ export default function HfDownloadPanel({
         setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setDownloading(false);
-      if (abortRef.current === controller) abortRef.current = null;
+      if (downloadAbortRef.current === controller)
+        downloadAbortRef.current = null;
     }
   };
 
@@ -442,7 +569,7 @@ export default function HfDownloadPanel({
     );
     if (!planned.length) return;
     const controller = new AbortController();
-    abortRef.current = controller;
+    downloadAbortRef.current = controller;
     setQueueRunning(true);
     setError(null);
     try {
@@ -480,7 +607,8 @@ export default function HfDownloadPanel({
         setError(t("workbench.hfDownloadCancelled"));
       }
       setQueueRunning(false);
-      if (abortRef.current === controller) abortRef.current = null;
+      if (downloadAbortRef.current === controller)
+        downloadAbortRef.current = null;
     }
   };
 
@@ -544,8 +672,8 @@ export default function HfDownloadPanel({
   };
 
   const cancel = () => {
-    abortRef.current?.abort();
-    abortRef.current = null;
+    downloadAbortRef.current?.abort();
+    downloadAbortRef.current = null;
     setDownloading(false);
     setChecking(false);
     setQueueChecking(false);
@@ -591,9 +719,10 @@ export default function HfDownloadPanel({
           <select
             value={provider}
             disabled={busy}
-            onChange={(event) =>
-              setProvider(event.target.value as DownloadProvider)
-            }
+            onChange={(event) => {
+              setProvider(event.target.value as DownloadProvider);
+              resetDownloadPlanState();
+            }}
             className="min-w-0 rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-100 focus:border-cyan-300/60 focus:outline-none disabled:opacity-50"
           >
             <option value="huggingface">
@@ -610,7 +739,10 @@ export default function HfDownloadPanel({
           <input
             value={source}
             disabled={busy}
-            onChange={(event) => setSource(event.target.value)}
+            onChange={(event) => {
+              setSource(event.target.value);
+              resetSingleDownloadState();
+            }}
             placeholder={
               provider === "modelscope"
                 ? "TacVerse/nested/collection/example"
@@ -631,7 +763,10 @@ export default function HfDownloadPanel({
             <input
               value={root}
               disabled={busy}
-              onChange={(event) => setRoot(event.target.value)}
+              onChange={(event) => {
+                setRoot(event.target.value);
+                resetDownloadPlanState();
+              }}
               className="min-w-0 flex-1 rounded-md border border-white/10 bg-black/20 px-3 py-2 font-mono text-xs text-slate-100 focus:border-cyan-300/60 focus:outline-none disabled:opacity-50"
             />
             <button
@@ -660,7 +795,10 @@ export default function HfDownloadPanel({
                 value="all"
                 checked={scope === "all"}
                 disabled={busy}
-                onChange={() => setScope("all")}
+                onChange={() => {
+                  setScope("all");
+                  resetDownloadPlanState();
+                }}
                 className="accent-cyan-400"
               />
               {t("workbench.hfDownloadAllFiles")}
@@ -672,7 +810,10 @@ export default function HfDownloadPanel({
                 value="meta"
                 checked={scope === "meta"}
                 disabled={busy}
-                onChange={() => setScope("meta")}
+                onChange={() => {
+                  setScope("meta");
+                  resetDownloadPlanState();
+                }}
                 className="accent-cyan-400"
               />
               {t("workbench.hfDownloadMetaOnly")}
@@ -696,9 +837,10 @@ export default function HfDownloadPanel({
             step={1}
             value={concurrency}
             disabled={busy}
-            onChange={(event) =>
-              setConcurrency(Number.parseInt(event.target.value, 10))
-            }
+            onChange={(event) => {
+              setConcurrency(Number.parseInt(event.target.value, 10));
+              resetDownloadPlanState();
+            }}
             className="accent-cyan-400"
           />
           <span className="text-[11px] leading-4 text-slate-500">
@@ -748,7 +890,10 @@ export default function HfDownloadPanel({
           <textarea
             value={queueText}
             disabled={busy}
-            onChange={(event) => setQueueText(event.target.value)}
+            onChange={(event) => {
+              setQueueText(event.target.value);
+              resetQueueDownloadState();
+            }}
             placeholder={
               provider === "modelscope"
                 ? t("workbench.hfDownloadModelScopeQueuePlaceholder")
