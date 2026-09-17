@@ -283,6 +283,7 @@ export const zh: Record<MessageKey, string> = {
   "viewer.tab.doctorTitle": "运行只读的 TypeScript 数据集质量诊断",
   "viewer.tab.parquet": "Parquet",
   "viewer.tab.parquetTitle": "浏览本数据集中任意 parquet 文件的原始内容",
+  "viewer.backToGroup": "返回数据集列表",
   "viewer.home": "首页",
 
   // ── episode viewer: body ────────────────────────────────────────────────
