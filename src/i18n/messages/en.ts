@@ -205,7 +205,7 @@ export const en = {
   "pathswitch.button": "Change",
   "pathswitch.title": "Change the dataset path",
   "pathswitch.hint":
-    "Scan a different directory. Pick one below, or choose a folder to remember and switch to.",
+    "Scan a different directory. Pick one below, or choose a folder to remember and switch to. The {count} most recent are kept.",
   "pathswitch.defaultRoot": "default",
   "pathswitch.forget": "Forget this path",
   "pathswitch.forgetAria": "Forget {path}",

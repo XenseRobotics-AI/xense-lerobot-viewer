@@ -2,7 +2,10 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { browsePathCookieString } from "@/utils/browsePath";
+import {
+  MAX_REMEMBERED_LOCATIONS,
+  browsePathCookieString,
+} from "@/utils/browsePath";
 import {
   addLocation,
   countDatasetsUnder,
@@ -11,6 +14,7 @@ import {
   readLocations,
   removeLocation,
   resolveBrowsePath,
+  writeLocations,
 } from "@/lib/dataset-locations-store";
 
 const temps: string[] = [];
@@ -75,9 +79,11 @@ describe("locations store", () => {
     expect(added.inspection.datasetCount).toBe(1);
     expect(added.inspection.isDataset).toBe(false);
 
-    // Adding again is a no-op, not an error, and does not grow the list.
+    // Adding again renews the entry rather than erroring, and does not grow
+    // the list.
     const again = await addLocation(root, `${outside}/`);
     expect(again.locations).toHaveLength(1);
+    expect(again.locations[0].path).toBe(outside);
 
     const stored = JSON.parse(
       await fs.readFile(locationsFilePath(root), "utf-8"),
@@ -87,6 +93,58 @@ describe("locations store", () => {
 
     expect(await removeLocation(root, outside)).toEqual([]);
     expect(await readLocations(root)).toEqual([]);
+  });
+
+  test("keeps the most recent paths, and renewing one saves it from eviction", async () => {
+    const root = await tempDir("loc-root-");
+    const dirs: string[] = [];
+    for (let index = 0; index < MAX_REMEMBERED_LOCATIONS + 2; index += 1) {
+      dirs.push(await tempDir(`loc-${index}-`));
+    }
+    const first = dirs.slice(0, MAX_REMEMBERED_LOCATIONS);
+    for (const dir of first) await addLocation(root, dir);
+    expect((await readLocations(root)).map((entry) => entry.path)).toEqual(
+      first,
+    );
+
+    // Renew the oldest, then add the two extras: the renewed path survives and
+    // the two that used to be newer than it are the ones evicted.
+    await addLocation(root, dirs[0]);
+    const extras = dirs.slice(MAX_REMEMBERED_LOCATIONS);
+    for (const dir of extras) await addLocation(root, dir);
+    expect((await readLocations(root)).map((entry) => entry.path)).toEqual([
+      dirs[0],
+      ...extras,
+    ]);
+  });
+
+  test("trims a file that already holds more, without rewriting it", async () => {
+    const root = await tempDir("loc-root-");
+    const dirs: string[] = [];
+    for (let index = 0; index < MAX_REMEMBERED_LOCATIONS + 2; index += 1) {
+      dirs.push(await tempDir(`loc-old-${index}-`));
+    }
+    await writeLocations(
+      root,
+      dirs.map((dir, index) => ({
+        path: dir,
+        addedAt: `2026-09-0${index + 1}T00:00:00.000Z`,
+      })),
+    );
+
+    const kept = dirs.slice(-MAX_REMEMBERED_LOCATIONS);
+    expect((await readLocations(root)).map((entry) => entry.path)).toEqual(
+      kept,
+    );
+    // The popover and `resolveBrowsePath` have to agree on what is listed, so a
+    // trimmed-out path stops being browsable even with a cookie still naming it.
+    expect(await resolveBrowsePath(root, kept[0])).toBe(kept[0]);
+    expect(await resolveBrowsePath(root, dirs[0])).toBe(root);
+    // Reads do not write: the file still holds every entry until the next add.
+    const stored = JSON.parse(
+      await fs.readFile(locationsFilePath(root), "utf-8"),
+    ) as { locations: unknown[] };
+    expect(stored.locations).toHaveLength(dirs.length);
   });
 
   test("refuses a missing path, a file, and the default root", async () => {
