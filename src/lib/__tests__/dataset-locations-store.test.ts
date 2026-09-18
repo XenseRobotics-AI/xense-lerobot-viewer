@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   MAX_REMEMBERED_LOCATIONS,
   browsePathCookieString,
+  isPathInsideRoot,
 } from "@/utils/browsePath";
 import {
   addLocation,
@@ -215,5 +216,29 @@ describe("countDatasetsUnder", () => {
     await makeDataset(path.join(dir, "too", "deep", "for", "scan"));
     expect(await countDatasetsUnder(dir)).toBe(2);
     expect(await countDatasetsUnder(path.join(dir, "a"))).toBe(1);
+  });
+});
+
+describe("isPathInsideRoot", () => {
+  test("accepts the root and anything under it", () => {
+    // What it gates is the Delete button, and `trashDataset` accepts any
+    // dataset inside the root — not only one browsed from the root itself.
+    const root = "/home/u/.cache/huggingface/lerobot";
+    expect(isPathInsideRoot(root, root)).toBe(true);
+    expect(isPathInsideRoot(root, `${root}/`)).toBe(true);
+    expect(isPathInsideRoot(root, `${root}/TacVerse-RDT-Test`)).toBe(true);
+    expect(isPathInsideRoot(root, `${root}/a/b/c`)).toBe(true);
+  });
+
+  test("refuses a sibling whose name merely starts the same way", () => {
+    const root = "/home/u/lerobot";
+    expect(isPathInsideRoot(root, "/home/u/lerobot-archive")).toBe(false);
+    expect(isPathInsideRoot(root, "/archive/lerobot")).toBe(false);
+    expect(isPathInsideRoot(root, "/home/u")).toBe(false);
+  });
+
+  test("handles a root of /", () => {
+    expect(isPathInsideRoot("/", "/anything")).toBe(true);
+    expect(isPathInsideRoot("/", "/")).toBe(true);
   });
 });
