@@ -181,6 +181,7 @@ function ResizableVideoGroup({
   resetLabel,
   resizeEdges,
   resizeLabel,
+  startMaximized = false,
 }: {
   activeLayer: boolean;
   children: ReactNode;
@@ -193,6 +194,13 @@ function ResizableVideoGroup({
   resetLabel: string;
   resizeEdges: readonly VideoResizeEdge[];
   resizeLabel: string;
+  /**
+   * Open at the largest size the viewport allows instead of `defaultWidth`.
+   * The wrist and tactile stacks are the ones being read frame by frame, so
+   * they start maximised; the centre group keeps its modest default so the
+   * two of them do not meet in the middle and bury it.
+   */
+  startMaximized?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{
@@ -219,6 +227,16 @@ function ResizableVideoGroup({
     },
     [maxWidth, maxWidthRatio, minWidth],
   );
+
+  const maximizedRef = useRef(false);
+  useEffect(() => {
+    // Once, on mount: `clampWidth` needs the laid-out overlay to know what the
+    // viewport allows, so this cannot be an initial state value. Re-running it
+    // would fight the user's own drag, hence the ref.
+    if (!startMaximized || maximizedRef.current) return;
+    maximizedRef.current = true;
+    setWidth(clampWidth(maxWidth));
+  }, [clampWidth, maxWidth, startMaximized]);
 
   useEffect(() => {
     const overlay = containerRef.current?.parentElement;
@@ -404,10 +422,11 @@ export default function UrdfVideoOverlay({
           {...resizeLabels}
           activeLayer={frontLayer === "left"}
           className="absolute left-3 top-3"
-          defaultWidth="clamp(13rem, 28vw, 22rem)"
-          maxWidth={520}
-          maxWidthRatio={0.42}
+          defaultWidth="clamp(19rem, 42vw, 33rem)"
+          maxWidth={780}
+          maxWidthRatio={0.36}
           minWidth={120}
+          startMaximized
           onActivate={() => setFrontLayer("left")}
           resizeEdges={["right"]}
         >
@@ -448,10 +467,11 @@ export default function UrdfVideoOverlay({
           {...resizeLabels}
           activeLayer={frontLayer === "right"}
           className="absolute right-3 top-3"
-          defaultWidth="clamp(13rem, 28vw, 22rem)"
-          maxWidth={520}
-          maxWidthRatio={0.42}
+          defaultWidth="clamp(19rem, 42vw, 33rem)"
+          maxWidth={780}
+          maxWidthRatio={0.36}
           minWidth={120}
+          startMaximized
           onActivate={() => setFrontLayer("right")}
           resizeEdges={["left"]}
         >
