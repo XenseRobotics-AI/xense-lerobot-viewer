@@ -28,6 +28,7 @@ import {
   bundledGripperProfile,
 } from "@/utils/bundledGrippers";
 import { CHART_CONFIG } from "@/utils/constants";
+import { fetchDatasetSources } from "@/utils/datasetSourcesClient";
 import {
   extractTacCapGripperTracks,
   extractTacCapHeadTrack,
@@ -49,6 +50,11 @@ import {
   tacCapDatasetPointToScene,
   tacCapRecordedTcpSceneMatrix,
 } from "@/utils/taccapGripperTransforms";
+import {
+  type EpisodeGripperCalibration,
+  gripperTravelForSide,
+  readEpisodeGripperCalibration,
+} from "@/utils/gripperCalibration";
 import {
   isGripperDriveJoint,
   mapNormalizedGripperToJoint,
@@ -405,6 +411,7 @@ function applyTacCapGripperFrame(
   recordedTcpToRoot: THREE.Matrix4,
   frame: TacCapGripperFrame,
   driveJointName: string,
+  calibratedTravel: number | null,
 ) {
   // One driven joint per gripper; every other joint in these URDFs mimics it,
   // so the whole jaw follows from this single value.
@@ -412,7 +419,11 @@ function applyTacCapGripperFrame(
   if (!driveJoint) return;
   robot.setJointValue(
     driveJointName,
-    mapNormalizedGripperToJoint(frame.opening, driveJoint.limit),
+    mapNormalizedGripperToJoint(
+      frame.opening,
+      driveJoint.limit,
+      calibratedTravel,
+    ),
   );
   robot.matrix.copy(tacCapLink4SceneMatrix(frame)).multiply(recordedTcpToRoot);
   robot.matrixWorldNeedsUpdate = true;
@@ -614,11 +625,14 @@ function TacCapCameraFit({ bounds }: { bounds: SceneBounds }) {
 }
 
 function TacCapGripperModel({
+  calibratedTravel,
   frame,
   profile,
   side,
   onReady,
 }: {
+  /** Calibrated travel of this side's jaw, radians; null when unrecorded. */
+  calibratedTravel: number | null;
   frame: TacCapGripperFrame | null;
   profile: BundledGripperProfile;
   side: TacCapSide;
@@ -629,6 +643,10 @@ function TacCapGripperModel({
   const recordedTcpToRootRef = useRef<THREE.Matrix4 | null>(null);
   const frameRef = useRef<TacCapGripperFrame | null>(frame);
   if (frame) frameRef.current = frame;
+  // Read through a ref for the same reason `frame` is: the load callback fires
+  // long after this render, and must see the value current then.
+  const travelRef = useRef<number | null>(calibratedTravel);
+  travelRef.current = calibratedTravel;
 
   useEffect(() => {
     let cancelled = false;
@@ -711,6 +729,7 @@ function TacCapGripperModel({
             recordedTcpToRootRef.current,
             frameRef.current,
             profile.driveJoint,
+            travelRef.current,
           );
         } else {
           robot.visible = false;
@@ -748,8 +767,9 @@ function TacCapGripperModel({
       recordedTcpToRoot,
       frame,
       profile.driveJoint,
+      calibratedTravel,
     );
-  }, [frame, profile.driveJoint]);
+  }, [calibratedTravel, frame, profile.driveJoint]);
 
   return null;
 }
@@ -1269,6 +1289,7 @@ function TacCapHeadMarker({
 }
 
 function TacCapGripperScene({
+  calibration,
   frames,
   headFrame,
   headTrack,
@@ -1278,6 +1299,8 @@ function TacCapGripperScene({
   tracks,
   trailEnabled,
 }: {
+  /** This episode's calibration windows, empty when the dataset records none. */
+  calibration: EpisodeGripperCalibration;
   frames: TacCapGripperFrame[];
   headFrame: TacCapHeadFrame | null;
   headTrack: TacCapHeadTrack | null;
@@ -1321,6 +1344,7 @@ function TacCapGripperScene({
       {modelSides.map((side) => (
         <TacCapGripperModel
           key={side}
+          calibratedTravel={gripperTravelForSide(calibration, side)}
           frame={frameBySide.get(side) ?? null}
           profile={profile}
           side={side}
@@ -1921,6 +1945,28 @@ export default function URDFViewer({
   const selectedEpisode = data.episodeId;
   const chartData = data.flatChartData;
 
+  // `{side}_gripper.pos` is normalized against the station's own calibration
+  // window, not the jaw's mechanical travel, so the window has to come from the
+  // dataset before the opening can be drawn at the right angle. Only the
+  // bundled-gripper scene uses it, and only that scene pays for the request;
+  // a dataset without the metadata yields {} and the mapping falls back to the
+  // joint limit. See `@/utils/gripperCalibration`.
+  const [datasetSources, setDatasetSources] = useState<unknown>(null);
+  useEffect(() => {
+    if (!isBundledGripper) return;
+    let cancelled = false;
+    fetchDatasetSources(datasetInfo.repoId).then((sources) => {
+      if (!cancelled) setDatasetSources(sources);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [datasetInfo.repoId, isBundledGripper]);
+  const gripperCalibration = useMemo(
+    () => readEpisodeGripperCalibration(datasetSources, selectedEpisode),
+    [datasetSources, selectedEpisode],
+  );
+
   // TacCap poses are read as canonical TCP. The viewer used to offer a
   // Tracker -> TCP switch that re-derived them through measured extrinsics;
   // it was removed as an unused control. `extractTacCapGripperTracks` still
@@ -2318,6 +2364,7 @@ export default function URDFViewer({
           />
           {gripperProfile ? (
             <TacCapGripperScene
+              calibration={gripperCalibration}
               frames={tacCapFrames}
               headFrame={tacCapHeadFrame}
               headTrack={tacCapHeadTrack}

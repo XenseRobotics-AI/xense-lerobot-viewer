@@ -12,10 +12,21 @@ export function isGripperDriveJoint(jointName: string): boolean {
   );
 }
 
-/** Map a normalized opening command to the URDF limit farthest from zero. */
+/**
+ * Map a normalized opening command onto the drive joint.
+ *
+ * Without a calibration window, 1 goes to the URDF limit farthest from zero —
+ * the jaw's mechanical maximum. That is only right if the recording's 1 meant
+ * "mechanically wide open", and on the RDT rig it does not: see
+ * `@/utils/gripperCalibration`. Given `calibratedTravel`, 1 goes there instead,
+ * still clamped to the joint's own stop so a stray number cannot drive the
+ * model past its mechanism, and still carrying the joint's sign so a
+ * negative-travel joint opens the way it is built to.
+ */
 export function mapNormalizedGripperToJoint(
   value: number,
   limit: UrdfJointLimit,
+  calibratedTravel?: number | null,
 ): number {
   const normalized = Number.isFinite(value)
     ? Math.max(0, Math.min(1, value))
@@ -27,5 +38,13 @@ export function mapNormalizedGripperToJoint(
   const maximumOpening =
     Math.abs(limit.upper) >= Math.abs(limit.lower) ? limit.upper : limit.lower;
   if (normalized === 0) return 0;
+  if (
+    typeof calibratedTravel === "number" &&
+    Number.isFinite(calibratedTravel) &&
+    calibratedTravel > 0
+  ) {
+    const travel = Math.min(calibratedTravel, Math.abs(maximumOpening));
+    return Math.sign(maximumOpening) * normalized * travel;
+  }
   return normalized * maximumOpening;
 }
