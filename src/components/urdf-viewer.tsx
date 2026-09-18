@@ -612,6 +612,35 @@ function TacCapCameraFit({ bounds }: { bounds: SceneBounds }) {
   return null;
 }
 
+/**
+ * Give one finger mesh the colour of the side it belongs to.
+ *
+ * One URDF serves both RDT arms, so the side colour cannot be baked per file
+ * the way the two TacCap models bake theirs. It has to be applied **per mesh,
+ * immediately after `onLoad` hands the mesh to URDFLoader**: the loader assigns
+ * the URDF material inside that call (`obj.material = material`, then
+ * `group.add(obj)`), so this is the first and only moment the mesh's material
+ * is knowable and attached.
+ *
+ * A `robot.traverse` from `loader.load`'s completion callback cannot do it —
+ * that callback fires as soon as the XML is parsed, while every mesh is still
+ * in flight, so it walks an empty tree. That is why the tint used to do
+ * nothing at all for either side, and why it went unnoticed: the URDF's own
+ * finger colour is within a few percent of the left side's tint, so only the
+ * right gripper looked wrong.
+ *
+ * The material is cloned rather than recoloured in place because one instance
+ * is shared by every finger mesh of the robot; the jaw is a handful of meshes,
+ * so the clones cost nothing.
+ */
+function tintBundledGripperFinger(mesh: THREE.Mesh, side: TacCapSide): void {
+  const material = mesh.material as THREE.MeshPhongMaterial | undefined;
+  if (!material?.color || material.name !== "finger") return;
+  const tinted = material.clone();
+  tinted.color.set(TACCAP_TRAIL_COLOR[side]);
+  mesh.material = tinted;
+}
+
 function TacCapGripperModel({
   frame,
   profile,
@@ -658,6 +687,9 @@ function TacCapGripperModel({
           mesh.castShadow = true;
           mesh.receiveShadow = true;
           onLoad(mesh);
+          if (profile.tintFingersPerSide) {
+            tintBundledGripperFinger(mesh, side);
+          }
         })
         .catch((error) => onLoad(new THREE.Object3D(), error as Error));
     };
@@ -687,22 +719,6 @@ function TacCapGripperModel({
           child.castShadow = true;
           child.receiveShadow = true;
         });
-        if (profile.tintFingersPerSide) {
-          // One URDF serves both arms, so the side colour cannot be baked in
-          // the way the per-side TacCap files bake theirs. Tint after load:
-          // URDFLoader assigns the URDF material during load and would
-          // overwrite anything set earlier.
-          const tint = new THREE.Color(TACCAP_TRAIL_COLOR[side]);
-          robot.traverse((child) => {
-            const mesh = child as THREE.Mesh;
-            if (!mesh.isMesh) return;
-            const material = mesh.material as THREE.MeshPhongMaterial;
-            if (material?.color && material.name === "finger") {
-              mesh.material = material.clone();
-              (mesh.material as THREE.MeshPhongMaterial).color.copy(tint);
-            }
-          });
-        }
         scene.add(robot);
         if (frameRef.current) {
           applyTacCapGripperFrame(
