@@ -11,8 +11,16 @@ const SOURCES = {
     {
       episode_index: 0,
       grippers: {
-        left_gripper: { closed_deg: -16.55, open_deg: 10.77, travel_rad: 0.476824 },
-        right_gripper: { closed_deg: 156.26, open_deg: 182.65, travel_rad: 0.460592 },
+        left_gripper: {
+          closed_deg: -16.55,
+          open_deg: 10.77,
+          travel_rad: 0.476824,
+        },
+        right_gripper: {
+          closed_deg: 156.26,
+          open_deg: 182.65,
+          travel_rad: 0.460592,
+        },
       },
     },
     { episode_index: 1, grippers: { left_gripper: { travel_rad: 0.4381 } } },
@@ -39,7 +47,9 @@ describe("readEpisodeGripperCalibration", () => {
   test("a dataset from before the block reads as no calibration", () => {
     // Not an error: those datasets fall back to the joint limit, which is the
     // rendering they have always had.
-    expect(readEpisodeGripperCalibration({ episodes: [{ episode_index: 0 }] }, 0)).toEqual({});
+    expect(
+      readEpisodeGripperCalibration({ episodes: [{ episode_index: 0 }] }, 0),
+    ).toEqual({});
     expect(readEpisodeGripperCalibration({}, 0)).toEqual({});
     expect(readEpisodeGripperCalibration(null, 0)).toEqual({});
   });
@@ -74,8 +84,14 @@ describe("mapNormalizedGripperToJoint with a calibration window", () => {
   test("sends 1 to the calibrated window instead of the joint limit", () => {
     // The whole point: the RDT jaw's 0.7 rad is 40.1 deg, the recording's own
     // window is 27.3 deg, and drawing 1 at 0.7 renders it ~45% too far open.
-    expect(mapNormalizedGripperToJoint(1, limit, 0.476824)).toBeCloseTo(0.476824, 9);
-    expect(mapNormalizedGripperToJoint(0.5, limit, 0.476824)).toBeCloseTo(0.238412, 9);
+    expect(mapNormalizedGripperToJoint(1, limit, 0.476824)).toBeCloseTo(
+      0.476824,
+      9,
+    );
+    expect(mapNormalizedGripperToJoint(0.5, limit, 0.476824)).toBeCloseTo(
+      0.238412,
+      9,
+    );
     expect(mapNormalizedGripperToJoint(0, limit, 0.476824)).toBe(0);
   });
 
