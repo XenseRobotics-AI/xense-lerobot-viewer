@@ -196,9 +196,11 @@ function ResizableVideoGroup({
   resizeLabel: string;
   /**
    * Open at the largest size the viewport allows instead of `defaultWidth`.
-   * The wrist and tactile stacks are the ones being read frame by frame, so
-   * they start maximised; the centre group keeps its modest default so the
-   * two of them do not meet in the middle and bury it.
+   *
+   * All three groups do, so `maxWidthRatio` is what keeps them apart: they
+   * share one strip of width, 0.34 + 0.28 + 0.34, and the remainder is the
+   * `left-3` / `right-3` gutters and the gaps between. Raising one ratio
+   * without lowering another is how they start on top of each other.
    */
   startMaximized?: boolean;
 }) {
@@ -424,7 +426,7 @@ export default function UrdfVideoOverlay({
           className="absolute left-3 top-3"
           defaultWidth="clamp(19rem, 42vw, 33rem)"
           maxWidth={780}
-          maxWidthRatio={0.36}
+          maxWidthRatio={0.34}
           minWidth={120}
           startMaximized
           onActivate={() => setFrontLayer("left")}
@@ -443,12 +445,13 @@ export default function UrdfVideoOverlay({
           }`}
           defaultWidth={
             hasSingleHead
-              ? "clamp(8rem, 16vw, 14rem)"
-              : "clamp(12rem, 29vw, 26rem)"
+              ? "clamp(12rem, 24vw, 21rem)"
+              : "clamp(16rem, 28vw, 30rem)"
           }
           maxWidth={760}
-          maxWidthRatio={0.7}
+          maxWidthRatio={0.28}
           minWidth={hasSingleHead ? 128 : 240}
+          startMaximized
           onActivate={() => setFrontLayer("center")}
           resizeEdges={["left", "right"]}
         >
@@ -469,7 +472,7 @@ export default function UrdfVideoOverlay({
           className="absolute right-3 top-3"
           defaultWidth="clamp(19rem, 42vw, 33rem)"
           maxWidth={780}
-          maxWidthRatio={0.36}
+          maxWidthRatio={0.34}
           minWidth={120}
           startMaximized
           onActivate={() => setFrontLayer("right")}
