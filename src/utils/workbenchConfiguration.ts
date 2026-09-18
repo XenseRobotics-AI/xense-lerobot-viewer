@@ -89,6 +89,65 @@ export function nextWorkbenchPersonId(
   return candidate;
 }
 
+function startsWithAsciiAlphaNumeric(value: string): boolean {
+  return /^[A-Za-z0-9]/u.test(value.trim());
+}
+
+/** Natural ordering with ASCII station/person labels before local text. */
+export function compareWorkbenchLabels(left: string, right: string): number {
+  const leftValue = left.trim();
+  const rightValue = right.trim();
+  const asciiOrder =
+    Number(startsWithAsciiAlphaNumeric(leftValue)) -
+    Number(startsWithAsciiAlphaNumeric(rightValue));
+  if (asciiOrder !== 0) return -asciiOrder;
+  return (
+    leftValue.localeCompare(rightValue, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    }) || leftValue.localeCompare(rightValue)
+  );
+}
+
+export function sortWorkbenchWorkstations(
+  workstations: readonly WorkbenchConfigurationV2["workstations"][number][],
+): WorkbenchConfigurationV2["workstations"] {
+  return [...workstations].sort(
+    (left, right) =>
+      Number(right.enabled !== false) - Number(left.enabled !== false) ||
+      compareWorkbenchLabels(left.name, right.name) ||
+      compareWorkbenchLabels(left.id, right.id),
+  );
+}
+
+export function sortWorkbenchPeople(
+  people: readonly WorkbenchConfigurationV2["people"][number][],
+): WorkbenchConfigurationV2["people"] {
+  return [...people].sort(
+    (left, right) =>
+      Number(right.enabled !== false) - Number(left.enabled !== false) ||
+      compareWorkbenchLabels(left.id, right.id),
+  );
+}
+
+/**
+ * Staffing choices are collectors only. A disabled collector remains visible
+ * when already assigned so an existing schedule can be reviewed safely.
+ */
+export function workbenchCollectorOptions(
+  people: readonly WorkbenchConfigurationV2["people"][number][],
+  selectedPersonIds: readonly string[] = [],
+): WorkbenchConfigurationV2["people"] {
+  const selected = new Set(selectedPersonIds);
+  return sortWorkbenchPeople(
+    people.filter(
+      (person) =>
+        resolveWorkbenchPersonRole(person) === "data_collector" &&
+        (person.enabled !== false || selected.has(person.id)),
+    ),
+  );
+}
+
 function workstationIsReferenced(
   config: WorkbenchConfigurationV2,
   workstationId: string,
@@ -823,6 +882,7 @@ export function migrateLegacyWorkbenchConfiguration(
         email && (emailCounts.get(email.toLocaleLowerCase()) ?? 0) === 1
           ? email
           : "",
+      enabled: true,
       roleHistory: [
         { effectiveDate: "1970-01-01", role: "data_collector" as const },
       ],
@@ -1309,7 +1369,13 @@ export function validateWorkbenchConfiguration(
       });
     }
     personIds.add(id);
-    return { id, displayName, email, roleHistory };
+    return {
+      id,
+      displayName,
+      email,
+      enabled: raw.enabled !== false,
+      roleHistory,
+    };
   });
   if (people.length === 0) {
     diagnostics.push({

@@ -58,6 +58,8 @@ export type WorkbenchPersonV2 = {
   id: string;
   displayName: string;
   email: string;
+  /** Older configuration documents omit this and are treated as enabled. */
+  enabled?: boolean;
   roleHistory: WorkbenchPersonRoleHistoryV2[];
 };
 
