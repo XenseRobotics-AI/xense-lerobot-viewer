@@ -17,6 +17,9 @@ import {
   workbenchPersonnelEmailGroups,
   workbenchStaffingWorkstations,
   WorkbenchConfigurationValidationError,
+  sortWorkbenchPeople,
+  sortWorkbenchWorkstations,
+  workbenchCollectorOptions,
 } from "@/utils/workbenchConfiguration";
 import { computeWorkbenchPersonnelRollup } from "@/utils/workbenchPersonnel";
 import type { WorkbenchRollupDataset } from "@/utils/workbenchRollup";
@@ -78,6 +81,58 @@ function baseConfiguration(): WorkbenchConfigurationV2 {
 }
 
 describe("Workbench configuration v2", () => {
+  test("sorts enabled labels first with natural ASCII ordering", () => {
+    const config = baseConfiguration();
+    config.workstations = [
+      { id: "cn", name: "中控", enabled: true },
+      { id: "disabled", name: "A1", enabled: false },
+      { id: "a10", name: "A10", enabled: true },
+      { id: "a2", name: "A2", enabled: true },
+      { id: "one", name: "1", enabled: true },
+    ];
+    expect(
+      sortWorkbenchWorkstations(config.workstations).map((item) => item.name),
+    ).toEqual(["1", "A2", "A10", "中控", "A1"]);
+
+    config.people[0].displayName = "张三";
+    config.people[0].enabled = false;
+    config.people.push({
+      id: "collector-2",
+      displayName: "Collector 2",
+      email: "collector-2@example.com",
+      enabled: true,
+      roleHistory: [{ effectiveDate: "1970-01-01", role: "data_collector" }],
+    });
+    expect(sortWorkbenchPeople(config.people).map((item) => item.id)).toEqual([
+      "collector-2",
+      "inspector",
+      "manager",
+      "collector",
+    ]);
+  });
+
+  test("limits staffing choices to enabled data collectors", () => {
+    const config = baseConfiguration();
+    config.people.push({
+      id: "disabled-collector",
+      displayName: "Disabled collector",
+      email: "disabled@example.com",
+      enabled: false,
+      roleHistory: [{ effectiveDate: "1970-01-01", role: "data_collector" }],
+    });
+    config.people[1].enabled = true;
+    config.people[2].enabled = true;
+
+    expect(
+      workbenchCollectorOptions(config.people).map((person) => person.id),
+    ).toEqual(["collector"]);
+    expect(
+      workbenchCollectorOptions(config.people, ["disabled-collector"]).map(
+        (person) => person.id,
+      ),
+    ).toEqual(["collector", "disabled-collector"]);
+  });
+
   test("migrates legacy snapshots without losing aliases, people, or stop dates", () => {
     const personnel: WorkbenchPersonnelConfig = {
       org: "TacVerse",
