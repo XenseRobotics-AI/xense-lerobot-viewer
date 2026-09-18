@@ -1,5 +1,6 @@
 "use client";
 
+import { isPathInsideRoot } from "@/utils/browsePath";
 import React, { useCallback, useMemo, useState } from "react";
 import type { LocalDatasetSummary } from "@/lib/local-datasets-discovery";
 import type { DailyDelta } from "@/utils/corpusHistory";
@@ -161,7 +162,7 @@ export default function LocalDatasetGrid({
         <div id={GRID_ANCHOR_ID} className="scroll-mt-6">
           <DatasetCardGrid
             datasets={datasets}
-            canDelete={browsePath === root}
+            canDelete={isPathInsideRoot(root, browsePath)}
             query={query}
             onQueryChange={setQuery}
           />

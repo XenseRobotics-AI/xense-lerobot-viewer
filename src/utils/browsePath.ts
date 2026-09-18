@@ -21,6 +21,27 @@ export const MAX_REMEMBERED_LOCATIONS = 3;
 export const BROWSE_PATH_COOKIE = "xense-browse-path";
 export const BROWSE_PATH_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
 
+/**
+ * Is `candidate` the dataset root, or a directory inside it?
+ *
+ * Lexical only, and deliberately so: it decides whether the UI *offers* an
+ * action the server would accept, not whether the action is safe. Every route
+ * that touches a dataset re-checks with `realpath` — `local-dataset-trash.ts`
+ * does it twice — so a symlink that escapes the root is refused there, where
+ * refusing it means something.
+ *
+ * Comparison is on path text, which is right for the two values this is given:
+ * `discoverLocalDatasets` resolves both the root and the browse path before
+ * they reach the client.
+ */
+export function isPathInsideRoot(root: string, candidate: string): boolean {
+  const trim = (value: string) => value.replace(/\/+$/, "") || "/";
+  const base = trim(root);
+  const target = trim(candidate);
+  if (target === base) return true;
+  return target.startsWith(base === "/" ? "/" : `${base}/`);
+}
+
 export function browsePathCookieString(browsePath: string): string {
   return `${BROWSE_PATH_COOKIE}=${encodeURIComponent(browsePath)}; path=/; max-age=${BROWSE_PATH_COOKIE_MAX_AGE}; SameSite=Lax`;
 }
