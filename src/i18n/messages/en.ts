@@ -847,6 +847,8 @@ export const en = {
   "urdf.tacCapNoPose":
     "No complete left_tcp/right_tcp xyz+r1-r6 trajectories were found for gripper replay.",
   "urdf.legendTracks": "Tracks",
+  "urdf.valuesTitle": "Values",
+  "urdf.valuesClear": "Clear",
   "urdf.axisForward": "forward",
   "urdf.axisLeft": "left",
   "urdf.axisUp": "up",

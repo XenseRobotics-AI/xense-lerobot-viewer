@@ -20,6 +20,7 @@ import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import type { EpisodeData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import UrdfPlaybackBar from "@/components/urdf-playback-bar";
+import UrdfValueReadout from "@/components/urdf-value-readout";
 import UrdfVideoOverlay from "@/components/urdf-video-overlay";
 import { useT } from "@/context/locale-context";
 import {
@@ -2214,6 +2215,12 @@ export default function URDFViewer({
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* 3D Viewport */}
       <div className="flex-1 min-h-0 bg-[var(--surface-0)] rounded-lg overflow-hidden border border-white/10 relative">
+        {/* Sits above the axis legend, which owns the very bottom-left. */}
+        <UrdfValueReadout
+          columns={selectedColumns}
+          row={chartData[Math.min(frame, Math.max(totalFrames - 1, 0))]}
+          groupLabel={selectedGroup}
+        />
         {isBundledGripper && !tacCapDataUnavailable && (
           <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded border border-white/10 bg-slate-950/75 px-2 py-1 font-mono text-[10px] shadow backdrop-blur-sm">
             <span className="text-red-400">X · {t("urdf.axisForward")}</span>

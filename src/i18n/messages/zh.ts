@@ -817,6 +817,8 @@ export const zh: Record<MessageKey, string> = {
   "urdf.tacCapNoPose":
     "未找到可用于夹爪回放的完整 left_tcp/right_tcp xyz+r1-r6 轨迹。",
   "urdf.legendTracks": "轨迹",
+  "urdf.valuesTitle": "数值",
+  "urdf.valuesClear": "清空",
   "urdf.axisForward": "向前",
   "urdf.axisLeft": "向左",
   "urdf.axisUp": "向上",
