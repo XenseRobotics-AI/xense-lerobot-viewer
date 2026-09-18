@@ -18,6 +18,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { MAX_REMEMBERED_LOCATIONS } from "@/utils/browsePath";
 import { normalizeDatasetPathInput } from "@/utils/datasetRoute";
 
 const STORE_DIR = ".xense-viewer";
@@ -170,7 +171,12 @@ export async function readLocations(root: string): Promise<DatasetLocation[]> {
           : "",
     });
   }
-  return locations;
+  // Oldest first, so the cap keeps the newest. Applied on read, not only on
+  // write: a file that already holds more must show three straight away, and
+  // `resolveBrowsePath` has to agree with the popover about what is listed —
+  // a path that is no longer offered must not stay browsable through a stale
+  // cookie. Reads never write; the next `addLocation` persists the trim.
+  return locations.slice(-MAX_REMEMBERED_LOCATIONS);
 }
 
 /** Writes `tmp` then renames, like the tags and history stores. */
@@ -188,8 +194,14 @@ export async function writeLocations(
 
 /**
  * Add a directory to the switcher's list. Refuses what cannot be browsed —
- * a missing path, a file, the default root (already the first entry). Adding
- * something already listed is a no-op rather than an error.
+ * a missing path, a file, the default root (already the first entry).
+ *
+ * Adding something already listed **renews** it: the entry moves to the newest
+ * slot with a fresh `addedAt` rather than being left where it was. With only
+ * `MAX_REMEMBERED_LOCATIONS` slots that is the list's one recency signal —
+ * switching to a path is a client-side cookie write the server never sees, so
+ * re-adding is the only moment it can learn that a path is still wanted.
+ * Without the renewal, three new paths would evict the one being used daily.
  */
 export async function addLocation(
   root: string,
@@ -206,13 +218,10 @@ export async function addLocation(
     throw new Error(`${inspection.path} is the default dataset root.`);
   }
   const current = await readLocations(root);
-  if (current.some((entry) => entry.path === inspection.path)) {
-    return { locations: current, inspection };
-  }
   const locations = [
-    ...current,
+    ...current.filter((entry) => entry.path !== inspection.path),
     { path: inspection.path, addedAt: new Date().toISOString() },
-  ];
+  ].slice(-MAX_REMEMBERED_LOCATIONS);
   await writeLocations(root, locations);
   return { locations, inspection };
 }

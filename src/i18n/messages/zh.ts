@@ -200,7 +200,8 @@ export const zh: Record<MessageKey, string> = {
   "repofetch.redownloadTitle": "忽略本地提交检查，重新拉取该数据集",
   "pathswitch.button": "切换",
   "pathswitch.title": "切换数据集路径",
-  "pathswitch.hint": "扫描其他目录。在下面选择，或选取一个文件夹来记住并切换。",
+  "pathswitch.hint":
+    "扫描其他目录。在下面选择，或选取一个文件夹来记住并切换。只保留最近 {count} 个。",
   "pathswitch.defaultRoot": "默认",
   "pathswitch.forget": "忘记此路径",
   "pathswitch.forgetAria": "忘记 {path}",
