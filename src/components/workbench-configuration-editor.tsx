@@ -18,6 +18,7 @@ import {
   removeWorkbenchPerson,
   resolveWorkbenchPersonRole,
   resolveWorkbenchStaffing,
+  sortWorkbenchDevices,
   sortWorkbenchPeople,
   sortWorkbenchWorkstations,
   workbenchCollectorOptions,
@@ -401,7 +402,7 @@ export default function WorkbenchConfigurationEditor({
               "",
             ]}
           >
-            {draft.devices.map((device) => (
+            {sortWorkbenchDevices(draft.devices).map((device) => (
               <tr key={device.id} className="border-t border-white/5">
                 <Cell>
                   <input
