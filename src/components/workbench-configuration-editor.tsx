@@ -10,6 +10,7 @@ import type {
   WorkbenchPersonRole,
 } from "@/types/workbench-configuration.types";
 import {
+  compareWorkbenchLabels,
   nextWorkbenchPersonId,
   pruneWorkbenchWorkstations,
   resolveWorkbenchDeviceWorkstationId,
@@ -17,6 +18,9 @@ import {
   removeWorkbenchPerson,
   resolveWorkbenchPersonRole,
   resolveWorkbenchStaffing,
+  sortWorkbenchPeople,
+  sortWorkbenchWorkstations,
+  workbenchCollectorOptions,
   setWorkbenchDeviceWorkstation,
   setWorkbenchPersonRole,
   suggestWorkbenchDeviceType,
@@ -216,6 +220,21 @@ export default function WorkbenchConfigurationEditor({
     }
   };
 
+  const people = draft ? sortWorkbenchPeople(draft.people) : [];
+  const staffingWorkstations = useMemo(() => {
+    if (!draft) return [];
+    const statusRank = (
+      status: ReturnType<typeof resolveWorkbenchStaffing>["status"],
+    ) => (status === "active" ? 0 : status === "unconfigured" ? 1 : 2);
+    return sortWorkbenchWorkstations(workbenchStaffingWorkstations(draft)).sort(
+      (left, right) =>
+        statusRank(resolveWorkbenchStaffing(draft, left.id, day).status) -
+          statusRank(resolveWorkbenchStaffing(draft, right.id, day).status) ||
+        compareWorkbenchLabels(left.name, right.name) ||
+        compareWorkbenchLabels(left.id, right.id),
+    );
+  }, [day, draft]);
+
   if (!draft || !loaded) {
     return (
       <section className="rounded-md border border-white/10 bg-[var(--surface-1)]/35 p-4 text-xs text-slate-400">
@@ -275,10 +294,6 @@ export default function WorkbenchConfigurationEditor({
     people: zh ? "人员目录" : "Personnel Directory",
     staffing: zh ? "日期排班" : "Date Staffing",
   };
-  const collectors = draft.people.filter(
-    (person) => resolveWorkbenchPersonRole(person) === "data_collector",
-  );
-  const staffingWorkstations = workbenchStaffingWorkstations(draft);
 
   return (
     <section className="rounded-md border border-cyan-400/20 bg-[var(--surface-1)]/35 p-4">
@@ -382,6 +397,7 @@ export default function WorkbenchConfigurationEditor({
               zh ? "类别" : "Type",
               "Source",
               zh ? "工位" : "Workstation",
+              zh ? "状态" : "Status",
               "",
             ]}
           >
@@ -450,6 +466,35 @@ export default function WorkbenchConfigurationEditor({
                   />
                 </Cell>
                 <Cell>
+                  <label className="flex items-center gap-2 whitespace-nowrap text-[11px] text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={device.enabled !== false}
+                      aria-label={
+                        zh
+                          ? `启用设备 ${device.identifier || device.id}`
+                          : `Enable device ${device.identifier || device.id}`
+                      }
+                      onChange={(event) =>
+                        update((next) => {
+                          const found = next.devices.find(
+                            (entry) => entry.id === device.id,
+                          );
+                          if (found) found.enabled = event.target.checked;
+                        })
+                      }
+                      className="accent-cyan-400"
+                    />
+                    {device.enabled !== false
+                      ? zh
+                        ? "启用"
+                        : "Enabled"
+                      : zh
+                        ? "停用"
+                        : "Disabled"}
+                  </label>
+                </Cell>
+                <Cell>
                   <button
                     type="button"
                     onClick={() =>
@@ -472,6 +517,7 @@ export default function WorkbenchConfigurationEditor({
                   identifier: "",
                   type: "umi_gripper",
                   source: "robot_id",
+                  enabled: true,
                   workstationId: null,
                   assignmentHistory: [],
                 }),
@@ -514,6 +560,7 @@ export default function WorkbenchConfigurationEditor({
                           identifier: entry.identifier,
                           type,
                           source: workbenchDeviceSourceForType(type),
+                          enabled: true,
                           workstationId: null,
                           assignmentHistory: [],
                         });
@@ -538,10 +585,11 @@ export default function WorkbenchConfigurationEditor({
               zh ? "原名称" : "Original name",
               "Email",
               zh ? "角色" : "Role",
+              zh ? "状态" : "Status",
               "",
             ]}
           >
-            {draft.people.map((person) => (
+            {people.map((person) => (
               <tr key={person.id} className="border-t border-white/5">
                 <Cell mono>{person.id}</Cell>
                 <Cell>
@@ -595,6 +643,35 @@ export default function WorkbenchConfigurationEditor({
                   </select>
                 </Cell>
                 <Cell>
+                  <label className="flex items-center gap-2 whitespace-nowrap text-[11px] text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={person.enabled !== false}
+                      aria-label={
+                        zh
+                          ? `启用人员 ${person.displayName || person.id}`
+                          : `Enable personnel ${person.displayName || person.id}`
+                      }
+                      onChange={(event) =>
+                        update((next) => {
+                          const found = next.people.find(
+                            (entry) => entry.id === person.id,
+                          );
+                          if (found) found.enabled = event.target.checked;
+                        })
+                      }
+                      className="accent-cyan-400"
+                    />
+                    {person.enabled !== false
+                      ? zh
+                        ? "启用"
+                        : "Enabled"
+                      : zh
+                        ? "停用"
+                        : "Disabled"}
+                  </label>
+                </Cell>
+                <Cell>
                   <button
                     type="button"
                     onClick={() => {
@@ -624,6 +701,7 @@ export default function WorkbenchConfigurationEditor({
                   id: nextWorkbenchPersonId(next.people),
                   displayName: "",
                   email: "",
+                  enabled: true,
                   roleHistory: [
                     { effectiveDate: "1970-01-01", role: "data_collector" },
                   ],
@@ -679,7 +757,7 @@ export default function WorkbenchConfigurationEditor({
                               : "unconfigured"}
                       </span>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
                         onClick={() =>
@@ -756,6 +834,13 @@ export default function WorkbenchConfigurationEditor({
                             (_, index) => {
                               const selected =
                                 working.members[index]?.personId ?? "";
+                              const collectorOptions =
+                                workbenchCollectorOptions(
+                                  draft.people,
+                                  working.members.map(
+                                    (member) => member.personId,
+                                  ),
+                                );
                               return (
                                 <label
                                   key={index}
@@ -800,19 +885,26 @@ export default function WorkbenchConfigurationEditor({
                                     className="input mt-1"
                                   >
                                     <option value="">—</option>
-                                    {collectors.map((person) => (
+                                    {collectorOptions.map((person) => (
                                       <option
                                         key={person.id}
                                         value={person.id}
                                         disabled={
-                                          person.id !== selected &&
-                                          working.members.some(
-                                            (member) =>
-                                              member.personId === person.id,
-                                          )
+                                          (person.enabled === false &&
+                                            person.id !== selected) ||
+                                          (person.id !== selected &&
+                                            working.members.some(
+                                              (member) =>
+                                                member.personId === person.id,
+                                            ))
                                         }
                                       >
                                         {person.displayName}
+                                        {person.enabled === false
+                                          ? zh
+                                            ? "（停用）"
+                                            : " (disabled)"
+                                          : ""}
                                       </option>
                                     ))}
                                   </select>

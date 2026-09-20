@@ -30,6 +30,8 @@ export type WorkbenchDeviceV2 = {
   /** Determined by type; exposed so malformed documents can be diagnosed. */
   source: WorkbenchDeviceSource;
   identifier: string;
+  /** Older configuration documents omit this and are treated as enabled. */
+  enabled?: boolean;
   /** Latest value for legacy consumers; day-aware code must use assignmentHistory. */
   workstationId: string | null;
   assignmentHistory?: WorkbenchDeviceAssignmentV2[];
@@ -58,6 +60,8 @@ export type WorkbenchPersonV2 = {
   id: string;
   displayName: string;
   email: string;
+  /** Older configuration documents omit this and are treated as enabled. */
+  enabled?: boolean;
   roleHistory: WorkbenchPersonRoleHistoryV2[];
 };
 

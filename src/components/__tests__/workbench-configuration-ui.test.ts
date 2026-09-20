@@ -42,6 +42,8 @@ describe("Workbench unified Configuration UI", () => {
     expect(editor).toContain("resolveWorkbenchStaffing");
     expect(editor).toContain("resolveWorkbenchDeviceWorkstationId");
     expect(editor).toContain("setWorkbenchDeviceWorkstation(");
+    expect(editor).toContain("checked={device.enabled !== false}");
+    expect(editor).toContain("启用设备");
     expect(editor).toContain('"inactive"');
     expect(editor).toContain("originalCollectors");
     expect(editor).toContain("collector-");
