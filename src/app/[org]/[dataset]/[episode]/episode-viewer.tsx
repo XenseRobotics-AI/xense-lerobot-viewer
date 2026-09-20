@@ -92,6 +92,10 @@ const TacFlowPanel = lazyWithChunkRecovery(
   "tacflow-panel",
   () => import("@/components/tacflow-panel"),
 );
+const TacVerseImpactPanel = lazyWithChunkRecovery(
+  "tacverse-impact-panel",
+  () => import("@/components/tacverse-impact-panel"),
+);
 // Recharts is ~150KB gz and not above-the-fold (videos render first on the
 // Episodes tab). Lazy-load it so the initial chunk can ship faster and
 // videos start downloading in parallel with the chart bundle.
@@ -145,7 +149,8 @@ type ActiveTab =
   | "urdf"
   | "parquet"
   | "workbench"
-  | "tacflow";
+  | "tacflow"
+  | "impact";
 
 // Subscribes to `currentTime` so its parent doesn't have to. Keeping this
 // in a leaf component means the throttled time ticks (~12.5/s during
@@ -464,6 +469,7 @@ function EpisodeViewerInner({
         "parquet",
         "workbench",
         "tacflow",
+        "impact",
       ].includes(requestedTab)
     ) {
       return requestedTab as ActiveTab;
@@ -484,6 +490,7 @@ function EpisodeViewerInner({
           "parquet",
           "workbench",
           "tacflow",
+          "impact",
         ].includes(stored)
       ) {
         return stored as ActiveTab;
@@ -789,6 +796,13 @@ function EpisodeViewerInner({
 
   const handleTabChange = (tab: ActiveTab) => {
     setActiveTab(tab);
+    const newParams = new URLSearchParams(searchParams.toString());
+    newParams.set("tab", tab);
+    window.history.replaceState(
+      {},
+      "",
+      `${window.location.pathname}?${newParams.toString()}`,
+    );
     if (tab === "statistics") loadStats();
     if (tab === "doctor") loadStats();
     if (tab === "workbench") loadStats();
@@ -1092,6 +1106,11 @@ function EpisodeViewerInner({
           "tacflow",
           t("viewer.tab.tacflow"),
           t("viewer.tab.tacflowTitle"),
+        )}
+        {renderTab(
+          "impact",
+          t("viewer.tab.impact"),
+          t("viewer.tab.impactTitle"),
         )}
         <div className="ml-auto flex shrink-0 items-center gap-2 pr-3">
           <Link
@@ -1527,6 +1546,12 @@ function EpisodeViewerInner({
           {activeTab === "tacflow" && (
             <Suspense fallback={<Loading />}>
               <TacFlowPanel />
+            </Suspense>
+          )}
+
+          {activeTab === "impact" && (
+            <Suspense fallback={<Loading />}>
+              <TacVerseImpactPanel />
             </Suspense>
           )}
         </div>

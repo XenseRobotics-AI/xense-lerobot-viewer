@@ -406,3 +406,48 @@ docker run -p 7860:7860 \
 This project is forked from the LeRobot dataset visualizer originally created by [@Mishig25](https://github.com/mishig25) (huggingface/lerobot PR [#1055](https://github.com/huggingface/lerobot/pull/1055)).
 
 The Doctor checks are a TypeScript port of the diagnostic concepts from [`lerobot-doctor`](https://github.com/jashshah999/lerobot-doctor) by Jash Shah (Apache-2.0); no Python package or subprocess is used by this integration.
+
+## TacVerse Impact private analytics
+
+The **TacVerse Impact** tab aggregates Publisher Analytics for every dataset in
+`TacVerse/tacverse` and adds `TacVerse/opendata` as a standalone repository.
+The server's saved Hugging Face token must be able to read the private
+Collection members and the TacVerse Publisher Analytics export.
+
+Private repository names and metrics are protected by a separate access key.
+Set it before starting the Viewer, then enter the same value in the Impact tab:
+
+```bash
+TACVERSE_IMPACT_ACCESS_KEY=replace-with-a-long-random-value bun dev
+```
+
+The browser keeps this key in `sessionStorage` only and clears it when the tab
+session ends. For a project-local setup, the same credential can instead be
+stored in `.xense-viewer/secrets/tacverse-impact-key`; that ignored file is
+also used as the Hugging Face credential fallback. Keep its directory at mode
+`0700` and the file at `0600`. Two known private repositories
+are used as completeness sentinels so an under-scoped HF token cannot silently
+produce a public-only total. Override that list when Collection membership
+changes:
+
+```bash
+TACVERSE_IMPACT_REQUIRED_PRIVATE_REPOS=TacVerse/repo-one,TacVerse/repo-two
+```
+
+Enterprise Plus request logs provide anonymous unique-downloader, repeat-use,
+session, cross-repository, and geographic metrics. Hugging Face must provision
+the request-level export for the organization. Put the exported CSV, JSON array,
+or JSONL file at the project-local ignored path:
+
+```text
+.xense-viewer/tacverse-impact/request-logs.csv
+```
+
+To read it from another secure location instead:
+
+```bash
+TACVERSE_IMPACT_LOG_PATH=/secure/path/request-logs.csv
+```
+
+Put internal hashed identifiers, without Hugging Face usernames, in
+`<LOCAL_DATASET_ROOT>/.xense-viewer/tacverse-impact/internal-hashes.json`.
