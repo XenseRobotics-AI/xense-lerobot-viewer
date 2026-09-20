@@ -219,7 +219,8 @@ export const zh: Record<MessageKey, string> = {
   "repofetch.redownloadTitle": "忽略本地提交检查，重新拉取该数据集",
   "pathswitch.button": "切换",
   "pathswitch.title": "切换数据集路径",
-  "pathswitch.hint": "扫描其他目录。在下面选择，或选取一个文件夹来记住并切换。",
+  "pathswitch.hint":
+    "扫描其他目录。在下面选择，或选取一个文件夹来记住并切换。只保留最近 {count} 个。",
   "pathswitch.defaultRoot": "默认",
   "pathswitch.forget": "忘记此路径",
   "pathswitch.forgetAria": "忘记 {path}",
@@ -840,6 +841,8 @@ export const zh: Record<MessageKey, string> = {
   "urdf.tacCapNoPose":
     "未找到可用于 TacCap 回放的完整 left_tcp/right_tcp xyz+r1-r6 轨迹。",
   "urdf.legendTracks": "轨迹",
+  "urdf.valuesTitle": "数值",
+  "urdf.valuesClear": "清空",
   "urdf.axisForward": "向前",
   "urdf.axisLeft": "向左",
   "urdf.axisUp": "向上",

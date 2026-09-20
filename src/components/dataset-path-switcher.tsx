@@ -8,7 +8,10 @@ import React, {
   useTransition,
 } from "react";
 import { useRouter } from "next/navigation";
-import { browsePathCookieString } from "@/utils/browsePath";
+import {
+  MAX_REMEMBERED_LOCATIONS,
+  browsePathCookieString,
+} from "@/utils/browsePath";
 import { useLocale } from "@/context/locale-context";
 
 /**
@@ -267,7 +270,7 @@ export default function DatasetPathSwitcher({
           className="absolute left-0 top-full z-30 mt-2 w-[28rem] max-w-[calc(100vw-3rem)] rounded-lg border border-white/10 bg-[var(--surface-1)] p-3 text-xs shadow-xl"
         >
           <p className="mb-2 text-[var(--text-muted)]">
-            {t("pathswitch.hint")}
+            {t("pathswitch.hint", { count: MAX_REMEMBERED_LOCATIONS })}
           </p>
 
           {pendingTarget !== null && (
