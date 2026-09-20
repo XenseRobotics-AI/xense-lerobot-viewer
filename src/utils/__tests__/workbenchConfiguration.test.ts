@@ -258,6 +258,20 @@ describe("Workbench configuration v2", () => {
     );
   });
 
+  test("normalizes device enabled state and preserves disabled devices", () => {
+    const config = baseConfiguration();
+    config.devices[0].enabled = false;
+
+    expect(validateWorkbenchConfiguration(config).config.devices[0]).toEqual(
+      expect.objectContaining({ enabled: false }),
+    );
+
+    delete config.devices[0].enabled;
+    expect(validateWorkbenchConfiguration(config).config.devices[0]).toEqual(
+      expect.objectContaining({ enabled: true }),
+    );
+  });
+
   test("uses the latest historical role as one static role", () => {
     const config = baseConfiguration();
     config.staffingHistory[0].originalCollectors = 1;
@@ -386,6 +400,56 @@ describe("Workbench configuration v2", () => {
       hours: 16,
       workstations: ["A1", "NO"],
     });
+  });
+
+  test("keeps historical dataset mapping before a future reassignment", () => {
+    const config = baseConfiguration();
+    config.devices[0].assignmentHistory = [
+      { effectiveDate: "1970-01-01", workstationId: "A1" },
+      { effectiveDate: "2026-09-03", workstationId: "NO" },
+    ];
+    config.devices[0].workstationId = "NO";
+
+    expect(
+      resolveWorkbenchDatasetDevice(
+        { robotId: "bi_taccap_8" },
+        config,
+        "2026-09-02",
+      ).workstation,
+    ).toBe("A1");
+    expect(
+      resolveWorkbenchDatasetDevice(
+        { robotId: "bi_taccap_8" },
+        config,
+        "2026-09-03",
+      ).workstation,
+    ).toBe("NO");
+  });
+
+  test("does not apply a latest workstation before the first assignment date", () => {
+    const config = baseConfiguration();
+    config.devices[0].workstationId = "NO";
+    config.devices[0].assignmentHistory = [
+      { effectiveDate: "2026-09-03", workstationId: "NO" },
+    ];
+
+    expect(
+      resolveWorkbenchDeviceWorkstationId(config.devices[0], "2026-09-02"),
+    ).toBeNull();
+    expect(
+      resolveWorkbenchDatasetDevice(
+        { robotId: "bi_taccap_8" },
+        config,
+        "2026-09-02",
+      ).workstation,
+    ).toBeNull();
+    expect(
+      resolveWorkbenchDatasetDevice(
+        { robotId: "bi_taccap_8" },
+        config,
+        "2026-09-03",
+      ).workstation,
+    ).toBe("NO");
   });
 
   test("creates, reuses, suffixes, and prunes hidden workstation records", () => {

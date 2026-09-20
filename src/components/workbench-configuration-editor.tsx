@@ -397,6 +397,7 @@ export default function WorkbenchConfigurationEditor({
               zh ? "类别" : "Type",
               "Source",
               zh ? "工位" : "Workstation",
+              zh ? "状态" : "Status",
               "",
             ]}
           >
@@ -465,6 +466,35 @@ export default function WorkbenchConfigurationEditor({
                   />
                 </Cell>
                 <Cell>
+                  <label className="flex items-center gap-2 whitespace-nowrap text-[11px] text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={device.enabled !== false}
+                      aria-label={
+                        zh
+                          ? `启用设备 ${device.identifier || device.id}`
+                          : `Enable device ${device.identifier || device.id}`
+                      }
+                      onChange={(event) =>
+                        update((next) => {
+                          const found = next.devices.find(
+                            (entry) => entry.id === device.id,
+                          );
+                          if (found) found.enabled = event.target.checked;
+                        })
+                      }
+                      className="accent-cyan-400"
+                    />
+                    {device.enabled !== false
+                      ? zh
+                        ? "启用"
+                        : "Enabled"
+                      : zh
+                        ? "停用"
+                        : "Disabled"}
+                  </label>
+                </Cell>
+                <Cell>
                   <button
                     type="button"
                     onClick={() =>
@@ -487,6 +517,7 @@ export default function WorkbenchConfigurationEditor({
                   identifier: "",
                   type: "umi_gripper",
                   source: "robot_id",
+                  enabled: true,
                   workstationId: null,
                   assignmentHistory: [],
                 }),
@@ -529,6 +560,7 @@ export default function WorkbenchConfigurationEditor({
                           identifier: entry.identifier,
                           type,
                           source: workbenchDeviceSourceForType(type),
+                          enabled: true,
                           workstationId: null,
                           assignmentHistory: [],
                         });

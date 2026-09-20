@@ -426,8 +426,11 @@ export function resolveWorkbenchDeviceWorkstationId(
   >,
   day?: string,
 ): string | null {
-  const assigned = latestDeviceAssignment(device.assignmentHistory ?? [], day);
-  return assigned !== undefined ? assigned : (device.workstationId ?? null);
+  const assignments = device.assignmentHistory ?? [];
+  if (assignments.length === 0) return device.workstationId ?? null;
+  // `workstationId` is the latest legacy snapshot. It must not leak into
+  // dates before the first historical assignment.
+  return latestDeviceAssignment(assignments, day) ?? null;
 }
 
 export function resolveWorkbenchAliasWorkstationId(
@@ -441,12 +444,13 @@ export function resolveWorkbenchAliasWorkstationId(
   > | null,
   day?: string,
 ): string | null {
-  const assigned = latestDeviceAssignment(alias.assignmentHistory ?? [], day);
+  const assignments = alias.assignmentHistory ?? [];
+  const assigned = latestDeviceAssignment(assignments, day);
   if (assigned !== undefined) return assigned;
   const linked = linkedDevice
     ? resolveWorkbenchDeviceWorkstationId(linkedDevice, day)
     : null;
-  return alias.workstationId ?? linked ?? null;
+  return assignments.length === 0 ? (alias.workstationId ?? linked) : linked;
 }
 
 export function resolveWorkbenchDatasetDevice(
@@ -1192,7 +1196,15 @@ export function validateWorkbenchConfiguration(
       });
     deviceIds.add(id);
     identifiers.add(identifier);
-    return { id, type, source, identifier, workstationId, assignmentHistory };
+    return {
+      id,
+      type,
+      source,
+      identifier,
+      enabled: raw.enabled !== false,
+      workstationId,
+      assignmentHistory,
+    };
   });
 
   const aliasIds = new Set<string>();
