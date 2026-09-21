@@ -420,7 +420,9 @@ def main() -> int:
     if blocker:
         return fail(blocker)
 
-    token = os.environ.get("HF_TOKEN") or None
+    from huggingface_hub import get_token
+
+    token = os.environ.get("XENSE_HF_TOKEN", "").strip() or get_token()
 
     # The org is a directory under the root (`repo_target`), so with explicit
     # repos it comes from the repo ids rather than being asked for twice and

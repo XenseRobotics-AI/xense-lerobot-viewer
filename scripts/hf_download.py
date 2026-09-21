@@ -584,11 +584,13 @@ def download(request: dict[str, Any], token: str | None) -> dict[str, Any]:
 
 
 def main() -> int:
-    token = os.environ.get("XENSE_HF_TOKEN", "").strip() or None
+    token: str | None = None
     try:
+        from huggingface_hub import get_token
         request = json.load(sys.stdin)
         if not isinstance(request, dict):
             raise ValueError("Request must be a JSON object.")
+        token = os.environ.get("XENSE_HF_TOKEN", "").strip() or get_token()
         action = request.get("action")
         if action == "check":
             emit({"ok": True, "result": check(request, token)})

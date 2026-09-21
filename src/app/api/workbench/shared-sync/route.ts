@@ -1,6 +1,9 @@
 import type { NextRequest } from "next/server";
 import { resolveLocalDatasetRoot } from "@/lib/local-datasets-discovery";
-import { resolveHfToken } from "@/lib/hf-token-store";
+import {
+  resolveHfToken,
+  tokenForPython,
+} from "@/lib/hf-token-store";
 import { isSameOriginRequest, noStoreHeaders } from "@/lib/request-security";
 import {
   WorkbenchSharedHubConflictError,
@@ -118,6 +121,7 @@ function remoteDocuments(
 async function readRemote(
   org: string,
   token: string | null,
+  useDefaultAuth: boolean,
 ): Promise<{
   read: WorkbenchSharedHubReadResult;
   documents: Record<
@@ -138,6 +142,7 @@ async function readRemote(
       ],
     },
     token,
+    useDefaultAuth,
   );
   if (result.action !== "read") {
     throw new Error("Unexpected Hugging Face shared-state response.");
@@ -186,12 +191,14 @@ export async function POST(request: NextRequest): Promise<Response> {
     const root = resolveLocalDatasetRoot();
     const credential = await resolveHfToken(root);
     const token = credential.token;
+    const pythonToken = tokenForPython(credential);
+    const useDefaultAuth = credential.source === "cache";
     let lastConflict: Error | null = null;
 
     for (let attempt = 1; attempt <= MAX_SYNC_ATTEMPTS; attempt += 1) {
       const [{ read, documents: remote }, local, allPending] =
         await Promise.all([
-          readRemote(org, token),
+          readRemote(org, pythonToken, useDefaultAuth),
           readLocalWorkbenchSharedConfigs(org, root),
           listPendingWorkbenchSharedEvents(root),
         ]);
@@ -293,7 +300,8 @@ export async function POST(request: NextRequest): Promise<Response> {
             message: "sync(workbench): update " + org + " shared state",
             files,
           },
-          token,
+          pythonToken,
+          useDefaultAuth,
         );
         if (committed.action !== "commit") {
           throw new Error("Unexpected Hugging Face commit response.");
