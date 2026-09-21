@@ -3,6 +3,7 @@ import { resolveLocalDatasetRoot } from "@/lib/local-datasets-discovery";
 import {
   clearViewerHfToken,
   resolveHfToken,
+  tokenForPython,
   writeViewerHfToken,
   type HfTokenSource,
   type ResolvedHfToken,
@@ -270,7 +271,7 @@ async function verifyAccount(
   try {
     identity = await runHfIdentity({
       org,
-      token: credential.token,
+      token: tokenForPython(credential),
       // Token login should be quick and deterministic; the potentially large
       // organization listing belongs to the explicit "刷新统计" action.
       endpoint: selectedEndpoint,

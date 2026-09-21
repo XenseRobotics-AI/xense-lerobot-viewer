@@ -6,6 +6,7 @@ import {
   clearViewerHfToken,
   readViewerHfToken,
   resolveHfToken,
+  tokenForPython,
   tokenStorePath,
   writeViewerHfToken,
 } from "@/lib/hf-token-store";
@@ -73,6 +74,16 @@ describe("viewer Hugging Face token store", () => {
       token: "hf_environment",
       source: "environment",
     });
+  });
+
+  test("leaves CLI cache credentials for huggingface_hub to refresh", () => {
+    expect(tokenForPython({ token: "hf_cached", source: "cache" })).toBeNull();
+    expect(
+      tokenForPython({ token: "hf_viewer", source: "viewer" }),
+    ).toBe("hf_viewer");
+    expect(
+      tokenForPython({ token: "hf_environment", source: "environment" }),
+    ).toBe("hf_environment");
   });
 
   test("invalid writes are rejected without creating a credential", async () => {

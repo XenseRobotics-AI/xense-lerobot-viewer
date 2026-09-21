@@ -89,6 +89,7 @@ function safeMessage(value: unknown, token: string | null): string {
 export async function runWorkbenchSharedHub(
   request: WorkbenchSharedHubRequest,
   token: string | null,
+  useDefaultAuth = false,
 ): Promise<WorkbenchSharedHubReadResult | WorkbenchSharedHubCommitResult> {
   let python;
   try {
@@ -104,7 +105,7 @@ export async function runWorkbenchSharedHub(
     HF_ENDPOINT: "https://huggingface.co",
   };
   delete env.HF_TOKEN;
-  if (token) env.XENSE_HF_TOKEN = token;
+  if (token && !useDefaultAuth) env.XENSE_HF_TOKEN = token;
 
   return new Promise((resolve, reject) => {
     let child: ChildProcessWithoutNullStreams;

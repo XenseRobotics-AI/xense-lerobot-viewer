@@ -18,7 +18,11 @@ import {
   mergeWorkbenchHistory,
   type HfCatalogDocument,
 } from "@/lib/hf-catalog-cache";
-import { resolveHfToken } from "@/lib/hf-token-store";
+import {
+  resolveHfToken,
+  tokenForPython,
+  type ResolvedHfToken,
+} from "@/lib/hf-token-store";
 import { redactHfSecrets } from "@/lib/hf-identity";
 import { addHfMirrorProxyBypass } from "@/lib/proxy-bypass";
 import { isSameOriginRequest } from "@/lib/request-security";
@@ -153,13 +157,13 @@ export async function POST(request: NextRequest): Promise<Response> {
       { status: 500 },
     );
   }
-  let credentials: { token: string | null };
+  let credentials: ResolvedHfToken;
   try {
-    credentials = {
-      token: requestedToken ?? (await resolveHfToken(root)).token,
-    };
+    credentials = requestedToken
+      ? { token: requestedToken, source: "viewer" }
+      : await resolveHfToken(root);
   } catch {
-    credentials = { token: null };
+    credentials = { token: null, source: "none" };
   }
   let python: ResolvedPython;
   try {
@@ -219,7 +223,7 @@ export async function POST(request: NextRequest): Promise<Response> {
             cache,
             endpoint,
             body.force === true,
-            credentials.token,
+            tokenForPython(credentials),
           );
         } catch (error: unknown) {
           send({

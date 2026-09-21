@@ -7,7 +7,10 @@ import {
   resolveHfCatalogEndpoint,
   resolveHfSyncEndpoint,
 } from "@/lib/hf-endpoints";
-import { resolveHfToken } from "@/lib/hf-token-store";
+import {
+  resolveHfToken,
+  tokenForPython,
+} from "@/lib/hf-token-store";
 import {
   activeDatasetWrite,
   beginDatasetWrite,
@@ -491,7 +494,11 @@ export async function POST(request: NextRequest): Promise<Response> {
 
   let token: string | null = null;
   try {
-    token = requestedToken ?? (await resolveHfToken(root)).token;
+    if (requestedToken) {
+      token = requestedToken;
+    } else {
+      token = tokenForPython(await resolveHfToken(root));
+    }
   } catch {
     token = null;
   }

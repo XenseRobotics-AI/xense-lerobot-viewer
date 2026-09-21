@@ -143,6 +143,16 @@ export async function resolveHfCredential(
   return resolveHfToken(root);
 }
 
+/**
+ * Let huggingface_hub own refreshable CLI OAuth credentials. Viewer and
+ * environment credentials are explicit inputs and must be passed through.
+ */
+export function tokenForPython(
+  credential: ResolvedHfToken,
+): string | null {
+  return credential.source === "cache" ? null : credential.token;
+}
+
 export function tokenStorePath(root = resolveLocalDatasetRoot()): string {
   return tokenPath(root);
 }

@@ -2,7 +2,11 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { resolveLocalDatasetRoot } from "@/lib/local-datasets-discovery";
 import { normalizeHfEndpoint } from "@/lib/hf-endpoints";
-import { resolveHfToken } from "@/lib/hf-token-store";
+import {
+  resolveHfToken,
+  tokenForPython,
+  type HfTokenSource,
+} from "@/lib/hf-token-store";
 import { addHfMirrorProxyBypass } from "@/lib/proxy-bypass";
 import {
   PythonUnavailableError,
@@ -24,6 +28,7 @@ export const MAX_HF_DOWNLOAD_CONCURRENCY = 8;
 
 export type ParsedHfDownloadRequest = Omit<HfDownloadRequest, "token"> & {
   token: string | null;
+  tokenSource: HfTokenSource;
 };
 
 export function defaultHfDownloadRoot(): string {
@@ -93,16 +98,21 @@ export async function parseHfDownloadRequest(
     );
   }
   let token: string | null = null;
+  let tokenSource: HfTokenSource = "none";
   if (value.token !== undefined) {
     token = normalizeHfToken(value.token);
     if (!token)
       throw new TypeError("`token` must be a non-empty Hugging Face token.");
+    tokenSource = "viewer";
   }
   if (!token) {
     try {
-      token = (await resolveHfToken(resolveLocalDatasetRoot())).token;
+      const credential = await resolveHfToken(resolveLocalDatasetRoot());
+      token = tokenForPython(credential);
+      tokenSource = credential.source;
     } catch {
       token = null;
+      tokenSource = "none";
     }
   }
   return {
@@ -112,6 +122,7 @@ export async function parseHfDownloadRequest(
     endpoint,
     concurrency,
     token,
+    tokenSource,
   };
 }
 

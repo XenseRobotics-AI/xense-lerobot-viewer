@@ -188,9 +188,9 @@ def commit_files(
 
 def main() -> int:
     token_value = os.environ.get("XENSE_HF_TOKEN", "").strip()
-    token: str | bool = token_value or False
     try:
-        from huggingface_hub import HfApi
+        from huggingface_hub import HfApi, get_token
+        token: str | bool = token_value or get_token() or False
     except Exception as exc:
         emit(
             {

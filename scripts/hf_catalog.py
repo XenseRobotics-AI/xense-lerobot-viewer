@@ -431,7 +431,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        from huggingface_hub import HfApi
+        from huggingface_hub import HfApi, get_token
     except Exception as exc:
         emit({"type": "error", "error": f"huggingface_hub is unavailable: {exc}"})
         return 1
@@ -442,7 +442,7 @@ def main() -> int:
     # Schema upgrades retain safe ordinary rows but deliberately invalidate
     # same-SHA Folder rows so their root layout is re-discovered.
     old_by_repo = reusable_cache_entries(cached)
-    token = os.environ.get("HF_TOKEN") or None
+    token = os.environ.get("XENSE_HF_TOKEN", "").strip() or get_token()
     api = HfApi()
     try:
         repos = list(
