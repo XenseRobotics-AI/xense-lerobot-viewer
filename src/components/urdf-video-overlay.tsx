@@ -16,10 +16,6 @@ import { THRESHOLDS } from "@/utils/constants";
 import { groupUrdfReplayVideos } from "@/utils/urdfReplayVideos";
 import { mediaTimeFromEpisodeTime } from "@/utils/videoSegments";
 
-const REPLAY_VIDEO_RECOVERY_DELAY_MS = 1_500;
-const REPLAY_VIDEO_RECOVERY_COOLDOWN_MS = 5_000;
-const REPLAY_VIDEO_WATCHDOG_MS = 2_000;
-
 function fallbackLabel(filename: string): string {
   const tail = filename.split(/[./]/).at(-1) ?? filename;
   return tail.replaceAll("_", " ");
@@ -44,16 +40,8 @@ function ReplayVideoTile({
   const targetTime = mediaTimeFromEpisodeTime(video, episodeTimeSeconds);
   const targetTimeRef = useRef(targetTime);
   const shouldPlayRef = useRef(active && playing);
-  const recoveryTimerRef = useRef<number | null>(null);
-  const lastRecoveryAtRef = useRef(0);
   targetTimeRef.current = targetTime;
   shouldPlayRef.current = active && playing;
-
-  const clearRecoveryTimer = useCallback(() => {
-    if (recoveryTimerRef.current === null) return;
-    window.clearTimeout(recoveryTimerRef.current);
-    recoveryTimerRef.current = null;
-  }, []);
 
   const syncToReplay = useCallback((force: boolean) => {
     const element = videoRef.current;
@@ -73,41 +61,6 @@ function ReplayVideoTile({
       }
     });
   }, [video.filename]);
-
-  const recoverVideo = useCallback(
-    (reloadElement: boolean) => {
-      const element = videoRef.current;
-      if (!element || !active) return;
-      const now = performance.now();
-      if (now - lastRecoveryAtRef.current < REPLAY_VIDEO_RECOVERY_COOLDOWN_MS) {
-        return;
-      }
-      lastRecoveryAtRef.current = now;
-      clearRecoveryTimer();
-
-      const resumeAfterSync = shouldPlayRef.current;
-      const syncAndResume = () => {
-        syncToReplay(true);
-        if (resumeAfterSync) playFromReplay();
-      };
-
-      if (
-        reloadElement ||
-        element.error ||
-        element.networkState === HTMLMediaElement.NETWORK_NO_SOURCE ||
-        element.readyState < HTMLMediaElement.HAVE_METADATA
-      ) {
-        element.addEventListener("loadedmetadata", syncAndResume, {
-          once: true,
-        });
-        element.load();
-        return;
-      }
-
-      syncAndResume();
-    },
-    [active, clearRecoveryTimer, playFromReplay, syncToReplay],
-  );
 
   // Paused slider changes are exact seeks. During playback the MP4 runs on its
   // own media clock and is only corrected when it drifts materially, avoiding
@@ -142,62 +95,6 @@ function ReplayVideoTile({
     playFromReplay();
   }, [playFromReplay, syncToReplay]);
 
-  useEffect(() => {
-    const element = videoRef.current;
-    if (!element) return;
-
-    const scheduleRecovery = (delayMs = REPLAY_VIDEO_RECOVERY_DELAY_MS) => {
-      if (!shouldPlayRef.current) return;
-      clearRecoveryTimer();
-      recoveryTimerRef.current = window.setTimeout(() => {
-        recoveryTimerRef.current = null;
-        recoverVideo(false);
-      }, delayMs);
-    };
-    const handleRecoverableStall = () => scheduleRecovery();
-    const handleHardFailure = () => recoverVideo(true);
-    const handlePlayable = () => {
-      clearRecoveryTimer();
-      playFromReplay();
-    };
-    const watchdogId = window.setInterval(() => {
-      if (!shouldPlayRef.current) return;
-      if (element.error || element.ended) {
-        recoverVideo(true);
-        return;
-      }
-      if (element.paused) {
-        syncToReplay(false);
-        playFromReplay();
-        return;
-      }
-      if (
-        !element.seeking &&
-        element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
-      ) {
-        scheduleRecovery(0);
-      }
-    }, REPLAY_VIDEO_WATCHDOG_MS);
-
-    element.addEventListener("waiting", handleRecoverableStall);
-    element.addEventListener("stalled", handleRecoverableStall);
-    element.addEventListener("error", handleHardFailure);
-    element.addEventListener("ended", handleHardFailure);
-    element.addEventListener("playing", handlePlayable);
-    element.addEventListener("canplay", handlePlayable);
-
-    return () => {
-      window.clearInterval(watchdogId);
-      clearRecoveryTimer();
-      element.removeEventListener("waiting", handleRecoverableStall);
-      element.removeEventListener("stalled", handleRecoverableStall);
-      element.removeEventListener("error", handleHardFailure);
-      element.removeEventListener("ended", handleHardFailure);
-      element.removeEventListener("playing", handlePlayable);
-      element.removeEventListener("canplay", handlePlayable);
-    };
-  }, [clearRecoveryTimer, playFromReplay, recoverVideo, syncToReplay]);
-
   const label = fallbackLabel(video.filename);
 
   return (
@@ -212,7 +109,7 @@ function ReplayVideoTile({
         muted
         onLoadedMetadata={handleLoadedMetadata}
         playsInline
-        preload="auto"
+        preload="metadata"
         src={video.url}
       />
       <figcaption className="absolute left-1 top-1 max-w-[calc(100%-0.5rem)] truncate rounded bg-slate-950/75 px-1.5 py-0.5 text-[9px] font-medium leading-none text-slate-100 shadow backdrop-blur-sm">
@@ -277,7 +174,6 @@ function ResizableVideoGroup({
   children,
   className,
   defaultWidth,
-  defaultWidthRatio,
   maxWidth,
   maxWidthRatio,
   minWidth,
@@ -285,12 +181,12 @@ function ResizableVideoGroup({
   resetLabel,
   resizeEdges,
   resizeLabel,
+  startMaximized = false,
 }: {
   activeLayer: boolean;
   children: ReactNode;
   className: string;
   defaultWidth: string;
-  defaultWidthRatio: number;
   maxWidth: number;
   maxWidthRatio: number;
   minWidth: number;
@@ -298,6 +194,15 @@ function ResizableVideoGroup({
   resetLabel: string;
   resizeEdges: readonly VideoResizeEdge[];
   resizeLabel: string;
+  /**
+   * Open at the largest size the viewport allows instead of `defaultWidth`.
+   *
+   * All three groups do, so `maxWidthRatio` is what keeps them apart: they
+   * share one strip of width, 0.34 + 0.28 + 0.34, and the remainder is the
+   * `left-3` / `right-3` gutters and the gaps between. Raising one ratio
+   * without lowering another is how they start on top of each other.
+   */
+  startMaximized?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{
@@ -307,7 +212,6 @@ function ResizableVideoGroup({
     startX: number;
   } | null>(null);
   const [width, setWidth] = useState<number | null>(null);
-  const [overlayWidth, setOverlayWidth] = useState<number | null>(null);
   const [resizing, setResizing] = useState(false);
 
   const clampWidth = useCallback(
@@ -326,26 +230,25 @@ function ResizableVideoGroup({
     [maxWidth, maxWidthRatio, minWidth],
   );
 
+  const maximizedRef = useRef(false);
+  useEffect(() => {
+    // Once, on mount: `clampWidth` needs the laid-out overlay to know what the
+    // viewport allows, so this cannot be an initial state value. Re-running it
+    // would fight the user's own drag, hence the ref.
+    if (!startMaximized || maximizedRef.current) return;
+    maximizedRef.current = true;
+    setWidth(clampWidth(maxWidth));
+  }, [clampWidth, maxWidth, startMaximized]);
+
   useEffect(() => {
     const overlay = containerRef.current?.parentElement;
     if (!overlay || typeof ResizeObserver === "undefined") return;
-    const updateOverlayWidth = () => {
-      const nextWidth = overlay.getBoundingClientRect().width;
-      if (nextWidth > 0) {
-        setOverlayWidth(Math.round(nextWidth));
-      }
-    };
-    updateOverlayWidth();
     const observer = new ResizeObserver(() => {
-      updateOverlayWidth();
       setWidth((current) => (current === null ? null : clampWidth(current)));
     });
     observer.observe(overlay);
     return () => observer.disconnect();
   }, [clampWidth]);
-
-  const responsiveDefaultWidth =
-    overlayWidth === null ? null : clampWidth(overlayWidth * defaultWidthRatio);
 
   const handlePointerDown = useCallback(
     (
@@ -435,12 +338,7 @@ function ResizableVideoGroup({
       }}
       onPointerDownCapture={onActivate}
       style={{
-        width:
-          width === null
-            ? responsiveDefaultWidth === null
-              ? defaultWidth
-              : `${responsiveDefaultWidth}px`
-            : `${width}px`,
+        width: width === null ? defaultWidth : `${width}px`,
         zIndex: activeLayer ? 40 : 20,
       }}
     >
@@ -526,11 +424,11 @@ export default function UrdfVideoOverlay({
           {...resizeLabels}
           activeLayer={frontLayer === "left"}
           className="absolute left-3 top-3"
-          defaultWidth="clamp(6rem, 30vw, 28rem)"
-          defaultWidthRatio={0.3}
-          maxWidth={640}
-          maxWidthRatio={0.45}
-          minWidth={96}
+          defaultWidth="clamp(19rem, 42vw, 33rem)"
+          maxWidth={780}
+          maxWidthRatio={0.34}
+          minWidth={120}
+          startMaximized
           onActivate={() => setFrontLayer("left")}
           resizeEdges={["right"]}
         >
@@ -547,13 +445,13 @@ export default function UrdfVideoOverlay({
           }`}
           defaultWidth={
             hasSingleHead
-              ? "clamp(7rem, 20vw, 18rem)"
-              : "clamp(11rem, 34vw, 32rem)"
+              ? "clamp(12rem, 24vw, 21rem)"
+              : "clamp(16rem, 28vw, 30rem)"
           }
-          defaultWidthRatio={hasSingleHead ? 0.2 : 0.34}
-          maxWidth={900}
-          maxWidthRatio={0.74}
-          minWidth={hasSingleHead ? 112 : 180}
+          maxWidth={760}
+          maxWidthRatio={0.28}
+          minWidth={hasSingleHead ? 128 : 240}
+          startMaximized
           onActivate={() => setFrontLayer("center")}
           resizeEdges={["left", "right"]}
         >
@@ -572,11 +470,11 @@ export default function UrdfVideoOverlay({
           {...resizeLabels}
           activeLayer={frontLayer === "right"}
           className="absolute right-3 top-3"
-          defaultWidth="clamp(6rem, 30vw, 28rem)"
-          defaultWidthRatio={0.3}
-          maxWidth={640}
-          maxWidthRatio={0.45}
-          minWidth={96}
+          defaultWidth="clamp(19rem, 42vw, 33rem)"
+          maxWidth={780}
+          maxWidthRatio={0.34}
+          minWidth={120}
+          startMaximized
           onActivate={() => setFrontLayer("right")}
           resizeEdges={["left"]}
         >

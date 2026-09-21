@@ -17,6 +17,7 @@ import {
   workbenchPersonnelEmailGroups,
   workbenchStaffingWorkstations,
   WorkbenchConfigurationValidationError,
+  sortWorkbenchDevices,
   sortWorkbenchPeople,
   sortWorkbenchWorkstations,
   workbenchCollectorOptions,
@@ -109,6 +110,30 @@ describe("Workbench configuration v2", () => {
       "manager",
       "collector",
     ]);
+
+    config.devices = [
+      {
+        ...config.devices[0],
+        id: "disabled-z",
+        identifier: "A0",
+        enabled: false,
+      },
+      {
+        ...config.devices[0],
+        id: "enabled-b",
+        identifier: "B2",
+        enabled: true,
+      },
+      {
+        ...config.devices[0],
+        id: "enabled-a",
+        identifier: "A10",
+        enabled: true,
+      },
+    ];
+    expect(sortWorkbenchDevices(config.devices).map((item) => item.id)).toEqual(
+      ["enabled-a", "enabled-b", "disabled-z"],
+    );
   });
 
   test("limits staffing choices to enabled data collectors", () => {

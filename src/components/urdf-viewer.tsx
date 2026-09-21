@@ -20,6 +20,7 @@ import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import type { EpisodeData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import UrdfPlaybackBar from "@/components/urdf-playback-bar";
+import UrdfValueReadout from "@/components/urdf-value-readout";
 import UrdfVideoOverlay from "@/components/urdf-video-overlay";
 import { useT } from "@/context/locale-context";
 import {
@@ -27,6 +28,7 @@ import {
   bundledGripperProfile,
 } from "@/utils/bundledGrippers";
 import { CHART_CONFIG } from "@/utils/constants";
+import { fetchDatasetSources } from "@/utils/datasetSourcesClient";
 import {
   extractTacCapGripperTracks,
   extractTacCapHeadTrack,
@@ -48,6 +50,11 @@ import {
   tacCapDatasetPointToScene,
   tacCapRecordedTcpSceneMatrix,
 } from "@/utils/taccapGripperTransforms";
+import {
+  type EpisodeGripperCalibration,
+  gripperTravelForSide,
+  readEpisodeGripperCalibration,
+} from "@/utils/gripperCalibration";
 import {
   isGripperDriveJoint,
   mapNormalizedGripperToJoint,
@@ -404,6 +411,7 @@ function applyTacCapGripperFrame(
   recordedTcpToRoot: THREE.Matrix4,
   frame: TacCapGripperFrame,
   driveJointName: string,
+  calibratedTravel: number | null,
 ) {
   // One driven joint per gripper; every other joint in these URDFs mimics it,
   // so the whole jaw follows from this single value.
@@ -411,7 +419,11 @@ function applyTacCapGripperFrame(
   if (!driveJoint) return;
   robot.setJointValue(
     driveJointName,
-    mapNormalizedGripperToJoint(frame.opening, driveJoint.limit),
+    mapNormalizedGripperToJoint(
+      frame.opening,
+      driveJoint.limit,
+      calibratedTravel,
+    ),
   );
   robot.matrix.copy(tacCapLink4SceneMatrix(frame)).multiply(recordedTcpToRoot);
   robot.matrixWorldNeedsUpdate = true;
@@ -612,12 +624,44 @@ function TacCapCameraFit({ bounds }: { bounds: SceneBounds }) {
   return null;
 }
 
+/**
+ * Give one finger mesh the colour of the side it belongs to.
+ *
+ * One URDF serves both RDT arms, so the side colour cannot be baked per file
+ * the way the two TacCap models bake theirs. It has to be applied **per mesh,
+ * immediately after `onLoad` hands the mesh to URDFLoader**: the loader assigns
+ * the URDF material inside that call (`obj.material = material`, then
+ * `group.add(obj)`), so this is the first and only moment the mesh's material
+ * is knowable and attached.
+ *
+ * A `robot.traverse` from `loader.load`'s completion callback cannot do it —
+ * that callback fires as soon as the XML is parsed, while every mesh is still
+ * in flight, so it walks an empty tree. That is why the tint used to do
+ * nothing at all for either side, and why it went unnoticed: the URDF's own
+ * finger colour is within a few percent of the left side's tint, so only the
+ * right gripper looked wrong.
+ *
+ * The material is cloned rather than recoloured in place because one instance
+ * is shared by every finger mesh of the robot; the jaw is a handful of meshes,
+ * so the clones cost nothing.
+ */
+function tintBundledGripperFinger(mesh: THREE.Mesh, side: TacCapSide): void {
+  const material = mesh.material as THREE.MeshPhongMaterial | undefined;
+  if (!material?.color || material.name !== "finger") return;
+  const tinted = material.clone();
+  tinted.color.set(TACCAP_TRAIL_COLOR[side]);
+  mesh.material = tinted;
+}
+
 function TacCapGripperModel({
+  calibratedTravel,
   frame,
   profile,
   side,
   onReady,
 }: {
+  /** Calibrated travel of this side's jaw, radians; null when unrecorded. */
+  calibratedTravel: number | null;
   frame: TacCapGripperFrame | null;
   profile: BundledGripperProfile;
   side: TacCapSide;
@@ -628,6 +672,10 @@ function TacCapGripperModel({
   const recordedTcpToRootRef = useRef<THREE.Matrix4 | null>(null);
   const frameRef = useRef<TacCapGripperFrame | null>(frame);
   if (frame) frameRef.current = frame;
+  // Read through a ref for the same reason `frame` is: the load callback fires
+  // long after this render, and must see the value current then.
+  const travelRef = useRef<number | null>(calibratedTravel);
+  travelRef.current = calibratedTravel;
 
   useEffect(() => {
     let cancelled = false;
@@ -658,6 +706,9 @@ function TacCapGripperModel({
           mesh.castShadow = true;
           mesh.receiveShadow = true;
           onLoad(mesh);
+          if (profile.tintFingersPerSide) {
+            tintBundledGripperFinger(mesh, side);
+          }
         })
         .catch((error) => onLoad(new THREE.Object3D(), error as Error));
     };
@@ -687,22 +738,6 @@ function TacCapGripperModel({
           child.castShadow = true;
           child.receiveShadow = true;
         });
-        if (profile.tintFingersPerSide) {
-          // One URDF serves both arms, so the side colour cannot be baked in
-          // the way the per-side TacCap files bake theirs. Tint after load:
-          // URDFLoader assigns the URDF material during load and would
-          // overwrite anything set earlier.
-          const tint = new THREE.Color(TACCAP_TRAIL_COLOR[side]);
-          robot.traverse((child) => {
-            const mesh = child as THREE.Mesh;
-            if (!mesh.isMesh) return;
-            const material = mesh.material as THREE.MeshPhongMaterial;
-            if (material?.color && material.name === "finger") {
-              mesh.material = material.clone();
-              (mesh.material as THREE.MeshPhongMaterial).color.copy(tint);
-            }
-          });
-        }
         scene.add(robot);
         if (frameRef.current) {
           applyTacCapGripperFrame(
@@ -710,6 +745,7 @@ function TacCapGripperModel({
             recordedTcpToRootRef.current,
             frameRef.current,
             profile.driveJoint,
+            travelRef.current,
           );
         } else {
           robot.visible = false;
@@ -747,8 +783,9 @@ function TacCapGripperModel({
       recordedTcpToRoot,
       frame,
       profile.driveJoint,
+      calibratedTravel,
     );
-  }, [frame, profile.driveJoint]);
+  }, [calibratedTravel, frame, profile.driveJoint]);
 
   return null;
 }
@@ -1268,6 +1305,7 @@ function TacCapHeadMarker({
 }
 
 function TacCapGripperScene({
+  calibration,
   frames,
   headFrame,
   headTrack,
@@ -1277,6 +1315,8 @@ function TacCapGripperScene({
   tracks,
   trailEnabled,
 }: {
+  /** This episode's calibration windows, empty when the dataset records none. */
+  calibration: EpisodeGripperCalibration;
   frames: TacCapGripperFrame[];
   headFrame: TacCapHeadFrame | null;
   headTrack: TacCapHeadTrack | null;
@@ -1320,6 +1360,7 @@ function TacCapGripperScene({
       {modelSides.map((side) => (
         <TacCapGripperModel
           key={side}
+          calibratedTravel={gripperTravelForSide(calibration, side)}
           frame={frameBySide.get(side) ?? null}
           profile={profile}
           side={side}
@@ -1920,6 +1961,28 @@ export default function URDFViewer({
   const selectedEpisode = data.episodeId;
   const chartData = data.flatChartData;
 
+  // `{side}_gripper.pos` is normalized against the station's own calibration
+  // window, not the jaw's mechanical travel, so the window has to come from the
+  // dataset before the opening can be drawn at the right angle. Only the
+  // bundled-gripper scene uses it, and only that scene pays for the request;
+  // a dataset without the metadata yields {} and the mapping falls back to the
+  // joint limit. See `@/utils/gripperCalibration`.
+  const [datasetSources, setDatasetSources] = useState<unknown>(null);
+  useEffect(() => {
+    if (!isBundledGripper) return;
+    let cancelled = false;
+    fetchDatasetSources(datasetInfo.repoId).then((sources) => {
+      if (!cancelled) setDatasetSources(sources);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [datasetInfo.repoId, isBundledGripper]);
+  const gripperCalibration = useMemo(
+    () => readEpisodeGripperCalibration(datasetSources, selectedEpisode),
+    [datasetSources, selectedEpisode],
+  );
+
   // TacCap poses are read as canonical TCP. The viewer used to offer a
   // Tracker -> TCP switch that re-derived them through measured extrinsics;
   // it was removed as an unused control. `extractTacCapGripperTracks` still
@@ -2214,6 +2277,12 @@ export default function URDFViewer({
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* 3D Viewport */}
       <div className="flex-1 min-h-0 bg-[var(--surface-0)] rounded-lg overflow-hidden border border-white/10 relative">
+        {/* Sits above the axis legend, which owns the very bottom-left. */}
+        <UrdfValueReadout
+          columns={selectedColumns}
+          row={chartData[Math.min(frame, Math.max(totalFrames - 1, 0))]}
+          groupLabel={selectedGroup}
+        />
         {isBundledGripper && !tacCapDataUnavailable && (
           <div className="pointer-events-none absolute bottom-3 left-3 z-10 flex items-center gap-2 rounded border border-white/10 bg-slate-950/75 px-2 py-1 font-mono text-[10px] shadow backdrop-blur-sm">
             <span className="text-red-400">X · {t("urdf.axisForward")}</span>
@@ -2311,6 +2380,7 @@ export default function URDFViewer({
           />
           {gripperProfile ? (
             <TacCapGripperScene
+              calibration={gripperCalibration}
               frames={tacCapFrames}
               headFrame={tacCapHeadFrame}
               headTrack={tacCapHeadTrack}

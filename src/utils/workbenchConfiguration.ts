@@ -130,6 +130,17 @@ export function sortWorkbenchPeople(
   );
 }
 
+export function sortWorkbenchDevices(
+  devices: readonly WorkbenchConfigurationV2["devices"][number][],
+): WorkbenchConfigurationV2["devices"] {
+  return [...devices].sort(
+    (left, right) =>
+      Number(right.enabled !== false) - Number(left.enabled !== false) ||
+      compareWorkbenchLabels(left.identifier, right.identifier) ||
+      compareWorkbenchLabels(left.id, right.id),
+  );
+}
+
 /**
  * Staffing choices are collectors only. A disabled collector remains visible
  * when already assigned so an existing schedule can be reviewed safely.

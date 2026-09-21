@@ -17,17 +17,24 @@ function videoNameTokens(filename: string): string[] {
  * `head` deliberately wins over `left`/`right`: head_left and left_head are
  * both head cameras and belong in the top-center group. For non-head cameras,
  * the first side word wins, so left_tactile_right remains a left-hand camera.
+ *
+ * Anything with no side word at all lands in the top-center group rather than
+ * being dropped. The group is "cameras not attached to a hand", not "head
+ * cameras": the RDT rig's third-person `side` camera watches the bench and has
+ * no direction word to match, and on that rig it is the only view of the scene
+ * — a name this function does not recognise must still be shown, or the tab
+ * silently omits a camera the dataset carries.
  */
 export function classifyUrdfReplayVideo(
   filename: string,
-): UrdfReplayVideoRegion | null {
+): UrdfReplayVideoRegion {
   const tokens = videoNameTokens(filename);
   if (tokens.includes("head")) return "center";
 
   const firstSide = tokens.find(
     (token): token is "left" | "right" => token === "left" || token === "right",
   );
-  return firstSide ?? null;
+  return firstSide ?? "center";
 }
 
 /**
@@ -69,7 +76,7 @@ function stableSort(
     .map(({ video }) => video);
 }
 
-/** Arrange recognized cameras into left, top-center, and right overlays. */
+/** Arrange every camera into the left, top-center, and right overlays. */
 export function groupUrdfReplayVideos(
   videos: VideoInfo[],
 ): UrdfReplayVideoGroups {

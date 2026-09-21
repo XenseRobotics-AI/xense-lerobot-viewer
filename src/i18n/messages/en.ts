@@ -224,7 +224,7 @@ export const en = {
   "pathswitch.button": "Change",
   "pathswitch.title": "Change the dataset path",
   "pathswitch.hint":
-    "Scan a different directory. Pick one below, or choose a folder to remember and switch to.",
+    "Scan a different directory. Pick one below, or choose a folder to remember and switch to. The {count} most recent are kept.",
   "pathswitch.defaultRoot": "default",
   "pathswitch.forget": "Forget this path",
   "pathswitch.forgetAria": "Forget {path}",
@@ -874,6 +874,8 @@ export const en = {
   "urdf.tacCapNoPose":
     "No complete left_tcp/right_tcp xyz+r1-r6 trajectories were found for TacCap replay.",
   "urdf.legendTracks": "Tracks",
+  "urdf.valuesTitle": "Values",
+  "urdf.valuesClear": "Clear",
   "urdf.axisForward": "forward",
   "urdf.axisLeft": "left",
   "urdf.axisUp": "up",
