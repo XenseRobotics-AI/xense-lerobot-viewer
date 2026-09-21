@@ -411,24 +411,44 @@ The Doctor checks are a TypeScript port of the diagnostic concepts from [`lerobo
 
 The **TacVerse Impact** tab aggregates Publisher Analytics for every dataset in
 `TacVerse/tacverse` and adds `TacVerse/opendata` as a standalone repository.
+It also aggregates HF Likes, Discussions, pull requests, and comments for the
+selected source.
+
+Downloads retain the Hugging Face dataset-download definition: file requests
+from the same IP in the same repository within five minutes are combined, while
+repeat activity across later windows, IPs, or devices can be counted again.
+The dashboard therefore presents Downloads separately from the Enterprise-log
+unique-downloader estimate. Authenticated dashboard loads refresh Publisher
+Analytics independently from the heavier cached sources. If Hugging Face has
+published a row for the current UTC day, that incomplete day is included
+immediately in Downloads, the 7/30-day totals, and the trend chart.
 The server's saved Hugging Face token must be able to read the private
 Collection members and the TacVerse Publisher Analytics export.
 
-Private repository names and metrics are protected by a separate access key.
-Set it before starting the Viewer, then enter the same value in the Impact tab:
+Private analytics are unlocked with an HF access token that can read the
+required private Collection members. On the first successful login, the server
+stores that token at the project-local ignored path
+`.xense-viewer/secrets/tacverse-impact-key` with file mode `0600`, creates a
+separate random session secret beside it, and returns a long-lived HttpOnly,
+SameSite cookie. The HF token is never stored in browser storage or returned to
+the page. Later visits use the cookie and do not require the token again. The
+**Lock** button clears that browser cookie.
 
-```bash
-TACVERSE_IMPACT_ACCESS_KEY=replace-with-a-long-random-value bun dev
-```
+For unattended deployments, `TACVERSE_IMPACT_ACCESS_KEY` remains available as
+an optional preconfigured unlock credential. The server still uses a saved HF
+credential to request private Hugging Face analytics.
 
-The browser keeps this key in `sessionStorage` only and clears it when the tab
-session ends. For a project-local setup, the same credential can instead be
-stored in `.xense-viewer/secrets/tacverse-impact-key`; that ignored file is
-also used as the Hugging Face credential fallback. Keep its directory at mode
-`0700` and the file at `0600`. Two known private repositories
-are used as completeness sentinels so an under-scoped HF token cannot silently
-produce a public-only total. Override that list when Collection membership
-changes:
+The unlock screen also has **View public datasets**. This route makes anonymous
+requests only and includes public Collection members plus
+`TacVerse/opendata` all-time download totals and Community activity. The
+public dashboard charts the current totals by repository. Daily download
+history remains exclusive to Publisher Analytics, so the public chart does not
+present cumulative totals as daily activity. This route does not read the saved
+HF token, private Collection members, Publisher Analytics, or Enterprise logs.
+
+Two known private repositories are used as completeness sentinels so an
+under-scoped HF token cannot silently produce a partial private total. Override
+that list when Collection membership changes:
 
 ```bash
 TACVERSE_IMPACT_REQUIRED_PRIVATE_REPOS=TacVerse/repo-one,TacVerse/repo-two

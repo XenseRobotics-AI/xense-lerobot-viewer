@@ -12,7 +12,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { FiExternalLink, FiLock, FiRefreshCw } from "react-icons/fi";
+import { FiExternalLink, FiInfo, FiLock, FiRefreshCw } from "react-icons/fi";
 import { useLocale } from "@/context/locale-context";
 import { formatBytes } from "@/utils/byteSize";
 import type {
@@ -22,7 +22,6 @@ import type {
 } from "@/types/tacverse-impact.types";
 
 type WindowSize = 7 | 30 | 90 | "all";
-const ACCESS_KEY_STORAGE = "tacverse-impact-access-key";
 
 const COPY = {
   en: {
@@ -30,6 +29,15 @@ const COPY = {
     title: "TacVerse Impact",
     subtitle:
       "Publisher Analytics for the private TacVerse Collection plus TacVerse/opendata.",
+    publicEyebrow: "PUBLIC DATASET ANALYTICS",
+    publicSubtitle:
+      "Public Hugging Face metadata for the TacVerse Collection and TacVerse/opendata.",
+    publicModeTitle: "Public-only mode",
+    publicModeBody:
+      "Only anonymous Hugging Face APIs are used. Private datasets, Publisher Analytics, and Enterprise logs are not accessed.",
+    publicDownloadsHint:
+      "Current lifetime total reported by the public HF API.",
+    publicMetadataSource: "Public HF metadata",
     dataSource: "Data source",
     collectionChoice: "TacVerse Collection",
     opendataChoice: "TacVerse/opendata",
@@ -39,6 +47,19 @@ const COPY = {
     refresh: "Refresh",
     refreshing: "Refreshing…",
     downloads: "Downloads",
+    totalDownloads: "Total downloads",
+    todayDownloads: "Today's downloads",
+    dayOverDayInProgress: "Current UTC day is still in progress",
+    dayOverDayWaiting: "Waiting for HF to publish the current UTC day",
+    downloadsDefinition: "How HF counts Downloads",
+    downloadsDefinitionIntro:
+      "HF combines file requests from the same IP in the same dataset repository within a five-minute window into one dataset download.",
+    downloadsDefinitionRepeat:
+      "The same person can be counted again after five minutes or when using another IP or device.",
+    downloadsDefinitionLimits:
+      "Downloads are not deduplicated across days, IPs, or devices and must not be interpreted as a user count.",
+    datasetDownloadRules: "HF dataset download counting rules",
+    publisherAnalyticsRules: "Publisher Analytics documentation",
     collectionDownloads: "Collection downloads",
     opendataDownloads: "opendata downloads",
     last30: "Last 30 HF days",
@@ -47,13 +68,22 @@ const COPY = {
     externalSessions: "Download sessions",
     uniqueDownloaders: "Unique downloaders",
     uniqueDownloaderHint:
-      "Deduplicated anonymous account/IP hashes; this is an estimate of people, not identifiable users.",
+      "Distinct hashed account IDs or anonymous IP hashes during the log coverage period.",
     anonymousIdentifiers: "Anonymous identifiers",
     authenticatedIdentifiers: "Signed-in hashes",
     anonymousIpIdentifiers: "Anonymous IP hashes",
     crossRepository: "Cross-repository users",
     repeatDownloaders: "Repeat downloaders",
     countriesReached: "Countries / regions reached",
+    community: "Community engagement",
+    communityHint:
+      "HF Likes and Community activity for repositories in the selected source. Counts may include automated accounts.",
+    likes: "Likes",
+    discussions: "Discussions",
+    pullRequests: "Pull requests",
+    comments: "Comments",
+    automatedThreads: "Automated threads",
+    repositoryCoverage: "Repository coverage",
     advancedMissing:
       "Add the Enterprise Plus request-log export at .xense-viewer/tacverse-impact/request-logs.csv",
     advancedSetupTitle: "Unique-downloader data is waiting for its log export",
@@ -67,7 +97,11 @@ const COPY = {
     dailyUniqueDownloaders: "Daily unique downloaders",
     downloadTrend: "Download trend",
     downloadTrendHint:
-      "Publisher daily downloads. Each HF UTC day spans 08:00–08:00 China Standard Time.",
+      "Publisher daily downloads, including the current incomplete UTC day as soon as HF publishes it. Each HF UTC day spans 08:00–08:00 China Standard Time.",
+    publicDownloadChart: "Public download overview",
+    publicDownloadChartHint:
+      "Current all-time Downloads for each public dataset. Daily history requires Publisher Analytics access.",
+    cumulativeDownloads: "All-time Downloads",
     daily: "Daily downloads",
     rolling: "7-day average",
     all: "All",
@@ -106,6 +140,7 @@ const COPY = {
     publisher: "Publisher Analytics",
     advanced: "Enterprise logs",
     collectionSource: "Private Collection",
+    communitySource: "HF Community",
     loading: "Loading private analytics…",
     emptyTitle: "No Publisher Analytics history is available.",
     permission:
@@ -116,20 +151,26 @@ const COPY = {
       "The latest refresh failed. Showing the last complete cached snapshot.",
     error: "Unable to load TacVerse Impact data.",
     unlockTitle: "Unlock private analytics",
-    unlockHint: "Enter the Impact credential configured for this project.",
-    accessKey: "Impact access key",
-    unlock: "Unlock",
+    unlockHint:
+      "Enter an HF access token that can read the private TacVerse Collection. After validation it is saved only in this project's hidden .xense-viewer folder.",
+    accessKey: "Hugging Face access token",
+    unlock: "Save token and unlock",
+    publicOnly: "View public datasets",
+    publicOnlyHint:
+      "No token required. Private analytics will not be accessed.",
     accessNotConfigured:
       "Configure TACVERSE_IMPACT_ACCESS_KEY or the project-local hidden credential file, then enter the same value here.",
     accessSetupCommand:
       "TACVERSE_IMPACT_ACCESS_KEY=<a separate random value> bun dev",
     hfTokenSetup:
       "Project-local fallback: .xense-viewer/secrets/tacverse-impact-key. It can also be used for authenticated Hugging Face requests.",
-    accessDenied: "The Impact access key is invalid.",
+    accessDenied:
+      "This HF token cannot read the required private TacVerse datasets.",
     lock: "Lock",
     source_live: "Live",
     source_cache: "Cached",
     source_stale: "Stale cache",
+    source_partial: "Partial",
     source_not_configured: "Not configured",
     source_unauthorized: "No permission",
     source_unavailable: "Unavailable",
@@ -141,6 +182,14 @@ const COPY = {
     eyebrow: "私有 COLLECTION 分析",
     title: "TacVerse Impact",
     subtitle: "统计私有 TacVerse Collection，并额外纳入 TacVerse/opendata。",
+    publicEyebrow: "公开数据集分析",
+    publicSubtitle:
+      "通过 Hugging Face 公开接口统计 TacVerse Collection 与 TacVerse/opendata。",
+    publicModeTitle: "仅公开数据模式",
+    publicModeBody:
+      "当前只使用匿名 Hugging Face API，不访问私有数据集、Publisher Analytics 或 Enterprise 日志。",
+    publicDownloadsHint: "HF 公开接口当前提供的累计下载总数。",
+    publicMetadataSource: "HF 公开元数据",
     dataSource: "数据来源",
     collectionChoice: "TacVerse Collection",
     opendataChoice: "TacVerse/opendata",
@@ -150,6 +199,19 @@ const COPY = {
     refresh: "刷新",
     refreshing: "刷新中…",
     downloads: "Downloads",
+    totalDownloads: "总下载量",
+    todayDownloads: "今日新增",
+    dayOverDayInProgress: "当前 UTC 统计日尚未结束，数值仍会变化",
+    dayOverDayWaiting: "正在等待 HF 发布当前 UTC 日数据",
+    downloadsDefinition: "HF 如何计算 Downloads",
+    downloadsDefinitionIntro:
+      "HF 会把同一 IP 在同一数据集仓库五分钟内产生的多个文件请求合并成一次 dataset download。",
+    downloadsDefinitionRepeat:
+      "同一人在五分钟后再次下载，或者更换 IP、设备后，仍可能再次计数。",
+    downloadsDefinitionLimits:
+      "Downloads 没有跨天、跨 IP、跨设备进行用户去重，不能直接解释为使用人数。",
+    datasetDownloadRules: "HF 数据集下载统计规则",
+    publisherAnalyticsRules: "Publisher Analytics 官方说明",
     collectionDownloads: "Collection 下载",
     opendataDownloads: "opendata 下载",
     last30: "最近 30 个 HF 统计日",
@@ -158,13 +220,22 @@ const COPY = {
     externalSessions: "下载会话",
     uniqueDownloaders: "唯一使用者",
     uniqueDownloaderHint:
-      "按匿名账号哈希或 IP 哈希去重，是使用人数估算值，不对应可识别的真实用户。",
+      "在日志覆盖期内，按已登录账号哈希或匿名 IP 哈希统计唯一标识。",
     anonymousIdentifiers: "匿名标识",
     authenticatedIdentifiers: "已登录账号哈希",
     anonymousIpIdentifiers: "匿名 IP 哈希",
     crossRepository: "跨仓库使用者",
     repeatDownloaders: "重复使用者",
-    countriesReached: "覆盖国家 / 地区",
+    countriesReached: "有效下载覆盖国家 / 地区",
+    community: "社区参与度",
+    communityHint:
+      "统计当前数据来源下各仓库的 HF Likes 与 Community 活动，可能包含自动化账号。",
+    likes: "Likes",
+    discussions: "Discussion",
+    pullRequests: "PR",
+    comments: "评论",
+    automatedThreads: "自动化主题",
+    repositoryCoverage: "仓库覆盖",
     advancedMissing:
       "请将 Enterprise Plus 请求日志放到 .xense-viewer/tacverse-impact/request-logs.csv",
     advancedSetupTitle: "唯一使用者统计正在等待请求日志",
@@ -178,7 +249,11 @@ const COPY = {
     dailyUniqueDownloaders: "每日唯一使用者",
     downloadTrend: "下载趋势",
     downloadTrendHint:
-      "Publisher 每日 downloads；每个 HF UTC 日对应北京时间 08:00 至次日 08:00。",
+      "Publisher 每日 downloads；HF 一旦发布当天数据，即使 UTC 统计日尚未结束也会计入。每个 HF UTC 日对应北京时间 08:00 至次日 08:00。",
+    publicDownloadChart: "公开下载量概览",
+    publicDownloadChartHint:
+      "展示各公开数据集当前的累计 Downloads；每日历史趋势需要 Publisher Analytics 权限。",
+    cumulativeDownloads: "累计 Downloads",
     daily: "每日下载",
     rolling: "7 日均线",
     all: "全部",
@@ -216,6 +291,7 @@ const COPY = {
     publisher: "Publisher Analytics",
     advanced: "Enterprise 日志",
     collectionSource: "私有 Collection",
+    communitySource: "HF Community",
     loading: "正在加载私有统计…",
     emptyTitle: "暂无 Publisher Analytics 下载历史。",
     permission:
@@ -224,19 +300,23 @@ const COPY = {
     stale: "最新刷新失败，当前展示上一次完整缓存。",
     error: "无法加载 TacVerse Impact 数据。",
     unlockTitle: "解锁私有统计",
-    unlockHint: "请输入本工程已经配置的 Impact 访问凭据。",
-    accessKey: "Impact 访问密钥",
-    unlock: "解锁",
+    unlockHint:
+      "请输入能够读取 TacVerse 私有 Collection 的 HF access token。验证通过后，只会保存到本工程的隐藏 .xense-viewer 文件夹。",
+    accessKey: "Hugging Face access token",
+    unlock: "保存令牌并进入",
+    publicOnly: "直接查看公开数据集",
+    publicOnlyHint: "无需令牌，不会访问私有统计。",
     accessNotConfigured:
       "请配置 TACVERSE_IMPACT_ACCESS_KEY 或工程内隐藏凭据文件，再在这里输入相同的值。",
     accessSetupCommand: "TACVERSE_IMPACT_ACCESS_KEY=<另一条随机密钥> bun dev",
     hfTokenSetup:
       "工程级后备路径：.xense-viewer/secrets/tacverse-impact-key；其中的凭据也会用于 Hugging Face 鉴权请求。",
-    accessDenied: "Impact 访问密钥不正确。",
+    accessDenied: "此 HF token 无法读取要求的 TacVerse 私有数据集。",
     lock: "锁定",
     source_live: "实时",
     source_cache: "缓存",
     source_stale: "过期缓存",
+    source_partial: "部分可用",
     source_not_configured: "未配置",
     source_unauthorized: "无权限",
     source_unavailable: "不可用",
@@ -248,6 +328,10 @@ const COPY = {
 
 function formatInteger(value: number): string {
   return new Intl.NumberFormat().format(value);
+}
+
+function formatAddedInteger(value: number): string {
+  return `+${formatInteger(value)}`;
 }
 
 function formatDate(value: string | null, locale: string): string {
@@ -281,14 +365,30 @@ function MetricCard({
   note?: string;
 }) {
   return (
-    <div className="panel-raised min-h-32 p-4">
-      <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-slate-500">
+    <div className="panel-raised relative min-h-32 p-4">
+      <p className="pr-8 text-[10px] font-medium uppercase tracking-[0.16em] text-slate-500">
         {label}
       </p>
-      <p className="mt-3 text-3xl font-semibold tracking-tight text-slate-100 tabular">
+      <p className="mt-4 text-3xl font-semibold tracking-tight text-slate-100 tabular">
         {value}
       </p>
-      {note && <p className="mt-2 text-xs leading-5 text-slate-500">{note}</p>}
+      {note && (
+        <span className="group/note absolute right-3 top-3 z-20">
+          <button
+            type="button"
+            aria-label={note}
+            className="flex h-5 w-5 items-center justify-center rounded-full border border-white/10 text-[10px] text-slate-600 transition hover:border-cyan-400/30 hover:text-cyan-300 focus:border-cyan-400/40 focus:text-cyan-300 focus:outline-none"
+          >
+            <FiInfo />
+          </button>
+          <span
+            role="tooltip"
+            className="pointer-events-none absolute right-0 top-7 hidden w-64 rounded-md border border-white/10 bg-[#11172a] px-3 py-2 text-[11px] font-normal normal-case leading-5 tracking-normal text-slate-300 shadow-xl group-hover/note:block group-focus-within/note:block"
+          >
+            {note}
+          </span>
+        </span>
+      )}
     </div>
   );
 }
@@ -305,7 +405,7 @@ function StatusPill({
       ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-300"
       : state === "cache"
         ? "border-cyan-400/25 bg-cyan-400/10 text-cyan-300"
-        : state === "stale" || state === "unauthorized"
+        : state === "stale" || state === "partial" || state === "unauthorized"
           ? "border-amber-400/25 bg-amber-400/10 text-amber-300"
           : "border-white/10 bg-white/[0.03] text-slate-400";
   return (
@@ -319,63 +419,59 @@ export default function TacVerseImpactPanel() {
   const { locale } = useLocale();
   const c = COPY[locale];
   const [data, setData] = useState<TacVerseImpactData | null>(null);
-  const [accessKey, setAccessKey] = useState("");
   const [candidateKey, setCandidateKey] = useState("");
   const [locked, setLocked] = useState(true);
-  const [accessNotConfigured, setAccessNotConfigured] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [windowSize, setWindowSize] = useState<WindowSize>(30);
+  const [windowSize, setWindowSize] = useState<WindowSize>("all");
   const [dataSource, setDataSource] = useState<ImpactDataSource>("collection");
 
   const load = useCallback(
-    async (key: string, force = false) => {
-      if (!key) {
-        setLoading(false);
-        setLocked(true);
-        return;
-      }
-      if (force) setRefreshing(true);
+    async (
+      key = "",
+      refresh = false,
+      publicOnly = false,
+      silentDenied = false,
+    ) => {
+      if (refresh) setRefreshing(true);
       else setLoading(true);
       setError(null);
-      setAccessNotConfigured(false);
       try {
-        const response = await fetch("/api/tacverse-impact", {
-          method: force ? "POST" : "GET",
-          headers: {
-            "x-tacverse-impact-key": key,
-            ...(force ? { "content-type": "application/json" } : {}),
+        const shouldPost = !publicOnly && (refresh || Boolean(key));
+        const response = await fetch(
+          publicOnly
+            ? "/api/tacverse-impact?scope=public"
+            : "/api/tacverse-impact",
+          {
+            method: shouldPost ? "POST" : "GET",
+            credentials: "same-origin",
+            headers: {
+              ...(key ? { "x-tacverse-impact-key": key } : {}),
+              ...(shouldPost ? { "content-type": "application/json" } : {}),
+            },
+            body: shouldPost ? "{}" : undefined,
           },
-          body: force ? "{}" : undefined,
-        });
+        );
         const payload = (await response.json()) as
           | TacVerseImpactData
           | { error?: string; code?: string };
-        if (response.status === 401 || response.status === 503) {
-          sessionStorage.removeItem(ACCESS_KEY_STORAGE);
+        if (response.status === 401) {
           setData(null);
           setLocked(true);
-          setAccessNotConfigured(
-            "code" in payload &&
-              payload.code === "impact_access_not_configured",
-          );
-          throw new Error(
-            response.status === 503 ? c.accessNotConfigured : c.accessDenied,
-          );
+          if (!silentDenied) throw new Error(c.accessDenied);
+          return;
         }
         if (
           !response.ok ||
           !("schemaVersion" in payload) ||
-          payload.schemaVersion !== 4
+          payload.schemaVersion !== 6
         ) {
           throw new Error("error" in payload ? payload.error : c.error);
         }
-        setAccessKey(key);
         setCandidateKey("");
         setLocked(false);
         setData(payload);
-        sessionStorage.setItem(ACCESS_KEY_STORAGE, key);
       } catch (reason: unknown) {
         setError(reason instanceof Error ? reason.message : c.error);
       } finally {
@@ -383,13 +479,11 @@ export default function TacVerseImpactPanel() {
         setRefreshing(false);
       }
     },
-    [c.accessDenied, c.accessNotConfigured, c.error],
+    [c.accessDenied, c.error],
   );
 
   useEffect(() => {
-    const saved = sessionStorage.getItem(ACCESS_KEY_STORAGE) ?? "";
-    if (saved) void load(saved);
-    else setLoading(false);
+    void load("", false, false, true);
   }, [load]);
 
   const submitAccessKey = (event: FormEvent) => {
@@ -397,15 +491,19 @@ export default function TacVerseImpactPanel() {
     void load(candidateKey.trim());
   };
 
-  const lock = () => {
-    sessionStorage.removeItem(ACCESS_KEY_STORAGE);
-    setAccessKey("");
-    setCandidateKey("");
-    setData(null);
-    setError(null);
-    setLocked(true);
+  const lock = async () => {
+    try {
+      await fetch("/api/tacverse-impact", {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+    } finally {
+      setCandidateKey("");
+      setData(null);
+      setError(null);
+      setLocked(true);
+    }
   };
-
   const chartData = useMemo(() => {
     const daily = data?.sourceViews[dataSource].daily ?? [];
     return windowSize === "all" ? daily : daily.slice(-windowSize);
@@ -415,6 +513,21 @@ export default function TacVerseImpactPanel() {
     const daily = data?.sourceViews[dataSource].advancedDaily ?? [];
     return windowSize === "all" ? daily : daily.slice(-windowSize);
   }, [data, dataSource, windowSize]);
+
+  const publicChartData = useMemo(
+    () =>
+      (data?.repositories ?? [])
+        .filter((repository) =>
+          dataSource === "collection"
+            ? repository.scope === "collection"
+            : repository.id === "TacVerse/opendata",
+        )
+        .map((repository) => ({
+          repository: repository.id,
+          downloads: repository.downloads,
+        })),
+    [data, dataSource],
+  );
 
   if (loading) {
     return (
@@ -448,21 +561,7 @@ export default function TacVerseImpactPanel() {
               className="mt-2 w-full rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-400/40"
             />
           </label>
-          {error && (
-            <div
-              className={`mt-3 text-xs ${accessNotConfigured ? "text-amber-300" : "text-red-300"}`}
-            >
-              <p>{error}</p>
-              {accessNotConfigured && (
-                <div className="mt-3 space-y-2 rounded-md border border-amber-400/15 bg-amber-400/[0.04] p-3 leading-5 text-amber-200/80">
-                  <code className="block overflow-x-auto whitespace-nowrap rounded bg-black/20 px-2 py-1.5 text-[11px] text-amber-100">
-                    {c.accessSetupCommand}
-                  </code>
-                  <p>{c.hfTokenSetup}</p>
-                </div>
-              )}
-            </div>
-          )}
+          {error && <div className="mt-3 text-xs text-red-300">{error}</div>}
           <button
             type="submit"
             disabled={!candidateKey.trim()}
@@ -470,12 +569,24 @@ export default function TacVerseImpactPanel() {
           >
             {c.unlock}
           </button>
+          <div className="my-4 h-px bg-white/5" />
+          <button
+            type="button"
+            onClick={() => void load("", false, true)}
+            className="w-full rounded-md border border-white/10 px-4 py-2 text-sm font-medium text-slate-200 hover:border-cyan-400/25 hover:text-cyan-200"
+          >
+            {c.publicOnly}
+          </button>
+          <p className="mt-2 text-center text-xs leading-5 text-slate-500">
+            {c.publicOnlyHint}
+          </p>
         </form>
       </div>
     );
   }
 
   const statusText = (state: ImpactSourceState) => c[`source_${state}`];
+  const privateMode = data.accessMode === "private";
   const sourceView = data.sourceViews[dataSource];
   const sourceRepositories = data.repositories.filter((repository) =>
     dataSource === "collection"
@@ -491,6 +602,14 @@ export default function TacVerseImpactPanel() {
         formatDate(sourceView.coverage.advancedLog.start, locale),
       )
     : c.advancedMissing;
+  const todayUtc = new Date().toISOString().slice(0, 10);
+  const todayDownloads = sourceView.daily.find(
+    (row) => row.date === todayUtc,
+  )?.totalDownloads;
+  const todayDownloadsNote =
+    todayDownloads === undefined
+      ? c.dayOverDayWaiting
+      : `${todayUtc.slice(5)} · ${c.dayOverDayInProgress}`;
 
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-5 pb-8">
@@ -517,18 +636,20 @@ export default function TacVerseImpactPanel() {
       <header className="flex flex-wrap items-start justify-between gap-4 border-b border-white/5 pb-5">
         <div>
           <p className="text-[10px] font-semibold tracking-[0.22em] text-cyan-400">
-            {c.eyebrow}
+            {privateMode ? c.eyebrow : c.publicEyebrow}
           </p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-100">
             {c.title}
           </h1>
-          <p className="mt-2 text-sm text-slate-400">{c.subtitle}</p>
+          <p className="mt-2 text-sm text-slate-400">
+            {privateMode ? c.subtitle : c.publicSubtitle}
+          </p>
         </div>
         <div className="flex gap-2">
           <button
             type="button"
             disabled={refreshing}
-            onClick={() => void load(accessKey, true)}
+            onClick={() => void load("", true, !privateMode)}
             className="inline-flex items-center gap-2 rounded-md border border-cyan-400/25 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-200 disabled:opacity-50"
           >
             <FiRefreshCw className={refreshing ? "animate-spin" : ""} />
@@ -536,7 +657,7 @@ export default function TacVerseImpactPanel() {
           </button>
           <button
             type="button"
-            onClick={lock}
+            onClick={() => void lock()}
             className="inline-flex items-center gap-2 rounded-md border border-white/10 px-3 py-2 text-xs text-slate-400"
           >
             <FiLock /> {c.lock}
@@ -544,142 +665,239 @@ export default function TacVerseImpactPanel() {
         </div>
       </header>
 
+      {!privateMode && (
+        <section className="rounded-md border border-cyan-400/20 bg-cyan-400/[0.06] px-4 py-3 text-sm text-cyan-100">
+          <p className="font-medium">{c.publicModeTitle}</p>
+          <p className="mt-1 text-xs leading-5 text-cyan-100/70">
+            {c.publicModeBody}
+          </p>
+        </section>
+      )}
+
       {data.sourceStatus.cache === "stale" && (
         <div className="rounded-md border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-200">
           {c.stale} {data.sourceStatus.message}
         </div>
       )}
-      {dataSource === "collection" &&
+      {privateMode &&
+        dataSource === "collection" &&
         data.sourceStatus.collection === "unauthorized" && (
           <div className="rounded-md border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-200">
             {c.incomplete} {data.sourceStatus.message}
           </div>
         )}
-      {data.sourceStatus.publisherAnalytics === "unauthorized" && (
-        <div className="rounded-md border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-200">
-          {c.permission}
-        </div>
-      )}
+      {privateMode &&
+        data.sourceStatus.publisherAnalytics === "unauthorized" && (
+          <div className="rounded-md border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-200">
+            {c.permission}
+          </div>
+        )}
       {error && <div className="text-xs text-red-300">{error}</div>}
 
-      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
+      <section
+        className={`grid grid-cols-1 gap-3 sm:grid-cols-2 ${
+          privateMode ? "xl:grid-cols-4" : "xl:grid-cols-2"
+        }`}
+      >
         <MetricCard
-          label={c.downloads}
+          label={c.totalDownloads}
           value={formatInteger(sourceView.metrics.totalDownloads)}
-          note={coverageLabel(sourceView.coverage.total, locale)}
-        />
-        <MetricCard
-          label={c.uniqueDownloaders}
-          value={
-            sourceView.metrics.externalUsers === null
-              ? "—"
-              : formatInteger(sourceView.metrics.externalUsers)
-          }
           note={
-            sourceView.metrics.externalUsers === null
-              ? c.advancedMissing
-              : `${exactNote} · ${c.uniqueDownloaderHint}`
+            privateMode
+              ? coverageLabel(sourceView.coverage.total, locale)
+              : c.publicDownloadsHint
           }
         />
-        <MetricCard
-          label={c.externalSessions}
-          value={
-            sourceView.metrics.externalSessions === null
-              ? "—"
-              : formatInteger(sourceView.metrics.externalSessions)
-          }
-          note={exactNote}
-        />
-        <MetricCard
-          label={c.repeatDownloaders}
-          value={
-            sourceView.metrics.repeatIdentifiers === null
-              ? "—"
-              : formatInteger(sourceView.metrics.repeatIdentifiers)
-          }
-        />
-        <MetricCard
-          label={c.countriesReached}
-          value={
-            advancedAvailable ? formatInteger(sourceView.geography.length) : "—"
-          }
-        />
-        <MetricCard
-          label={c.last30}
-          value={formatInteger(sourceView.metrics.last30Days)}
-        />
-        <MetricCard
-          label={c.last7}
-          value={formatInteger(sourceView.metrics.last7Days)}
-        />
+        {privateMode && (
+          <MetricCard
+            label={c.todayDownloads}
+            value={
+              todayDownloads === undefined
+                ? "—"
+                : formatAddedInteger(todayDownloads)
+            }
+            note={todayDownloadsNote}
+          />
+        )}
+        {privateMode && (
+          <>
+            <MetricCard
+              label={c.last30}
+              value={formatInteger(sourceView.metrics.last30Days)}
+            />
+            <MetricCard
+              label={c.last7}
+              value={formatInteger(sourceView.metrics.last7Days)}
+            />
+          </>
+        )}
+        {!privateMode && (
+          <MetricCard
+            label={c.selectedDatasets}
+            value={formatInteger(sourceRepositories.length)}
+          />
+        )}
+        {privateMode && (
+          <>
+            <MetricCard
+              label={c.uniqueDownloaders}
+              value={
+                sourceView.metrics.externalUsers === null
+                  ? "—"
+                  : formatInteger(sourceView.metrics.externalUsers)
+              }
+              note={
+                sourceView.metrics.externalUsers === null
+                  ? c.advancedMissing
+                  : `${coverageLabel(sourceView.coverage.advancedLog, locale)} · ${c.uniqueDownloaderHint}`
+              }
+            />
+            <MetricCard
+              label={c.externalSessions}
+              value={
+                sourceView.metrics.externalSessions === null
+                  ? "—"
+                  : formatInteger(sourceView.metrics.externalSessions)
+              }
+              note={exactNote}
+            />
+            <MetricCard
+              label={c.repeatDownloaders}
+              value={
+                sourceView.metrics.repeatIdentifiers === null
+                  ? "—"
+                  : formatInteger(sourceView.metrics.repeatIdentifiers)
+              }
+            />
+            <MetricCard
+              label={c.countriesReached}
+              value={
+                advancedAvailable
+                  ? formatInteger(sourceView.geography.length)
+                  : "—"
+              }
+              note={
+                advancedAvailable
+                  ? coverageLabel(sourceView.coverage.advancedLog, locale)
+                  : c.advancedMissing
+              }
+            />
+          </>
+        )}
       </section>
+      {privateMode &&
+        (!sourceView.daily.length ? (
+          <section className="panel-raised p-8 text-center text-slate-300">
+            {c.emptyTitle}
+          </section>
+        ) : (
+          <section className="panel-raised p-5">
+            <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-medium text-slate-100">
+                  {c.downloadTrend}
+                </h2>
+                <p className="mt-1 text-xs text-slate-500">
+                  {c.downloadTrendHint}
+                </p>
+              </div>
+              <div className="flex rounded-md border border-white/10 bg-black/10 p-0.5">
+                {([7, 30, 90, "all"] as WindowSize[]).map((value) => (
+                  <button
+                    type="button"
+                    key={value}
+                    onClick={() => setWindowSize(value)}
+                    className={`rounded px-2.5 py-1 text-[10px] ${windowSize === value ? "bg-cyan-400/15 text-cyan-200" : "text-slate-500"}`}
+                  >
+                    {value === "all" ? c.all : `${value}D`}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="h-80">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={chartData}>
+                  <CartesianGrid
+                    stroke="rgba(255,255,255,.05)"
+                    vertical={false}
+                  />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fill: "#64748b", fontSize: 10 }}
+                    tickLine={false}
+                    axisLine={false}
+                    minTickGap={32}
+                  />
+                  <YAxis
+                    tick={{ fill: "#64748b", fontSize: 10 }}
+                    tickLine={false}
+                    axisLine={false}
+                    width={44}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      background: "#11172a",
+                      border: "1px solid rgba(255,255,255,.1)",
+                      borderRadius: 6,
+                      fontSize: 12,
+                    }}
+                  />
+                  <Bar
+                    name={c.daily}
+                    dataKey="totalDownloads"
+                    fill="#22d3ee"
+                    fillOpacity={0.55}
+                    radius={[2, 2, 0, 0]}
+                  />
+                  <Line
+                    name={c.rolling}
+                    type="monotone"
+                    dataKey="rolling7Average"
+                    stroke="#a78bfa"
+                    strokeWidth={2}
+                    dot={false}
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
+        ))}
 
-      {data.sourceStatus.advancedLog === "not_configured" && (
-        <section className="rounded-md border border-amber-400/20 bg-amber-400/[0.06] px-4 py-3 text-sm text-amber-100">
-          <p className="font-medium">{c.advancedSetupTitle}</p>
-          <p className="mt-1 text-xs leading-5 text-amber-100/70">
-            {c.advancedSetupBody}{" "}
-            <a
-              href="https://huggingface.co/docs/hub/publisher-analytics#unique-downloaders-and-more-granular-logs"
-              target="_blank"
-              rel="noreferrer"
-              className="text-cyan-300 hover:text-cyan-200"
-            >
-              {c.learnMore} <FiExternalLink className="inline" />
-            </a>
-          </p>
-        </section>
-      )}
-
-      {!sourceView.daily.length ? (
-        <section className="panel-raised p-8 text-center text-slate-300">
-          {c.emptyTitle}
-        </section>
-      ) : (
+      {!privateMode && (
         <section className="panel-raised p-5">
-          <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 className="text-base font-medium text-slate-100">
-                {c.downloadTrend}
-              </h2>
-              <p className="mt-1 text-xs text-slate-500">
-                {c.downloadTrendHint}
-              </p>
-            </div>
-            <div className="flex rounded-md border border-white/10 bg-black/10 p-0.5">
-              {([7, 30, 90, "all"] as WindowSize[]).map((value) => (
-                <button
-                  type="button"
-                  key={value}
-                  onClick={() => setWindowSize(value)}
-                  className={`rounded px-2.5 py-1 text-[10px] ${windowSize === value ? "bg-cyan-400/15 text-cyan-200" : "text-slate-500"}`}
-                >
-                  {value === "all" ? c.all : `${value}D`}
-                </button>
-              ))}
-            </div>
+          <div className="mb-5">
+            <h2 className="text-base font-medium text-slate-100">
+              {c.publicDownloadChart}
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              {c.publicDownloadChartHint}
+            </p>
           </div>
           <div className="h-80">
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={chartData}>
+              <ComposedChart data={publicChartData}>
                 <CartesianGrid
                   stroke="rgba(255,255,255,.05)"
                   vertical={false}
                 />
                 <XAxis
-                  dataKey="date"
+                  dataKey="repository"
                   tick={{ fill: "#64748b", fontSize: 10 }}
                   tickLine={false}
                   axisLine={false}
-                  minTickGap={32}
+                  minTickGap={24}
                 />
                 <YAxis
                   tick={{ fill: "#64748b", fontSize: 10 }}
                   tickLine={false}
                   axisLine={false}
-                  width={44}
+                  width={52}
                 />
                 <Tooltip
+                  formatter={(value) => [
+                    formatInteger(Number(value)),
+                    c.cumulativeDownloads,
+                  ]}
                   contentStyle={{
                     background: "#11172a",
                     border: "1px solid rgba(255,255,255,.1)",
@@ -688,24 +906,67 @@ export default function TacVerseImpactPanel() {
                   }}
                 />
                 <Bar
-                  name={c.daily}
-                  dataKey="totalDownloads"
+                  name={c.cumulativeDownloads}
+                  dataKey="downloads"
                   fill="#22d3ee"
                   fillOpacity={0.55}
+                  maxBarSize={96}
                   radius={[2, 2, 0, 0]}
-                />
-                <Line
-                  name={c.rolling}
-                  type="monotone"
-                  dataKey="rolling7Average"
-                  stroke="#a78bfa"
-                  strokeWidth={2}
-                  dot={false}
                 />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
         </section>
+      )}
+
+      <details className="panel-raised group px-4 py-3 text-sm">
+        <summary className="cursor-pointer font-medium text-slate-200 marker:text-cyan-400">
+          {c.downloadsDefinition}
+        </summary>
+        <div className="mt-3 space-y-2 text-xs leading-5 text-slate-400">
+          <p>{c.downloadsDefinitionIntro}</p>
+          <p>{c.downloadsDefinitionRepeat}</p>
+          <p>{c.downloadsDefinitionLimits}</p>
+          <div className="flex flex-wrap gap-x-4 gap-y-2 pt-1">
+            <a
+              href="https://huggingface.co/docs/hub/datasets-download-stats"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-cyan-300 hover:text-cyan-200"
+            >
+              {c.datasetDownloadRules} <FiExternalLink />
+            </a>
+            <a
+              href="https://huggingface.co/docs/hub/publisher-analytics"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-cyan-300 hover:text-cyan-200"
+            >
+              {c.publisherAnalyticsRules} <FiExternalLink />
+            </a>
+          </div>
+        </div>
+      </details>
+
+      {privateMode && data.sourceStatus.advancedLog === "not_configured" && (
+        <details className="panel-raised group px-4 py-3 text-sm">
+          <summary className="cursor-pointer font-medium text-slate-200 marker:text-cyan-400">
+            {c.advancedSetupTitle}
+          </summary>
+          <div className="mt-3 text-xs leading-5 text-slate-400">
+            <p>
+              {c.advancedSetupBody}{" "}
+              <a
+                href="https://huggingface.co/docs/hub/publisher-analytics#unique-downloaders-and-more-granular-logs"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-cyan-300 hover:text-cyan-200"
+              >
+                {c.learnMore} <FiExternalLink />
+              </a>
+            </p>
+          </div>
+        </details>
       )}
 
       {advancedAvailable && usageChartData.length > 0 && (
@@ -767,6 +1028,62 @@ export default function TacVerseImpactPanel() {
         </section>
       )}
 
+      <section className="panel-raised p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-medium text-slate-100">
+              {c.community}
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">{c.communityHint}</p>
+          </div>
+          <StatusPill
+            state={data.sourceStatus.community}
+            label={statusText(data.sourceStatus.community)}
+          />
+        </div>
+        <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <MetricCard
+            label={c.likes}
+            value={
+              sourceView.community.likes === null
+                ? "—"
+                : formatInteger(sourceView.community.likes)
+            }
+          />
+          <MetricCard
+            label={c.discussions}
+            value={
+              sourceView.community.discussions === null
+                ? "—"
+                : formatInteger(sourceView.community.discussions)
+            }
+          />
+          <MetricCard
+            label={c.pullRequests}
+            value={
+              sourceView.community.pullRequests === null
+                ? "—"
+                : formatInteger(sourceView.community.pullRequests)
+            }
+          />
+          <MetricCard
+            label={c.comments}
+            value={
+              sourceView.community.comments === null
+                ? "—"
+                : formatInteger(sourceView.community.comments)
+            }
+          />
+        </div>
+        <p className="mt-3 text-xs text-slate-500">
+          {c.repositoryCoverage}:{" "}
+          {formatInteger(sourceView.community.repositoriesCovered)}/
+          {formatInteger(sourceView.community.repositoriesTotal)}
+          {sourceView.community.automatedThreads !== null &&
+            ` · ${c.automatedThreads}: ${formatInteger(sourceView.community.automatedThreads)}`}
+        </p>
+      </section>
+
       <section className="panel-raised overflow-hidden">
         <div className="border-b border-white/5 p-5">
           <h2 className="text-base font-medium text-slate-100">{c.ranking}</h2>
@@ -777,7 +1094,11 @@ export default function TacVerseImpactPanel() {
           </p>
         </div>
         <div className="max-h-[34rem] overflow-auto">
-          <table className="w-full min-w-[850px] text-left text-xs">
+          <table
+            className={`w-full text-left text-xs ${
+              privateMode ? "min-w-[850px]" : "min-w-[560px]"
+            }`}
+          >
             <thead className="sticky top-0 z-10 bg-[var(--surface-1)] text-slate-500">
               <tr>
                 <th className="px-5 py-3 font-medium">{c.dataset}</th>
@@ -785,14 +1106,22 @@ export default function TacVerseImpactPanel() {
                 <th className="px-4 py-3 text-right font-medium">
                   {c.downloads}
                 </th>
-                <th className="px-4 py-3 text-right font-medium">{c.last30}</th>
-                <th className="px-4 py-3 text-right font-medium">{c.last7}</th>
-                <th className="px-4 py-3 text-right font-medium">
-                  {c.sessions}
-                </th>
-                <th className="px-5 py-3 text-right font-medium">
-                  {c.identifiers}
-                </th>
+                {privateMode && (
+                  <>
+                    <th className="px-4 py-3 text-right font-medium">
+                      {c.last30}
+                    </th>
+                    <th className="px-4 py-3 text-right font-medium">
+                      {c.last7}
+                    </th>
+                    <th className="px-4 py-3 text-right font-medium">
+                      {c.sessions}
+                    </th>
+                    <th className="px-5 py-3 text-right font-medium">
+                      {c.identifiers}
+                    </th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -825,22 +1154,26 @@ export default function TacVerseImpactPanel() {
                   <td className="px-4 py-3 text-right text-slate-200 tabular">
                     {formatInteger(repository.downloads)}
                   </td>
-                  <td className="px-4 py-3 text-right text-slate-400 tabular">
-                    {formatInteger(repository.last30Days)}
-                  </td>
-                  <td className="px-4 py-3 text-right text-slate-400 tabular">
-                    {formatInteger(repository.last7Days)}
-                  </td>
-                  <td className="px-4 py-3 text-right text-slate-400 tabular">
-                    {repository.externalSessions === null
-                      ? "—"
-                      : formatInteger(repository.externalSessions)}
-                  </td>
-                  <td className="px-5 py-3 text-right text-slate-400 tabular">
-                    {repository.anonymousIdentifiers === null
-                      ? "—"
-                      : formatInteger(repository.anonymousIdentifiers)}
-                  </td>
+                  {privateMode && (
+                    <>
+                      <td className="px-4 py-3 text-right text-slate-400 tabular">
+                        {formatInteger(repository.last30Days)}
+                      </td>
+                      <td className="px-4 py-3 text-right text-slate-400 tabular">
+                        {formatInteger(repository.last7Days)}
+                      </td>
+                      <td className="px-4 py-3 text-right text-slate-400 tabular">
+                        {repository.externalSessions === null
+                          ? "—"
+                          : formatInteger(repository.externalSessions)}
+                      </td>
+                      <td className="px-5 py-3 text-right text-slate-400 tabular">
+                        {repository.anonymousIdentifiers === null
+                          ? "—"
+                          : formatInteger(repository.anonymousIdentifiers)}
+                      </td>
+                    </>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -910,37 +1243,39 @@ export default function TacVerseImpactPanel() {
         </section>
       )}
 
-      <section className="panel-raised overflow-hidden">
-        <div className="border-b border-white/5 p-5">
-          <h2 className="text-base font-medium text-slate-100">{c.table}</h2>
-        </div>
-        <div className="max-h-[28rem] overflow-auto">
-          <table className="w-full min-w-[760px] text-left text-xs">
-            <thead className="sticky top-0 z-10 bg-[var(--surface-1)] text-slate-500">
-              <tr>
-                <th className="px-5 py-3">{c.date}</th>
-                <th className="px-4 py-3 text-right">{c.total}</th>
-                <th className="px-5 py-3 text-right">{c.rolling}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[...sourceView.daily].reverse().map((row) => (
-                <tr key={row.date} className="border-t border-white/5">
-                  <td className="px-5 py-3 font-mono text-slate-300">
-                    {row.date}
-                  </td>
-                  <td className="px-4 py-3 text-right text-slate-200">
-                    {formatInteger(row.totalDownloads)}
-                  </td>
-                  <td className="px-5 py-3 text-right text-slate-400">
-                    {row.rolling7Average.toFixed(1)}
-                  </td>
+      {privateMode && (
+        <section className="panel-raised overflow-hidden">
+          <div className="border-b border-white/5 p-5">
+            <h2 className="text-base font-medium text-slate-100">{c.table}</h2>
+          </div>
+          <div className="max-h-[28rem] overflow-auto">
+            <table className="w-full min-w-[760px] text-left text-xs">
+              <thead className="sticky top-0 z-10 bg-[var(--surface-1)] text-slate-500">
+                <tr>
+                  <th className="px-5 py-3">{c.date}</th>
+                  <th className="px-4 py-3 text-right">{c.total}</th>
+                  <th className="px-5 py-3 text-right">{c.rolling}</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+              </thead>
+              <tbody>
+                {[...sourceView.daily].reverse().map((row) => (
+                  <tr key={row.date} className="border-t border-white/5">
+                    <td className="px-5 py-3 font-mono text-slate-300">
+                      {row.date}
+                    </td>
+                    <td className="px-4 py-3 text-right text-slate-200">
+                      {formatInteger(row.totalDownloads)}
+                    </td>
+                    <td className="px-5 py-3 text-right text-slate-400">
+                      {row.rolling7Average.toFixed(1)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {dataSource === "collection" ? (
@@ -953,10 +1288,12 @@ export default function TacVerseImpactPanel() {
                 <dt className="text-slate-500">{c.datasets}</dt>
                 <dd>{data.collection.datasetCount}</dd>
               </div>
-              <div className="flex justify-between">
-                <dt className="text-slate-500">{c.privateDatasets}</dt>
-                <dd>{data.collection.privateDatasetCount}</dd>
-              </div>
+              {privateMode && (
+                <div className="flex justify-between">
+                  <dt className="text-slate-500">{c.privateDatasets}</dt>
+                  <dd>{data.collection.privateDatasetCount}</dd>
+                </div>
+              )}
               <div className="flex justify-between">
                 <dt className="text-slate-500">{c.publicDatasets}</dt>
                 <dd>{data.collection.publicDatasetCount}</dd>
@@ -999,11 +1336,21 @@ export default function TacVerseImpactPanel() {
         <div className="panel-raised p-5">
           <h2 className="text-base font-medium text-slate-100">{c.status}</h2>
           <dl className="mt-5 space-y-3 text-xs">
-            {[
-              [c.collectionSource, data.sourceStatus.collection],
-              [c.publisher, data.sourceStatus.publisherAnalytics],
-              [c.advanced, data.sourceStatus.advancedLog],
-            ].map(([label, state]) => (
+            {(privateMode
+              ? [
+                  [c.collectionSource, data.sourceStatus.collection],
+                  [c.publisher, data.sourceStatus.publisherAnalytics],
+                  [c.advanced, data.sourceStatus.advancedLog],
+                  [c.communitySource, data.sourceStatus.community],
+                ]
+              : [
+                  [
+                    c.publicMetadataSource,
+                    data.sourceStatus.publisherAnalytics,
+                  ],
+                  [c.communitySource, data.sourceStatus.community],
+                ]
+            ).map(([label, state]) => (
               <div
                 key={String(label)}
                 className="flex items-center justify-between gap-4"
@@ -1017,14 +1364,20 @@ export default function TacVerseImpactPanel() {
                 </dd>
               </div>
             ))}
-            <div className="flex justify-between gap-4">
-              <dt className="text-slate-500">{c.coverage}</dt>
-              <dd>{coverageLabel(sourceView.coverage.total, locale)}</dd>
-            </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-slate-500">{c.logCoverage}</dt>
-              <dd>{coverageLabel(sourceView.coverage.advancedLog, locale)}</dd>
-            </div>
+            {privateMode && (
+              <>
+                <div className="flex justify-between gap-4">
+                  <dt className="text-slate-500">{c.coverage}</dt>
+                  <dd>{coverageLabel(sourceView.coverage.total, locale)}</dd>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <dt className="text-slate-500">{c.logCoverage}</dt>
+                  <dd>
+                    {coverageLabel(sourceView.coverage.advancedLog, locale)}
+                  </dd>
+                </div>
+              </>
+            )}
             <div className="flex justify-between gap-4">
               <dt className="text-slate-500">{c.cache}</dt>
               <dd>{c[`cache_${data.sourceStatus.cache}`]}</dd>

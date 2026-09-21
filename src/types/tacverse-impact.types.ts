@@ -2,6 +2,7 @@ export type ImpactSourceState =
   | "live"
   | "cache"
   | "stale"
+  | "partial"
   | "not_configured"
   | "unauthorized"
   | "unavailable";
@@ -14,6 +15,16 @@ export type DateCoverage = {
 export type ImpactRepositoryScope = "collection" | "standalone";
 export type ImpactDataSource = "collection" | "opendata";
 
+export type ImpactCommunityEngagement = {
+  likes: number | null;
+  discussions: number | null;
+  pullRequests: number | null;
+  comments: number | null;
+  automatedThreads: number | null;
+  repositoriesCovered: number;
+  repositoriesTotal: number;
+};
+
 export type TacVerseImpactRepository = {
   id: string;
   url: string;
@@ -21,6 +32,7 @@ export type TacVerseImpactRepository = {
   private: boolean;
   position: number | null;
   lastModified: string | null;
+  likes: number;
   downloads: number;
   last30Days: number;
   last7Days: number;
@@ -70,10 +82,12 @@ export type TacVerseImpactSourceView = {
     sessions: number;
     users: number;
   }>;
+  community: ImpactCommunityEngagement;
 };
 
 export type TacVerseImpactData = {
-  schemaVersion: 4;
+  schemaVersion: 6;
+  accessMode: "private" | "public";
   collection: {
     slug: string;
     title: string;
@@ -92,6 +106,8 @@ export type TacVerseImpactData = {
     subdatasetCount: number | null;
     storageBytes: number | null;
     lastModified: string | null;
+    likes: number | null;
+    downloads: number | null;
   };
   repositories: TacVerseImpactRepository[];
   metrics: {
@@ -127,6 +143,7 @@ export type TacVerseImpactData = {
     collection: ImpactSourceState;
     publisherAnalytics: ImpactSourceState;
     advancedLog: ImpactSourceState;
+    community: ImpactSourceState;
     metadata: ImpactSourceState;
     cache: "miss" | "fresh" | "stale";
     message: string | null;

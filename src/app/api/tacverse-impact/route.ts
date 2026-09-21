@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { NextRequest } from "next/server";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -14,12 +14,15 @@ import {
   aggregateAdvancedLogs,
   buildImpactData,
   parsePublisherAnalytics,
+  publisherSeriesFromRepositoryTotals,
   readDeveloperHashes,
+  replacePublisherAnalytics,
   readImpactCache,
   writeImpactCache,
   type ImpactRepositoryDefinition,
 } from "@/lib/tacverse-impact";
 import type {
+  ImpactCommunityEngagement,
   ImpactSourceState,
   TacVerseImpactData,
 } from "@/types/tacverse-impact.types";
@@ -41,6 +44,14 @@ const PROJECT_IMPACT_SECRET_PATH = path.join(
   "secrets",
   "tacverse-impact-key",
 );
+const PROJECT_IMPACT_SESSION_PATH = path.join(
+  process.cwd(),
+  ".xense-viewer",
+  "secrets",
+  "tacverse-impact-session",
+);
+const SESSION_COOKIE = "tacverse-impact-session";
+const SESSION_MAX_AGE_SECONDS = 365 * 24 * 60 * 60;
 const MAX_SECRET_LENGTH = 4096;
 const DEFAULT_ADVANCED_LOG_PATH = path.join(
   process.cwd(),
@@ -62,10 +73,13 @@ class ImpactSourceError extends Error {
 
 let refreshInFlight: Promise<TacVerseImpactData> | null = null;
 
-function json(payload: unknown, status = 200): Response {
+function json(payload: unknown, status = 200, headers?: HeadersInit): Response {
   return Response.json(payload, {
     status,
-    headers: { "cache-control": "no-store, no-transform" },
+    headers: {
+      "cache-control": "no-store, no-transform",
+      ...headers,
+    },
   });
 }
 
@@ -80,35 +94,106 @@ async function readProjectImpactSecret(): Promise<string | null> {
   }
 }
 
-async function accessError(request?: NextRequest): Promise<Response | null> {
+async function readProjectImpactSession(): Promise<string | null> {
+  try {
+    const value = (
+      await fs.readFile(PROJECT_IMPACT_SESSION_PATH, "utf8")
+    ).trim();
+    return value && value.length <= MAX_SECRET_LENGTH ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writePrivateFile(
+  filePath: string,
+  value: string,
+): Promise<void> {
+  const directory = path.dirname(filePath);
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  await fs.chmod(directory, 0o700).catch(() => undefined);
+  const temporary = `${filePath}.${randomBytes(8).toString("hex")}.tmp`;
+  await fs.writeFile(temporary, `${value}\n`, { mode: 0o600 });
+  await fs.rename(temporary, filePath);
+  await fs.chmod(filePath, 0o600);
+}
+
+function secretsEqual(left: string | null, right: string | null): boolean {
+  if (!left || !right) return false;
+  const leftBytes = Buffer.from(left);
+  const rightBytes = Buffer.from(right);
+  return (
+    leftBytes.length === rightBytes.length &&
+    timingSafeEqual(leftBytes, rightBytes)
+  );
+}
+
+function sessionCookie(value: string, request: NextRequest): string {
+  const secure = request.nextUrl.protocol === "https:" ? "; Secure" : "";
+  return `${SESSION_COOKIE}=${encodeURIComponent(value)}; Path=/; Max-Age=${SESSION_MAX_AGE_SECONDS}; HttpOnly; SameSite=Strict${secure}`;
+}
+
+function clearSessionCookie(request: NextRequest): string {
+  const secure = request.nextUrl.protocol === "https:" ? "; Secure" : "";
+  return `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict${secure}`;
+}
+
+type Authorization = {
+  denied: Response | null;
+  setCookie: string | null;
+};
+
+async function authorizePrivateRequest(
+  request: NextRequest,
+  allowTokenEnrollment: boolean,
+): Promise<Authorization> {
+  const session = await readProjectImpactSession();
+  const cookie = request.cookies.get(SESSION_COOKIE)?.value ?? null;
+  if (secretsEqual(session, cookie)) {
+    return { denied: null, setCookie: null };
+  }
+
+  const provided = request.headers.get(ACCESS_HEADER)?.trim() ?? "";
   const expected =
     process.env.TACVERSE_IMPACT_ACCESS_KEY?.trim() ||
     (await readProjectImpactSecret());
-  if (!expected) {
-    return json(
-      {
-        error:
-          "Configure TACVERSE_IMPACT_ACCESS_KEY or .xense-viewer/secrets/tacverse-impact-key before private analytics can be served.",
-        code: "impact_access_not_configured",
-      },
-      503,
-    );
+  let accepted = secretsEqual(expected, provided);
+  let enrolled = false;
+
+  if (!accepted && provided && allowTokenEnrollment) {
+    try {
+      await fetchCollection(provided, true);
+      await writePrivateFile(PROJECT_IMPACT_SECRET_PATH, provided);
+      accepted = true;
+      enrolled = true;
+    } catch {
+      accepted = false;
+    }
   }
-  const provided = request?.headers.get(ACCESS_HEADER)?.trim() ?? "";
-  const expectedBytes = Buffer.from(expected);
-  const providedBytes = Buffer.from(provided);
-  const valid =
-    expectedBytes.length === providedBytes.length &&
-    timingSafeEqual(expectedBytes, providedBytes);
-  return valid
-    ? null
-    : json(
+
+  if (!accepted) {
+    return {
+      denied: json(
         {
-          error: "A valid TacVerse Impact access key is required.",
+          error:
+            "A Hugging Face token with access to the private TacVerse Collection is required.",
           code: "impact_access_denied",
         },
         401,
-      );
+      ),
+      setCookie: null,
+    };
+  }
+
+  const nextSession =
+    !session || enrolled ? randomBytes(32).toString("hex") : session;
+  if (!session || enrolled) {
+    await writePrivateFile(PROJECT_IMPACT_SESSION_PATH, nextSession);
+  }
+  return {
+    denied: null,
+    setCookie: sessionCookie(nextSession, request),
+  };
 }
 
 function authHeaders(token: string | null): HeadersInit {
@@ -118,7 +203,7 @@ function authHeaders(token: string | null): HeadersInit {
 async function fetchText(
   url: string,
   token: string | null,
-  source: "collection" | "publisher" | "metadata",
+  source: "collection" | "publisher" | "metadata" | "community",
 ): Promise<string> {
   let response: Response;
   try {
@@ -168,7 +253,10 @@ type CollectionResult = {
   collection: TacVerseImpactData["collection"];
 };
 
-async function fetchCollection(token: string): Promise<CollectionResult> {
+async function fetchCollection(
+  token: string | null,
+  requirePrivate = true,
+): Promise<CollectionResult> {
   const url =
     process.env.TACVERSE_IMPACT_COLLECTION_URL?.trim() ||
     DEFAULT_COLLECTION_API_URL;
@@ -183,7 +271,13 @@ async function fetchCollection(token: string): Promise<CollectionResult> {
     const item = raw as Record<string, unknown>;
     const type = item.type ?? item.repoType;
     const id = typeof item.id === "string" ? item.id.trim() : "";
-    if (type !== "dataset" || !id || id === IMPACT_REPO_ID) continue;
+    if (
+      type !== "dataset" ||
+      !id ||
+      id === IMPACT_REPO_ID ||
+      (!requirePrivate && item.private === true)
+    )
+      continue;
     byId.set(id, {
       id,
       scope: "collection",
@@ -194,17 +288,21 @@ async function fetchCollection(token: string): Promise<CollectionResult> {
           : null,
       lastModified:
         typeof item.lastModified === "string" ? item.lastModified : null,
+      likes: numberOrNull(item.likes) ?? 0,
+      downloads: numberOrNull(item.downloads) ?? 0,
     });
   }
 
-  const missingPrivate = requiredPrivateRepos().filter(
-    (repository) => !byId.has(repository),
-  );
-  if (missingPrivate.length) {
-    throw new ImpactSourceError(
-      `The Hugging Face credential cannot see required private Collection members: ${missingPrivate.join(", ")}.`,
-      "unauthorized",
+  if (requirePrivate) {
+    const missingPrivate = requiredPrivateRepos().filter(
+      (repository) => !byId.has(repository),
     );
+    if (missingPrivate.length) {
+      throw new ImpactSourceError(
+        `The Hugging Face credential cannot see required private Collection members: ${missingPrivate.join(", ")}.`,
+        "unauthorized",
+      );
+    }
   }
 
   const repositories = [...byId.values()];
@@ -231,7 +329,7 @@ async function fetchCollection(token: string): Promise<CollectionResult> {
       datasetCount: repositories.length,
       publicDatasetCount: repositories.length - privateDatasetCount,
       privateDatasetCount,
-      requiredPrivateReposVisible: true,
+      requiredPrivateReposVisible: requirePrivate,
     },
   };
 }
@@ -239,9 +337,16 @@ async function fetchCollection(token: string): Promise<CollectionResult> {
 function metadataFromPayload(value: unknown): {
   storageBytes: number | null;
   lastModified: string | null;
+  likes: number | null;
+  downloads: number | null;
 } {
   if (!value || typeof value !== "object") {
-    return { storageBytes: null, lastModified: null };
+    return {
+      storageBytes: null,
+      lastModified: null,
+      likes: null,
+      downloads: null,
+    };
   }
   const payload = value as Record<string, unknown>;
   const siblings = Array.isArray(payload.siblings) ? payload.siblings : [];
@@ -272,7 +377,62 @@ function metadataFromPayload(value: unknown): {
       (hasSiblingSize ? siblingTotal : null),
     lastModified:
       typeof payload.lastModified === "string" ? payload.lastModified : null,
+    likes: numberOrNull(payload.likes),
+    downloads: numberOrNull(payload.downloads),
   };
+}
+
+async function fetchPublicRepositoryDownloads(
+  repositoryId: string,
+  fallback: number,
+): Promise<number> {
+  const encodedId = repositoryId
+    .split("/")
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+  const params = new URLSearchParams();
+  params.append("expand[]", "downloadsAllTime");
+  params.append("expand[]", "downloads");
+  try {
+    const payload = JSON.parse(
+      await fetchText(
+        `https://huggingface.co/api/datasets/${encodedId}?${params.toString()}`,
+        null,
+        "metadata",
+      ),
+    ) as Record<string, unknown>;
+    return (
+      numberOrNull(payload.downloadsAllTime) ??
+      numberOrNull(payload.downloads) ??
+      fallback
+    );
+  } catch {
+    return fallback;
+  }
+}
+
+async function enrichPublicRepositoryDownloads(
+  repositories: ImpactRepositoryDefinition[],
+): Promise<ImpactRepositoryDefinition[]> {
+  const enriched = new Array<ImpactRepositoryDefinition>(repositories.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < repositories.length) {
+      const index = cursor;
+      cursor += 1;
+      const repository = repositories[index];
+      enriched[index] = {
+        ...repository,
+        downloads: await fetchPublicRepositoryDownloads(
+          repository.id,
+          repository.downloads,
+        ),
+      };
+    }
+  };
+  const workerCount = Math.min(8, repositories.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return enriched;
 }
 
 function rootDirectoryCount(value: unknown): number | null {
@@ -284,7 +444,7 @@ function rootDirectoryCount(value: unknown): number | null {
   }).length;
 }
 
-async function fetchRepositoryMetadata(token: string): Promise<{
+async function fetchRepositoryMetadata(token: string | null): Promise<{
   repository: Partial<TacVerseImpactData["repository"]>;
   status: ImpactSourceState;
 }> {
@@ -307,6 +467,143 @@ async function fetchRepositoryMetadata(token: string): Promise<{
   } catch {
     return { repository: {}, status: "unavailable" };
   }
+}
+
+type RepositoryCommunity = {
+  discussions: number;
+  pullRequests: number;
+  comments: number;
+  automatedThreads: number;
+};
+
+type CommunityResult = {
+  byRepository: Map<string, RepositoryCommunity>;
+  status: ImpactSourceState;
+};
+
+function automatedCommunityAuthor(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const author = value as Record<string, unknown>;
+  const label =
+    `${typeof author.name === "string" ? author.name : ""} ${typeof author.fullname === "string" ? author.fullname : ""}`.toLowerCase();
+  return (
+    label.includes("(bot)") ||
+    label.endsWith("-bot") ||
+    label.includes(" bot ") ||
+    label.includes("parquet-converter")
+  );
+}
+
+async function fetchRepositoryCommunity(
+  repositoryId: string,
+  token: string | null,
+): Promise<RepositoryCommunity> {
+  const encodedId = repositoryId
+    .split("/")
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+  let page = 0;
+  let seen = 0;
+  let expected = Number.POSITIVE_INFINITY;
+  const result: RepositoryCommunity = {
+    discussions: 0,
+    pullRequests: 0,
+    comments: 0,
+    automatedThreads: 0,
+  };
+
+  while (seen < expected && page < 100) {
+    const response = await fetch(
+      `https://huggingface.co/api/datasets/${encodedId}/discussions?status=all&p=${page}`,
+      {
+        headers: authHeaders(token),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        cache: "no-store",
+      },
+    );
+    if (!response.ok) {
+      throw new ImpactSourceError(
+        `community request for ${repositoryId} returned HTTP ${response.status}.`,
+        response.status === 401 || response.status === 403
+          ? "unauthorized"
+          : "unavailable",
+      );
+    }
+    const payload = (await response.json()) as Record<string, unknown>;
+    const rows = Array.isArray(payload.discussions) ? payload.discussions : [];
+    expected = numberOrNull(payload.count) ?? rows.length;
+    if (!rows.length) break;
+
+    for (const value of rows) {
+      if (!value || typeof value !== "object") continue;
+      const row = value as Record<string, unknown>;
+      if (row.isPullRequest === true) result.pullRequests += 1;
+      else result.discussions += 1;
+      result.comments += numberOrNull(row.numComments) ?? 0;
+      if (automatedCommunityAuthor(row.author)) {
+        result.automatedThreads += 1;
+      }
+    }
+    seen += rows.length;
+    page += 1;
+  }
+
+  return result;
+}
+
+async function fetchCommunityData(
+  repositories: ImpactRepositoryDefinition[],
+  token: string | null,
+): Promise<CommunityResult> {
+  const byRepository = new Map<string, RepositoryCommunity>();
+  let cursor = 0;
+  let failures = 0;
+  const worker = async () => {
+    while (cursor < repositories.length) {
+      const repository = repositories[cursor];
+      cursor += 1;
+      try {
+        byRepository.set(
+          repository.id,
+          await fetchRepositoryCommunity(repository.id, token),
+        );
+      } catch {
+        failures += 1;
+      }
+    }
+  };
+  const workerCount = Math.min(8, repositories.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return {
+    byRepository,
+    status:
+      failures === 0 ? "live" : byRepository.size ? "partial" : "unavailable",
+  };
+}
+
+function aggregateCommunity(
+  repositories: ImpactRepositoryDefinition[],
+  byRepository: ReadonlyMap<string, RepositoryCommunity>,
+): ImpactCommunityEngagement {
+  const rows = repositories
+    .map((repository) => byRepository.get(repository.id))
+    .filter((row): row is RepositoryCommunity => row !== undefined);
+  const known = rows.length > 0;
+  return {
+    likes: repositories.reduce((sum, repository) => sum + repository.likes, 0),
+    discussions: known
+      ? rows.reduce((sum, row) => sum + row.discussions, 0)
+      : null,
+    pullRequests: known
+      ? rows.reduce((sum, row) => sum + row.pullRequests, 0)
+      : null,
+    comments: known ? rows.reduce((sum, row) => sum + row.comments, 0) : null,
+    automatedThreads: known
+      ? rows.reduce((sum, row) => sum + row.automatedThreads, 0)
+      : null,
+    repositoriesCovered: rows.length,
+    repositoriesTotal: repositories.length,
+  };
 }
 
 async function advancedData(
@@ -347,13 +644,18 @@ async function advancedData(
   }
 }
 
-function standaloneRepository(): ImpactRepositoryDefinition {
+function standaloneRepository(
+  likes = 0,
+  downloads = 0,
+): ImpactRepositoryDefinition {
   return {
     id: IMPACT_REPO_ID,
     scope: "standalone",
     private: false,
     position: null,
     lastModified: null,
+    likes,
+    downloads,
   };
 }
 
@@ -367,6 +669,7 @@ function emptyData(
     collectionStatus: status,
     publisherStatus: status,
     metadataStatus: "unavailable",
+    communityStatus: "unavailable",
     advancedStatus: process.env.TACVERSE_IMPACT_LOG_PATH
       ? "unavailable"
       : "not_configured",
@@ -397,9 +700,12 @@ async function refresh(
     throw error;
   }
 
-  const repositories = [...collection.repositories, standaloneRepository()];
+  const initialRepositories = [
+    ...collection.repositories,
+    standaloneRepository(),
+  ];
   const repositoryIds = new Set(
-    repositories.map((repository) => repository.id),
+    initialRepositories.map((repository) => repository.id),
   );
   const collectionIds = new Set(
     collection.repositories.map((repository) => repository.id),
@@ -408,10 +714,28 @@ async function refresh(
     process.env.TACVERSE_IMPACT_PUBLISHER_ANALYTICS_URL?.trim() ||
     DEFAULT_PUBLISHER_URL;
 
-  const [metadata, advanced] = await Promise.all([
+  const [metadata, advanced, community] = await Promise.all([
     fetchRepositoryMetadata(token),
     advancedData(root, repositoryIds, collectionIds),
+    fetchCommunityData(initialRepositories, token),
   ]);
+  const repositories = [
+    ...collection.repositories,
+    standaloneRepository(
+      metadata.repository.likes ?? 0,
+      metadata.repository.downloads ?? 0,
+    ),
+  ];
+  const communityBySource = {
+    collection: aggregateCommunity(
+      collection.repositories,
+      community.byRepository,
+    ),
+    opendata: aggregateCommunity(
+      repositories.filter((repository) => repository.id === IMPACT_REPO_ID),
+      community.byRepository,
+    ),
+  };
 
   let csv: string;
   try {
@@ -429,6 +753,8 @@ async function refresh(
         advanced: advanced.aggregation,
         advancedBySource: advanced.bySource ?? undefined,
         advancedStatus: advanced.status,
+        communityBySource,
+        communityStatus: community.status,
         message: error.message,
       });
     }
@@ -451,9 +777,109 @@ async function refresh(
     advanced: advanced.aggregation,
     advancedBySource: advanced.bySource ?? undefined,
     advancedStatus: advanced.status,
+    communityBySource,
+    communityStatus: community.status,
   });
   await writeImpactCache(root, data).catch(() => undefined);
   return data;
+}
+
+async function refreshCachedPublisherAnalytics(
+  root: string,
+  cached: TacVerseImpactData,
+  token: string,
+): Promise<TacVerseImpactData> {
+  const repositoryIds = new Set(
+    cached.repositories.map((repository) => repository.id),
+  );
+  const collectionIds = new Set(
+    cached.repositories
+      .filter((repository) => repository.scope === "collection")
+      .map((repository) => repository.id),
+  );
+  const publisherUrl =
+    process.env.TACVERSE_IMPACT_PUBLISHER_ANALYTICS_URL?.trim() ||
+    DEFAULT_PUBLISHER_URL;
+  const csv = await fetchText(publisherUrl, token, "publisher");
+  const data = replacePublisherAnalytics(
+    asCached(cached, false),
+    parsePublisherAnalytics(csv, repositoryIds),
+    {
+      collection: parsePublisherAnalytics(csv, collectionIds),
+      opendata: parsePublisherAnalytics(csv, new Set([IMPACT_REPO_ID])),
+    },
+  );
+  await writeImpactCache(root, data).catch(() => undefined);
+  return data;
+}
+
+async function loadPublicImpact(): Promise<TacVerseImpactData> {
+  const [collection, metadata] = await Promise.all([
+    fetchCollection(null, false),
+    fetchRepositoryMetadata(null),
+  ]);
+  const repositories = await enrichPublicRepositoryDownloads([
+    ...collection.repositories,
+    standaloneRepository(
+      metadata.repository.likes ?? 0,
+      metadata.repository.downloads ?? 0,
+    ),
+  ]);
+  const collectionRepositories = repositories.filter(
+    (repository) => repository.scope === "collection",
+  );
+  const opendataRepositories = repositories.filter(
+    (repository) => repository.id === IMPACT_REPO_ID,
+  );
+  const community = await fetchCommunityData(repositories, null);
+  const collectionPublisher = publisherSeriesFromRepositoryTotals(
+    new Map(
+      collectionRepositories.map((repository) => [
+        repository.id,
+        repository.downloads,
+      ]),
+    ),
+  );
+  const opendataPublisher = publisherSeriesFromRepositoryTotals(
+    new Map(
+      opendataRepositories.map((repository) => [
+        repository.id,
+        repository.downloads,
+      ]),
+    ),
+  );
+  const publisher = publisherSeriesFromRepositoryTotals(
+    new Map(
+      repositories.map((repository) => [repository.id, repository.downloads]),
+    ),
+  );
+
+  return buildImpactData({
+    accessMode: "public",
+    publisher,
+    publisherBySource: {
+      collection: collectionPublisher,
+      opendata: opendataPublisher,
+    },
+    repositories,
+    collection: collection.collection,
+    repository: metadata.repository,
+    collectionStatus: "live",
+    publisherStatus: "live",
+    metadataStatus: metadata.status,
+    advancedStatus: "not_configured",
+    communityBySource: {
+      collection: aggregateCommunity(
+        collectionRepositories,
+        community.byRepository,
+      ),
+      opendata: aggregateCommunity(
+        opendataRepositories,
+        community.byRepository,
+      ),
+    },
+    communityStatus: community.status,
+  });
 }
 
 function asCached(
@@ -468,6 +894,7 @@ function asCached(
     "publisherAnalytics",
     "metadata",
     "advancedLog",
+    "community",
   ] as const) {
     if (copy.sourceStatus[source] === "live") {
       copy.sourceStatus[source] = stale ? "stale" : "cache";
@@ -481,21 +908,26 @@ async function loadImpact(force: boolean): Promise<TacVerseImpactData> {
   const root = resolveLocalDatasetRoot();
   const projectSecret = await readProjectImpactSecret();
   const cached = await readImpactCache(root);
+  const credential = await resolveHfToken(root);
+  const token = projectSecret ?? credential.token;
   const fresh = cached && new Date(cached.expiresAt).valueOf() > Date.now();
-  if (!force && fresh) return asCached(cached, false);
+
+  if (!force && fresh) {
+    if (!token) return asCached(cached, false);
+    try {
+      return await refreshCachedPublisherAnalytics(root, cached, token);
+    } catch (error: unknown) {
+      const raw = error instanceof Error ? error.message : String(error);
+      const message = redactHfSecrets(raw, [
+        process.env.HF_TOKEN ?? "",
+        projectSecret ?? "",
+      ]);
+      return asCached(cached, false, message);
+    }
+  }
 
   if (!refreshInFlight) {
-    refreshInFlight = (async () => {
-      const credential = await resolveHfToken(root);
-      const token = credential.token ?? projectSecret;
-      if (!token && cached) {
-        throw new ImpactSourceError(
-          "A Hugging Face token is required to refresh private Collection analytics.",
-          "not_configured",
-        );
-      }
-      return refresh(root, token);
-    })().finally(() => {
+    refreshInFlight = refresh(root, token).finally(() => {
       refreshInFlight = null;
     });
   }
@@ -519,11 +951,33 @@ async function loadImpact(force: boolean): Promise<TacVerseImpactData> {
   }
 }
 
-export async function GET(request?: NextRequest): Promise<Response> {
-  const denied = await accessError(request);
-  if (denied) return denied;
+export async function GET(request: NextRequest): Promise<Response> {
+  if (request.nextUrl.searchParams.get("scope") === "public") {
+    try {
+      return json(await loadPublicImpact());
+    } catch (error: unknown) {
+      return json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Public Impact data unavailable.",
+        },
+        500,
+      );
+    }
+  }
+
+  const authorization = await authorizePrivateRequest(request, false);
+  if (authorization.denied) return authorization.denied;
   try {
-    return json(await loadImpact(false));
+    return json(
+      await loadImpact(false),
+      200,
+      authorization.setCookie
+        ? { "set-cookie": authorization.setCookie }
+        : undefined,
+    );
   } catch (error: unknown) {
     return json(
       {
@@ -536,13 +990,19 @@ export async function GET(request?: NextRequest): Promise<Response> {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
-  const denied = await accessError(request);
-  if (denied) return denied;
   if (!isSameOriginRequest(request)) {
     return json({ error: "Cross-origin requests are not allowed." }, 403);
   }
+  const authorization = await authorizePrivateRequest(request, true);
+  if (authorization.denied) return authorization.denied;
   try {
-    return json(await loadImpact(true));
+    return json(
+      await loadImpact(true),
+      200,
+      authorization.setCookie
+        ? { "set-cookie": authorization.setCookie }
+        : undefined,
+    );
   } catch (error: unknown) {
     return json(
       {
@@ -552,4 +1012,11 @@ export async function POST(request: NextRequest): Promise<Response> {
       500,
     );
   }
+}
+
+export async function DELETE(request: NextRequest): Promise<Response> {
+  if (!isSameOriginRequest(request)) {
+    return json({ error: "Cross-origin requests are not allowed." }, 403);
+  }
+  return json({ ok: true }, 200, { "set-cookie": clearSessionCookie(request) });
 }

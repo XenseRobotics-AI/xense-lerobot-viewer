@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import type {
+  ImpactCommunityEngagement,
+  ImpactDataSource,
   ImpactRepositoryScope,
   ImpactSourceState,
   TacVerseImpactDailyRow,
@@ -27,6 +29,8 @@ export type ImpactRepositoryDefinition = {
   private: boolean;
   position: number | null;
   lastModified: string | null;
+  likes: number;
+  downloads: number;
 };
 
 type PublisherRepositorySeries = {
@@ -258,6 +262,29 @@ export function parsePublisherAnalytics(
   };
 }
 
+export function publisherSeriesFromRepositoryTotals(
+  totals: ReadonlyMap<string, number>,
+): PublisherSeries {
+  const byRepository = new Map<string, PublisherRepositorySeries>();
+  let totalDownloads = 0;
+  for (const [repository, downloads] of totals) {
+    const value = Number.isFinite(downloads) && downloads >= 0 ? downloads : 0;
+    totalDownloads += value;
+    byRepository.set(repository, {
+      daily: new Map(),
+      totalDownloads: value,
+      reportedTotal: value,
+    });
+  }
+  return {
+    daily: [],
+    totalDownloads,
+    cumulativeDownloads: totalDownloads,
+    coverage: null,
+    byRepository,
+  };
+}
+
 function identityFor(
   row: CsvRow,
 ): { key: string; authenticated: boolean } | null {
@@ -430,6 +457,7 @@ export function aggregateAdvancedLogs(
     ).length,
     coverage: dates.length ? { start: dates[0], end: dates.at(-1)! } : null,
     geography: [...countries.entries()]
+      .filter(([country]) => country !== "ZZ" && /^[A-Z]{2}$/u.test(country))
       .map(([country, value]) => ({
         country,
         sessions: value.sessions,
@@ -479,6 +507,7 @@ function impactDailyRows(publisher: PublisherSeries): TacVerseImpactDailyRow[] {
 function buildSourceView(
   publisher: PublisherSeries,
   advanced: AdvancedAggregation | null,
+  community: ImpactCommunityEngagement,
 ): TacVerseImpactSourceView {
   const values = publisher.daily.map((row) => row.downloads);
   return {
@@ -512,11 +541,13 @@ function buildSourceView(
       advancedLog: advanced?.coverage ?? null,
     },
     geography: advanced?.geography ?? [],
+    community,
   };
 }
 
 export function buildImpactData(options: {
   publisher: PublisherSeries;
+  accessMode?: "private" | "public";
   publisherBySource?: {
     collection: PublisherSeries;
     opendata: PublisherSeries;
@@ -528,10 +559,15 @@ export function buildImpactData(options: {
     collection: AdvancedAggregation | null;
     opendata: AdvancedAggregation | null;
   };
+  communityBySource?: {
+    collection: ImpactCommunityEngagement;
+    opendata: ImpactCommunityEngagement;
+  };
   repository?: Partial<TacVerseImpactData["repository"]>;
   collectionStatus?: ImpactSourceState;
   publisherStatus?: ImpactSourceState;
   advancedStatus?: ImpactSourceState;
+  communityStatus?: ImpactSourceState;
   metadataStatus?: ImpactSourceState;
   message?: string | null;
   now?: Date;
@@ -544,6 +580,8 @@ export function buildImpactData(options: {
       private: false,
       position: null,
       lastModified: null,
+      likes: 0,
+      downloads: 0,
     },
   ];
   const values = options.publisher.daily.map((row) => row.downloads);
@@ -557,6 +595,19 @@ export function buildImpactData(options: {
     collection: null,
     opendata: options.advanced ?? null,
   };
+  const emptyCommunity: ImpactCommunityEngagement = {
+    likes: null,
+    discussions: null,
+    pullRequests: null,
+    comments: null,
+    automatedThreads: null,
+    repositoriesCovered: 0,
+    repositoriesTotal: 0,
+  };
+  const communityBySource = options.communityBySource ?? {
+    collection: emptyCommunity,
+    opendata: emptyCommunity,
+  };
 
   const repositories = definitions
     .map((definition) => {
@@ -565,7 +616,7 @@ export function buildImpactData(options: {
       return {
         ...definition,
         url: `https://huggingface.co/datasets/${definition.id}`,
-        downloads: publisher?.totalDownloads ?? 0,
+        downloads: publisher?.totalDownloads ?? definition.downloads,
         last30Days: repositoryWindow(publisher, 30),
         last7Days: repositoryWindow(publisher, 7),
         externalSessions: options.advanced ? (advanced?.sessions ?? 0) : null,
@@ -582,7 +633,7 @@ export function buildImpactData(options: {
         a.id.localeCompare(b.id),
     );
 
-  const totalDownloads = values.reduce((sum, value) => sum + value, 0);
+  const totalDownloads = options.publisher.totalDownloads;
   const collectionDownloads = repositories
     .filter((repository) => repository.scope === "collection")
     .reduce((sum, repository) => sum + repository.downloads, 0);
@@ -592,7 +643,8 @@ export function buildImpactData(options: {
   const refreshedAt = now.toISOString();
 
   return {
-    schemaVersion: 4,
+    schemaVersion: 6,
+    accessMode: options.accessMode ?? "private",
     collection: {
       slug: options.collection?.slug ?? IMPACT_COLLECTION_SLUG,
       title: options.collection?.title ?? "TacVerse",
@@ -614,6 +666,8 @@ export function buildImpactData(options: {
       subdatasetCount: options.repository?.subdatasetCount ?? null,
       storageBytes: options.repository?.storageBytes ?? null,
       lastModified: options.repository?.lastModified ?? null,
+      likes: options.repository?.likes ?? null,
+      downloads: options.repository?.downloads ?? null,
     },
     repositories,
     metrics: {
@@ -640,10 +694,12 @@ export function buildImpactData(options: {
       collection: buildSourceView(
         publisherBySource.collection,
         advancedBySource.collection,
+        communityBySource.collection,
       ),
       opendata: buildSourceView(
         publisherBySource.opendata,
         advancedBySource.opendata,
+        communityBySource.opendata,
       ),
     },
     advancedDaily: options.advanced
@@ -666,6 +722,7 @@ export function buildImpactData(options: {
       advancedLog:
         options.advancedStatus ??
         (options.advanced ? "live" : "not_configured"),
+      community: options.communityStatus ?? "not_configured",
       metadata: options.metadataStatus ?? "live",
       cache: "miss",
       message: options.message ?? null,
@@ -674,6 +731,72 @@ export function buildImpactData(options: {
     refreshedAt,
     expiresAt: new Date(now.valueOf() + IMPACT_CACHE_TTL_MS).toISOString(),
   };
+}
+
+export function replacePublisherAnalytics(
+  data: TacVerseImpactData,
+  publisher: PublisherSeries,
+  publisherBySource: {
+    collection: PublisherSeries;
+    opendata: PublisherSeries;
+  },
+  now = new Date(),
+): TacVerseImpactData {
+  const result = structuredClone(data);
+  const values = publisher.daily.map((row) => row.downloads);
+  const updateSourceView = (
+    source: ImpactDataSource,
+    series: PublisherSeries,
+  ) => {
+    const sourceValues = series.daily.map((row) => row.downloads);
+    const view = result.sourceViews[source];
+    view.metrics.totalDownloads = series.totalDownloads;
+    view.metrics.last30Days = sumTail(sourceValues, 30);
+    view.metrics.last7Days = sumTail(sourceValues, 7);
+    view.metrics.dailyAverage7 =
+      sumTail(sourceValues, 7) / Math.min(7, Math.max(1, sourceValues.length));
+    view.daily = impactDailyRows(series);
+    view.coverage.total = series.coverage;
+  };
+
+  updateSourceView("collection", publisherBySource.collection);
+  updateSourceView("opendata", publisherBySource.opendata);
+
+  result.metrics.totalDownloads = publisher.totalDownloads;
+  result.metrics.collectionDownloads =
+    publisherBySource.collection.totalDownloads;
+  result.metrics.opendataDownloads = publisherBySource.opendata.totalDownloads;
+  result.metrics.cumulativeDownloads = publisher.totalDownloads;
+  result.metrics.last30Days = sumTail(values, 30);
+  result.metrics.last7Days = sumTail(values, 7);
+  result.metrics.dailyAverage7 =
+    sumTail(values, 7) / Math.min(7, Math.max(1, values.length));
+  result.daily = impactDailyRows(publisher);
+  result.coverage.total = publisher.coverage;
+  result.repositories = result.repositories
+    .map((repository) => {
+      const series = publisher.byRepository.get(repository.id);
+      return {
+        ...repository,
+        downloads: series?.totalDownloads ?? repository.downloads,
+        last30Days: series
+          ? repositoryWindow(series, 30)
+          : repository.last30Days,
+        last7Days: series ? repositoryWindow(series, 7) : repository.last7Days,
+      };
+    })
+    .sort(
+      (left, right) =>
+        right.downloads - left.downloads ||
+        (left.position ?? Number.MAX_SAFE_INTEGER) -
+          (right.position ?? Number.MAX_SAFE_INTEGER) ||
+        left.id.localeCompare(right.id),
+    );
+  result.sourceStatus.publisherAnalytics = "live";
+  result.sourceStatus.cache = "fresh";
+  result.sourceStatus.message = null;
+  result.refreshedAt = now.toISOString();
+  return result;
 }
 
 export function impactCachePath(root: string): string {
@@ -692,7 +815,7 @@ export async function readImpactCache(
     const data = JSON.parse(
       await fs.readFile(impactCachePath(root), "utf8"),
     ) as TacVerseImpactData;
-    return data.schemaVersion === 4 ? data : null;
+    return data.schemaVersion === 6 ? data : null;
   } catch {
     return null;
   }
