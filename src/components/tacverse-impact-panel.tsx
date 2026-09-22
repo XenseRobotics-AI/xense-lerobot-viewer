@@ -34,7 +34,7 @@ const COPY = {
       "Public Hugging Face metadata for the TacVerse Collection and TacVerse/opendata.",
     publicModeTitle: "Public-only mode",
     publicModeBody:
-      "Only anonymous Hugging Face APIs are used. Private datasets, Publisher Analytics, and Enterprise logs are not accessed.",
+      "Anonymous Hugging Face APIs provide only current lifetime Downloads, public repository metadata, and Community activity. They do not provide Publisher Analytics daily history, private datasets, or Enterprise logs.",
     publicDownloadsHint:
       "Current lifetime total reported by the public HF API.",
     publicMetadataSource: "Public HF metadata",
@@ -48,9 +48,22 @@ const COPY = {
     refreshing: "Refreshing…",
     downloads: "Downloads",
     totalDownloads: "Total downloads",
-    todayDownloads: "Today's downloads",
-    dayOverDayInProgress: "Current UTC day is still in progress",
-    dayOverDayWaiting: "Waiting for HF to publish the current UTC day",
+    todayDownloads: "Current HF day",
+    dayOverDayInProgress: "HF has published this still-open UTC day",
+    dayOverDayWaiting: "HF has not published this UTC day yet",
+    publisherTimingTitle: "Publisher reporting window",
+    publisherTimingCurrent:
+      "Current HF day: {date} · China Standard Time {start} 08:00 → {end} 08:00.",
+    publisherTimingPublished:
+      "Latest day published by HF: {date} · China Standard Time {start} 08:00 → {end} 08:00.",
+    publisherTimingEmpty:
+      "HF has not published any daily rows for this source.",
+    publisherTimingWaiting:
+      "This reporting window closes at {end} 08:00 China Standard Time. HF does not guarantee a publication time, so a reliable update countdown is unavailable; Refresh checks upstream immediately.",
+    publisherTimingAvailable:
+      "HF has published the current, incomplete window. Its value can continue changing until the window closes at {end} 08:00 China Standard Time.",
+    publisherTimingNaturalDay:
+      "Publisher daily rows are UTC buckets, not China calendar days. Exact 00:00–24:00 China-day reporting requires the Enterprise request-level log export.",
     downloadsDefinition: "How HF counts Downloads",
     downloadsDefinitionIntro:
       "HF combines file requests from the same IP in the same dataset repository within a five-minute window into one dataset download.",
@@ -157,7 +170,7 @@ const COPY = {
     unlock: "Save token and unlock",
     publicOnly: "View public datasets",
     publicOnlyHint:
-      "No token required. Private analytics will not be accessed.",
+      "No token required. Includes lifetime Downloads, public metadata, and Community activity only; daily history is unavailable.",
     accessNotConfigured:
       "Configure TACVERSE_IMPACT_ACCESS_KEY or the project-local hidden credential file, then enter the same value here.",
     accessSetupCommand:
@@ -187,7 +200,7 @@ const COPY = {
       "通过 Hugging Face 公开接口统计 TacVerse Collection 与 TacVerse/opendata。",
     publicModeTitle: "仅公开数据模式",
     publicModeBody:
-      "当前只使用匿名 Hugging Face API，不访问私有数据集、Publisher Analytics 或 Enterprise 日志。",
+      "匿名 Hugging Face API 仅提供当前累计 Downloads、公开仓库元数据和社区数据，不提供 Publisher Analytics 逐日历史，也不访问私有数据集或 Enterprise 日志。",
     publicDownloadsHint: "HF 公开接口当前提供的累计下载总数。",
     publicMetadataSource: "HF 公开元数据",
     dataSource: "数据来源",
@@ -200,9 +213,21 @@ const COPY = {
     refreshing: "刷新中…",
     downloads: "Downloads",
     totalDownloads: "总下载量",
-    todayDownloads: "今日新增",
-    dayOverDayInProgress: "当前 UTC 统计日尚未结束，数值仍会变化",
-    dayOverDayWaiting: "正在等待 HF 发布当前 UTC 日数据",
+    todayDownloads: "当前 HF 统计日",
+    dayOverDayInProgress: "HF 已发布这个尚未结束的 UTC 统计日",
+    dayOverDayWaiting: "HF 尚未发布当前 UTC 统计日",
+    publisherTimingTitle: "Publisher 统计时间说明",
+    publisherTimingCurrent:
+      "当前 HF 统计日：{date} · 北京时间 {start} 08:00 → {end} 08:00。",
+    publisherTimingPublished:
+      "HF 最新已发布：{date} · 北京时间 {start} 08:00 → {end} 08:00。",
+    publisherTimingEmpty: "HF 尚未为当前来源发布任何逐日数据。",
+    publisherTimingWaiting:
+      "本统计窗口将在北京时间 {end} 08:00 结束。HF 没有承诺固定发布时间，因此无法提供可靠的更新倒计时；点击“刷新”会立即重新检查上游。",
+    publisherTimingAvailable:
+      "HF 已发布当前尚未结束的统计窗口；数值仍可能变化，窗口将在北京时间 {end} 08:00 结束。",
+    publisherTimingNaturalDay:
+      "Publisher 逐日数据是 UTC 分桶，不是北京时间自然日。若要精确统计北京时间 00:00–24:00，必须配置 Enterprise 请求级日志导出。",
     downloadsDefinition: "HF 如何计算 Downloads",
     downloadsDefinitionIntro:
       "HF 会把同一 IP 在同一数据集仓库五分钟内产生的多个文件请求合并成一次 dataset download。",
@@ -305,7 +330,8 @@ const COPY = {
     accessKey: "Hugging Face access token",
     unlock: "保存令牌并进入",
     publicOnly: "直接查看公开数据集",
-    publicOnlyHint: "无需令牌，不会访问私有统计。",
+    publicOnlyHint:
+      "无需令牌；仅提供累计 Downloads、公开元数据和社区数据，不提供逐日历史。",
     accessNotConfigured:
       "请配置 TACVERSE_IMPACT_ACCESS_KEY 或工程内隐藏凭据文件，再在这里输入相同的值。",
     accessSetupCommand: "TACVERSE_IMPACT_ACCESS_KEY=<另一条随机密钥> bun dev",
@@ -344,6 +370,19 @@ function formatDate(value: string | null, locale: string): string {
     day: "2-digit",
     timeZone: "Asia/Shanghai",
   }).format(date);
+}
+
+function addUtcDays(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function interpolate(template: string, values: Record<string, string>): string {
+  return Object.entries(values).reduce(
+    (result, [key, value]) => result.replaceAll(`{${key}}`, value),
+    template,
+  );
 }
 
 function coverageLabel(
@@ -603,9 +642,33 @@ export default function TacVerseImpactPanel() {
       )
     : c.advancedMissing;
   const todayUtc = new Date().toISOString().slice(0, 10);
+  const todayUtcEnd = addUtcDays(todayUtc, 1);
+  const latestPublishedDay = sourceView.coverage.total?.end ?? null;
+  const latestPublishedEnd = latestPublishedDay
+    ? addUtcDays(latestPublishedDay, 1)
+    : null;
   const todayDownloads = sourceView.daily.find(
     (row) => row.date === todayUtc,
   )?.totalDownloads;
+  const currentWindowText = interpolate(c.publisherTimingCurrent, {
+    date: todayUtc,
+    start: todayUtc,
+    end: todayUtcEnd,
+  });
+  const latestPublishedText =
+    latestPublishedDay && latestPublishedEnd
+      ? interpolate(c.publisherTimingPublished, {
+          date: latestPublishedDay,
+          start: latestPublishedDay,
+          end: latestPublishedEnd,
+        })
+      : c.publisherTimingEmpty;
+  const publisherAvailabilityText = interpolate(
+    todayDownloads === undefined
+      ? c.publisherTimingWaiting
+      : c.publisherTimingAvailable,
+    { end: todayUtcEnd },
+  );
   const todayDownloadsNote =
     todayDownloads === undefined
       ? c.dayOverDayWaiting
@@ -671,6 +734,24 @@ export default function TacVerseImpactPanel() {
           <p className="mt-1 text-xs leading-5 text-cyan-100/70">
             {c.publicModeBody}
           </p>
+        </section>
+      )}
+
+      {privateMode && (
+        <section
+          className={`rounded-md border px-4 py-3 text-sm ${
+            todayDownloads === undefined
+              ? "border-amber-400/25 bg-amber-400/[0.07] text-amber-100"
+              : "border-cyan-400/20 bg-cyan-400/[0.06] text-cyan-100"
+          }`}
+        >
+          <p className="font-medium">{c.publisherTimingTitle}</p>
+          <div className="mt-1 space-y-1 text-xs leading-5 opacity-75">
+            <p>{currentWindowText}</p>
+            <p>{latestPublishedText}</p>
+            <p>{publisherAvailabilityText}</p>
+            <p>{c.publisherTimingNaturalDay}</p>
+          </div>
         </section>
       )}
 
