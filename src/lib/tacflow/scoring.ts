@@ -1,6 +1,3 @@
-import type { TacFlowArtifacts, TacFlowRunStatus } from "@/types/tacflow.types";
-
-export const TACFLOW_SCORE_WEIGHT_STORAGE_KEY = "tacflow-score-weights:v1";
 export const DEFAULT_TACFLOW_SCORE_WEIGHT = 1;
 export const MIN_TACFLOW_SCORE_WEIGHT = 0;
 export const MAX_TACFLOW_SCORE_WEIGHT = 100;
@@ -37,41 +34,6 @@ export type TacFlowDoctorReport = {
   summary?: Partial<Record<TacFlowDoctorSeverity, number>>;
   checks: TacFlowDoctorCheck[];
 };
-
-export type TacFlowScoreStatusEvent = {
-  type: "status";
-  status: TacFlowRunStatus;
-  percent: number;
-  message: string;
-};
-
-export type TacFlowScoreLogEvent = {
-  type: "log";
-  stream: "stdout" | "stderr";
-  line: string;
-};
-
-export type TacFlowScoreResultEvent = {
-  type: "result";
-  ok: boolean;
-  exitCode: number | null;
-  durationMs: number;
-  artifacts: TacFlowArtifacts;
-  report?: TacFlowDoctorReport;
-  summary?: { stderrTail?: string[] };
-  error?: string;
-};
-
-export type TacFlowScoreErrorEvent = {
-  type: "error";
-  error: string;
-};
-
-export type TacFlowScoreStreamEvent =
-  | TacFlowScoreStatusEvent
-  | TacFlowScoreLogEvent
-  | TacFlowScoreResultEvent
-  | TacFlowScoreErrorEvent;
 
 export type TacFlowScoreRow = TacFlowDoctorCheck & {
   baseScore: number;

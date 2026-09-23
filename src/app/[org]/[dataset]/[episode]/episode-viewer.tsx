@@ -88,10 +88,6 @@ const DatasetReviewPanel = lazyWithChunkRecovery(
   "dataset-review-panel",
   () => import("@/components/dataset-review-panel"),
 );
-const TacFlowPanel = lazyWithChunkRecovery(
-  "tacflow-panel",
-  () => import("@/components/tacflow-panel"),
-);
 const TacVerseImpactPanel = lazyWithChunkRecovery(
   "tacverse-impact-panel",
   () => import("@/components/tacverse-impact-panel"),
@@ -138,19 +134,25 @@ function logSwitchTiming(
   );
 }
 
-type ActiveTab =
-  | "episodes"
-  | "annotations"
-  | "statistics"
-  | "frames"
-  | "insights"
-  | "doctor"
-  | "filtering"
-  | "urdf"
-  | "parquet"
-  | "workbench"
-  | "tacflow"
-  | "impact";
+const ACTIVE_TABS = [
+  "episodes",
+  "annotations",
+  "statistics",
+  "frames",
+  "insights",
+  "doctor",
+  "filtering",
+  "urdf",
+  "parquet",
+  "workbench",
+  "impact",
+] as const;
+
+type ActiveTab = (typeof ACTIVE_TABS)[number];
+
+function isActiveTab(value: string | null): value is ActiveTab {
+  return value !== null && ACTIVE_TABS.some((tab) => tab === value);
+}
 
 // Subscribes to `currentTime` so its parent doesn't have to. Keeping this
 // in a leaf component means the throttled time ticks (~12.5/s during
@@ -455,49 +457,27 @@ function EpisodeViewerInner({
   // Safe because EpisodeViewerInner only mounts client-side (behind a loading gate).
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
     const requestedTab = searchParams.get("tab");
-    if (
-      requestedTab &&
-      [
-        "episodes",
-        "annotations",
-        "statistics",
-        "frames",
-        "insights",
-        "doctor",
-        "filtering",
-        "urdf",
-        "parquet",
-        "workbench",
-        "tacflow",
-        "impact",
-      ].includes(requestedTab)
-    ) {
-      return requestedTab as ActiveTab;
-    }
+    if (isActiveTab(requestedTab)) return requestedTab;
     if (typeof window !== "undefined") {
       const stored = sessionStorage.getItem("activeTab");
-      if (
-        stored &&
-        [
-          "episodes",
-          "annotations",
-          "statistics",
-          "frames",
-          "insights",
-          "doctor",
-          "filtering",
-          "urdf",
-          "parquet",
-          "workbench",
-          "tacflow",
-          "impact",
-        ].includes(stored)
-      ) {
-        return stored as ActiveTab;
-      }
+      if (isActiveTab(stored)) return stored;
     }
     return "episodes";
   });
+
+  // Old bookmarks and session state may still name a tab removed from this
+  // version. Render a valid fallback and make the URL tell the same truth.
+  useEffect(() => {
+    const requestedTab = searchParams.get("tab");
+    if (!requestedTab || isActiveTab(requestedTab)) return;
+    const newParams = new URLSearchParams(searchParams.toString());
+    newParams.set("tab", activeTab);
+    window.history.replaceState(
+      {},
+      "",
+      `${window.location.pathname}?${newParams.toString()}`,
+    );
+  }, [activeTab, searchParams]);
   // A ref lets the URL synchronizer and imperative media pause react to a
   // click immediately, without forcing the heavyweight viewer to render an
   // urgent state update before the transition starts.
@@ -1103,11 +1083,6 @@ function EpisodeViewerInner({
           t("viewer.tab.workbenchTitle"),
         )}
         {renderTab(
-          "tacflow",
-          t("viewer.tab.tacflow"),
-          t("viewer.tab.tacflowTitle"),
-        )}
-        {renderTab(
           "impact",
           t("viewer.tab.impact"),
           t("viewer.tab.impactTitle"),
@@ -1541,12 +1516,6 @@ function EpisodeViewerInner({
                 />
               </Suspense>
             </DatasetReviewErrorBoundary>
-          )}
-
-          {activeTab === "tacflow" && (
-            <Suspense fallback={<Loading />}>
-              <TacFlowPanel />
-            </Suspense>
           )}
 
           {activeTab === "impact" && (

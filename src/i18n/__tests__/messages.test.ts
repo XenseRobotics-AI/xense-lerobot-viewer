@@ -98,7 +98,6 @@ describe("zh translation coverage", () => {
     "viewer.tab.parquet",
     "viewer.tab.workbench",
     "viewer.tab.impact",
-    "viewer.tab.tacflow",
     // Workbench product labels, protocol identifiers, units, examples, and
     // repository paths stay stable across locales.
     "workbench.episode",
