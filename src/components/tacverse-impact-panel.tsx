@@ -165,18 +165,18 @@ const COPY = {
     error: "Unable to load TacVerse Impact data.",
     unlockTitle: "Unlock private analytics",
     unlockHint:
-      "Enter an HF access token that can read the private TacVerse Collection. After validation it is saved only in this project's hidden .xense-viewer folder.",
+      "Private analytics use the same Hugging Face credential as Workbench data pulls. If no token is configured yet, enter one here and it will be saved to the shared project credential store.",
     accessKey: "Hugging Face access token",
-    unlock: "Save token and unlock",
+    unlock: "Save shared token and unlock",
+    useExisting: "Use existing data-pull credential",
     publicOnly: "View public datasets",
     publicOnlyHint:
       "No token required. Includes lifetime Downloads, public metadata, and Community activity only; daily history is unavailable.",
     accessNotConfigured:
-      "Configure TACVERSE_IMPACT_ACCESS_KEY or the project-local hidden credential file, then enter the same value here.",
+      "Save a Hugging Face token in Workbench data pull settings, or enter one here.",
     accessSetupCommand:
       "TACVERSE_IMPACT_ACCESS_KEY=<a separate random value> bun dev",
-    hfTokenSetup:
-      "Project-local fallback: .xense-viewer/secrets/tacverse-impact-key. It can also be used for authenticated Hugging Face requests.",
+    hfTokenSetup: "Shared project credential: .xense-viewer/secrets/hf-token.",
     accessDenied:
       "This HF token cannot read the required private TacVerse datasets.",
     lock: "Lock",
@@ -326,17 +326,17 @@ const COPY = {
     error: "无法加载 TacVerse Impact 数据。",
     unlockTitle: "解锁私有统计",
     unlockHint:
-      "请输入能够读取 TacVerse 私有 Collection 的 HF access token。验证通过后，只会保存到本工程的隐藏 .xense-viewer 文件夹。",
+      "私有统计使用与 Workbench 数据拉取相同的 Hugging Face 凭据。若尚未配置 token，可在这里输入，验证后会保存到本工程共享凭据。",
     accessKey: "Hugging Face access token",
-    unlock: "保存令牌并进入",
+    unlock: "保存共享令牌并进入",
+    useExisting: "使用已有数据拉取配置进入",
     publicOnly: "直接查看公开数据集",
     publicOnlyHint:
       "无需令牌；仅提供累计 Downloads、公开元数据和社区数据，不提供逐日历史。",
     accessNotConfigured:
-      "请配置 TACVERSE_IMPACT_ACCESS_KEY 或工程内隐藏凭据文件，再在这里输入相同的值。",
+      "请先在 Workbench 数据拉取中保存 Hugging Face token，或直接在这里输入。",
     accessSetupCommand: "TACVERSE_IMPACT_ACCESS_KEY=<另一条随机密钥> bun dev",
-    hfTokenSetup:
-      "工程级后备路径：.xense-viewer/secrets/tacverse-impact-key；其中的凭据也会用于 Hugging Face 鉴权请求。",
+    hfTokenSetup: "工程共享凭据路径：.xense-viewer/secrets/hf-token。",
     accessDenied: "此 HF token 无法读取要求的 TacVerse 私有数据集。",
     lock: "锁定",
     source_live: "实时",
@@ -460,6 +460,7 @@ export default function TacVerseImpactPanel() {
   const [data, setData] = useState<TacVerseImpactData | null>(null);
   const [candidateKey, setCandidateKey] = useState("");
   const [locked, setLocked] = useState(true);
+  const [hasExistingCredential, setHasExistingCredential] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -494,10 +495,13 @@ export default function TacVerseImpactPanel() {
         );
         const payload = (await response.json()) as
           | TacVerseImpactData
-          | { error?: string; code?: string };
+          | { error?: string; code?: string; hasCredential?: boolean };
         if (response.status === 401) {
           setData(null);
           setLocked(true);
+          setHasExistingCredential(
+            "hasCredential" in payload && payload.hasCredential === true,
+          );
           if (!silentDenied) throw new Error(c.accessDenied);
           return;
         }
@@ -510,6 +514,15 @@ export default function TacVerseImpactPanel() {
         }
         setCandidateKey("");
         setLocked(false);
+        setHasExistingCredential(false);
+        if (
+          payload.accessMode === "public" &&
+          !payload.repositories.some(
+            (repository) => repository.scope === "collection",
+          )
+        ) {
+          setDataSource("opendata");
+        }
         setData(payload);
       } catch (reason: unknown) {
         setError(reason instanceof Error ? reason.message : c.error);
@@ -541,6 +554,7 @@ export default function TacVerseImpactPanel() {
       setData(null);
       setError(null);
       setLocked(true);
+      setHasExistingCredential(false);
     }
   };
   const chartData = useMemo(() => {
@@ -608,6 +622,15 @@ export default function TacVerseImpactPanel() {
           >
             {c.unlock}
           </button>
+          {hasExistingCredential && (
+            <button
+              type="button"
+              onClick={() => void load("", true)}
+              className="mt-3 w-full rounded-md border border-cyan-400/20 px-4 py-2 text-sm font-medium text-cyan-200 hover:border-cyan-300/40"
+            >
+              {c.useExisting}
+            </button>
+          )}
           <div className="my-4 h-px bg-white/5" />
           <button
             type="button"

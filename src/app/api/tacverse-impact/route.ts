@@ -1,11 +1,14 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { NextRequest } from "next/server";
 import fs from "node:fs/promises";
+import http from "node:http";
 import path from "node:path";
+import tls from "node:tls";
 import { resolveLocalDatasetRoot } from "@/lib/local-datasets-discovery";
-import { resolveHfToken } from "@/lib/hf-token-store";
+import { resolveHfToken, writeViewerHfToken } from "@/lib/hf-token-store";
 import { redactHfSecrets } from "@/lib/hf-identity";
 import { isSameOriginRequest } from "@/lib/request-security";
+import { normalizeHfToken } from "@/utils/hfValidation";
 import {
   IMPACT_COLLECTION_SLUG,
   IMPACT_COLLECTION_URL,
@@ -38,12 +41,6 @@ const DEFAULT_METADATA_URL = `https://huggingface.co/api/datasets/${IMPACT_REPO_
 const DEFAULT_TREE_URL = `https://huggingface.co/api/datasets/${IMPACT_REPO_ID}/tree/main?recursive=false&expand=false`;
 const REQUEST_TIMEOUT_MS = 20_000;
 const ACCESS_HEADER = "x-tacverse-impact-key";
-const PROJECT_IMPACT_SECRET_PATH = path.join(
-  process.cwd(),
-  ".xense-viewer",
-  "secrets",
-  "tacverse-impact-key",
-);
 const PROJECT_IMPACT_SESSION_PATH = path.join(
   process.cwd(),
   ".xense-viewer",
@@ -59,6 +56,188 @@ const DEFAULT_ADVANCED_LOG_PATH = path.join(
   "tacverse-impact",
   "request-logs.csv",
 );
+
+function noProxyEntries(): string[] {
+  return `${process.env.NO_PROXY ?? ""},${process.env.no_proxy ?? ""}`
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function proxyForUrl(url: string): string | null {
+  const target = new URL(url);
+  const hostname = target.hostname.toLowerCase();
+  if (
+    noProxyEntries().some(
+      (entry) =>
+        entry === "*" ||
+        hostname === entry ||
+        (entry.startsWith(".") && hostname.endsWith(entry)) ||
+        hostname.endsWith(`.${entry}`),
+    )
+  ) {
+    return null;
+  }
+  if (target.protocol === "https:") {
+    return (
+      process.env.HTTPS_PROXY ??
+      process.env.https_proxy ??
+      process.env.HTTP_PROXY ??
+      process.env.http_proxy ??
+      null
+    );
+  }
+  if (target.protocol === "http:") {
+    return process.env.HTTP_PROXY ?? process.env.http_proxy ?? null;
+  }
+  return null;
+}
+
+function proxyAuthorization(proxy: URL): string | null {
+  if (!proxy.username && !proxy.password) return null;
+  return `Basic ${Buffer.from(
+    `${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`,
+  ).toString("base64")}`;
+}
+
+function decodeChunkedBody(body: Buffer): Buffer {
+  const chunks: Buffer[] = [];
+  let offset = 0;
+  while (offset < body.length) {
+    const endOfSize = body.indexOf("\r\n", offset);
+    if (endOfSize < 0) throw new Error("Chunked response was malformed.");
+    const sizeText = body
+      .subarray(offset, endOfSize)
+      .toString("latin1")
+      .split(";", 1)[0]
+      .trim();
+    const size = Number.parseInt(sizeText, 16);
+    if (!Number.isFinite(size) || size < 0) {
+      throw new Error("Chunked response had an invalid chunk size.");
+    }
+    offset = endOfSize + 2;
+    if (size === 0) return Buffer.concat(chunks);
+    const nextOffset = offset + size;
+    if (nextOffset + 2 > body.length) {
+      throw new Error("Chunked response ended before a chunk completed.");
+    }
+    chunks.push(body.subarray(offset, nextOffset));
+    offset = nextOffset + 2;
+  }
+  throw new Error("Chunked response ended before the final chunk.");
+}
+
+function responseFromRaw(raw: Buffer): Response {
+  const separator = raw.indexOf("\r\n\r\n");
+  if (separator < 0) throw new Error("Proxy response was malformed.");
+  const headerText = raw.subarray(0, separator).toString("latin1");
+  let body = raw.subarray(separator + 4);
+  const lines = headerText.split("\r\n");
+  const status = Number(lines[0]?.match(/^HTTP\/\d(?:\.\d)?\s+(\d+)/)?.[1]);
+  if (!Number.isFinite(status)) {
+    throw new Error("Proxy response did not include an HTTP status.");
+  }
+  const headers = new Headers();
+  for (const line of lines.slice(1)) {
+    const index = line.indexOf(":");
+    if (index <= 0) continue;
+    headers.append(line.slice(0, index).trim(), line.slice(index + 1).trim());
+  }
+  if (headers.get("transfer-encoding")?.toLowerCase().includes("chunked")) {
+    body = decodeChunkedBody(body);
+    headers.delete("transfer-encoding");
+    headers.delete("content-length");
+  }
+  return new Response(new Uint8Array(body), { status, headers });
+}
+
+function fetchThroughHttpProxy(
+  url: string,
+  init: RequestInit,
+  proxyUrl: string,
+): Promise<Response> {
+  const target = new URL(url);
+  const proxy = new URL(proxyUrl);
+  if (proxy.protocol !== "http:") {
+    throw new Error(`Unsupported proxy protocol: ${proxy.protocol}`);
+  }
+
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      host: proxy.hostname,
+      port: proxy.port ? Number(proxy.port) : 80,
+      method: "CONNECT",
+      path: `${target.hostname}:${target.port || 443}`,
+      headers: {
+        ...(proxyAuthorization(proxy)
+          ? { "Proxy-Authorization": proxyAuthorization(proxy) as string }
+          : {}),
+      },
+    });
+    const fail = (error: unknown) => {
+      request.destroy();
+      reject(error);
+    };
+    request.setTimeout(REQUEST_TIMEOUT_MS, () => fail(new Error("timeout")));
+    request.once("error", fail);
+    request.once("connect", (response, socket) => {
+      if (response.statusCode !== 200) {
+        socket.destroy();
+        reject(
+          new Error(`Proxy CONNECT returned HTTP ${response.statusCode ?? 0}.`),
+        );
+        return;
+      }
+      const secureSocket = tls.connect({
+        socket,
+        servername: target.hostname,
+      });
+      const chunks: Buffer[] = [];
+      secureSocket.setTimeout(REQUEST_TIMEOUT_MS, () => {
+        secureSocket.destroy(new Error("timeout"));
+      });
+      secureSocket.once("error", reject);
+      secureSocket.on("data", (chunk: Buffer) =>
+        chunks.push(Buffer.from(chunk)),
+      );
+      secureSocket.once("end", () => {
+        try {
+          resolve(responseFromRaw(Buffer.concat(chunks)));
+        } catch (error) {
+          reject(error);
+        }
+      });
+      secureSocket.once("secureConnect", () => {
+        const headers = new Headers(init.headers);
+        headers.set("host", target.host);
+        headers.set("connection", "close");
+        const headerLines: string[] = [];
+        headers.forEach((value, key) => {
+          headerLines.push(`${key}: ${value}`);
+        });
+        secureSocket.write(
+          `${init.method ?? "GET"} ${target.pathname}${target.search} HTTP/1.1\r\n${headerLines.join(
+            "\r\n",
+          )}\r\n\r\n`,
+        );
+      });
+    });
+    request.end();
+  });
+}
+
+async function fetchWithProxyFallback(
+  url: string,
+  init: RequestInit,
+): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    const proxy = proxyForUrl(url);
+    if (!proxy) throw error;
+    return fetchThroughHttpProxy(url, init, proxy);
+  }
+}
 
 class ImpactSourceError extends Error {
   fallback: TacVerseImpactData | null = null;
@@ -81,17 +260,6 @@ function json(payload: unknown, status = 200, headers?: HeadersInit): Response {
       ...headers,
     },
   });
-}
-
-async function readProjectImpactSecret(): Promise<string | null> {
-  try {
-    const value = (
-      await fs.readFile(PROJECT_IMPACT_SECRET_PATH, "utf8")
-    ).trim();
-    return value && value.length <= MAX_SECRET_LENGTH ? value : null;
-  } catch {
-    return null;
-  }
 }
 
 async function readProjectImpactSession(): Promise<string | null> {
@@ -138,62 +306,16 @@ function clearSessionCookie(request: NextRequest): string {
   return `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict${secure}`;
 }
 
-type Authorization = {
-  denied: Response | null;
-  setCookie: string | null;
-};
-
-async function authorizePrivateRequest(
-  request: NextRequest,
-  allowTokenEnrollment: boolean,
-): Promise<Authorization> {
+async function validPrivateSession(request: NextRequest): Promise<boolean> {
   const session = await readProjectImpactSession();
   const cookie = request.cookies.get(SESSION_COOKIE)?.value ?? null;
-  if (secretsEqual(session, cookie)) {
-    return { denied: null, setCookie: null };
-  }
+  return secretsEqual(session, cookie);
+}
 
-  const provided = request.headers.get(ACCESS_HEADER)?.trim() ?? "";
-  const expected =
-    process.env.TACVERSE_IMPACT_ACCESS_KEY?.trim() ||
-    (await readProjectImpactSecret());
-  let accepted = secretsEqual(expected, provided);
-  let enrolled = false;
-
-  if (!accepted && provided && allowTokenEnrollment) {
-    try {
-      await fetchCollection(provided, true);
-      await writePrivateFile(PROJECT_IMPACT_SECRET_PATH, provided);
-      accepted = true;
-      enrolled = true;
-    } catch {
-      accepted = false;
-    }
-  }
-
-  if (!accepted) {
-    return {
-      denied: json(
-        {
-          error:
-            "A Hugging Face token with access to the private TacVerse Collection is required.",
-          code: "impact_access_denied",
-        },
-        401,
-      ),
-      setCookie: null,
-    };
-  }
-
-  const nextSession =
-    !session || enrolled ? randomBytes(32).toString("hex") : session;
-  if (!session || enrolled) {
-    await writePrivateFile(PROJECT_IMPACT_SESSION_PATH, nextSession);
-  }
-  return {
-    denied: null,
-    setCookie: sessionCookie(nextSession, request),
-  };
+async function issuePrivateSession(request: NextRequest): Promise<HeadersInit> {
+  const session = randomBytes(32).toString("hex");
+  await writePrivateFile(PROJECT_IMPACT_SESSION_PATH, session);
+  return { "set-cookie": sessionCookie(session, request) };
 }
 
 function authHeaders(token: string | null): HeadersInit {
@@ -207,7 +329,7 @@ async function fetchText(
 ): Promise<string> {
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await fetchWithProxyFallback(url, {
       headers: authHeaders(token),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       cache: "no-store",
@@ -513,7 +635,7 @@ async function fetchRepositoryCommunity(
   };
 
   while (seen < expected && page < 100) {
-    const response = await fetch(
+    const response = await fetchWithProxyFallback(
       `https://huggingface.co/api/datasets/${encodedId}/discussions?status=all&p=${page}`,
       {
         headers: authHeaders(token),
@@ -656,6 +778,23 @@ function standaloneRepository(
     lastModified: null,
     likes,
     downloads,
+  };
+}
+
+function emptyPublicCollection(): CollectionResult {
+  return {
+    repositories: [],
+    collection: {
+      slug: IMPACT_COLLECTION_SLUG,
+      title: "TacVerse",
+      url: IMPACT_COLLECTION_URL,
+      description: null,
+      lastModified: null,
+      datasetCount: 0,
+      publicDatasetCount: 0,
+      privateDatasetCount: 0,
+      requiredPrivateReposVisible: false,
+    },
   };
 }
 
@@ -814,10 +953,21 @@ async function refreshCachedPublisherAnalytics(
 }
 
 async function loadPublicImpact(): Promise<TacVerseImpactData> {
-  const [collection, metadata] = await Promise.all([
-    fetchCollection(null, false),
-    fetchRepositoryMetadata(null),
-  ]);
+  // The public view must remain usable when HF's collection endpoint is
+  // unavailable anonymously. The standalone opendata repository is public and
+  // can still be displayed independently.
+  let collection = emptyPublicCollection();
+  let collectionStatus: ImpactSourceState = "live";
+  let collectionMessage: string | null = null;
+  try {
+    collection = await fetchCollection(null, false);
+  } catch (error: unknown) {
+    collectionStatus =
+      error instanceof ImpactSourceError ? error.status : "unavailable";
+    collectionMessage =
+      error instanceof Error ? error.message : "Public Collection unavailable.";
+  }
+  const metadata = await fetchRepositoryMetadata(null);
   const repositories = await enrichPublicRepositoryDownloads([
     ...collection.repositories,
     standaloneRepository(
@@ -864,7 +1014,7 @@ async function loadPublicImpact(): Promise<TacVerseImpactData> {
     repositories,
     collection: collection.collection,
     repository: metadata.repository,
-    collectionStatus: "live",
+    collectionStatus,
     publisherStatus: "live",
     metadataStatus: metadata.status,
     advancedStatus: "not_configured",
@@ -879,6 +1029,7 @@ async function loadPublicImpact(): Promise<TacVerseImpactData> {
       ),
     },
     communityStatus: community.status,
+    message: collectionMessage,
   });
 }
 
@@ -906,10 +1057,9 @@ function asCached(
 
 async function loadImpact(force: boolean): Promise<TacVerseImpactData> {
   const root = resolveLocalDatasetRoot();
-  const projectSecret = await readProjectImpactSecret();
   const cached = await readImpactCache(root);
   const credential = await resolveHfToken(root);
-  const token = projectSecret ?? credential.token;
+  const token = credential.token;
   const fresh = cached && new Date(cached.expiresAt).valueOf() > Date.now();
 
   if (!force && fresh) {
@@ -920,7 +1070,7 @@ async function loadImpact(force: boolean): Promise<TacVerseImpactData> {
       const raw = error instanceof Error ? error.message : String(error);
       const message = redactHfSecrets(raw, [
         process.env.HF_TOKEN ?? "",
-        projectSecret ?? "",
+        token ?? "",
       ]);
       return asCached(cached, false, message);
     }
@@ -938,7 +1088,7 @@ async function loadImpact(force: boolean): Promise<TacVerseImpactData> {
     const raw = error instanceof Error ? error.message : String(error);
     const message = redactHfSecrets(raw, [
       process.env.HF_TOKEN ?? "",
-      projectSecret ?? "",
+      token ?? "",
     ]);
     if (cached) return asCached(cached, true, message);
     if (error instanceof ImpactSourceError && error.fallback) {
@@ -948,6 +1098,14 @@ async function loadImpact(force: boolean): Promise<TacVerseImpactData> {
     const state =
       error instanceof ImpactSourceError ? error.status : "unavailable";
     return emptyData(state, message);
+  }
+}
+
+async function hasPrivateCredential(): Promise<boolean> {
+  try {
+    return Boolean((await resolveHfToken(resolveLocalDatasetRoot())).token);
+  } catch {
+    return false;
   }
 }
 
@@ -968,16 +1126,20 @@ export async function GET(request: NextRequest): Promise<Response> {
     }
   }
 
-  const authorization = await authorizePrivateRequest(request, false);
-  if (authorization.denied) return authorization.denied;
-  try {
+  if (!(await validPrivateSession(request))) {
+    const hasCredential = await hasPrivateCredential();
     return json(
-      await loadImpact(false),
-      200,
-      authorization.setCookie
-        ? { "set-cookie": authorization.setCookie }
-        : undefined,
+      {
+        error:
+          "Unlock private TacVerse Impact analytics with the shared Hugging Face credential.",
+        code: "impact_session_required",
+        hasCredential,
+      },
+      401,
     );
+  }
+  try {
+    return json(await loadImpact(false));
   } catch (error: unknown) {
     return json(
       {
@@ -993,17 +1155,39 @@ export async function POST(request: NextRequest): Promise<Response> {
   if (!isSameOriginRequest(request)) {
     return json({ error: "Cross-origin requests are not allowed." }, 403);
   }
-  const authorization = await authorizePrivateRequest(request, true);
-  if (authorization.denied) return authorization.denied;
   try {
+    const suppliedToken = normalizeHfToken(request.headers.get(ACCESS_HEADER));
+    if (request.headers.has(ACCESS_HEADER) && !suppliedToken) {
+      return json(
+        { error: "A non-empty Hugging Face token is required." },
+        400,
+      );
+    }
+    if (suppliedToken) {
+      const root = resolveLocalDatasetRoot();
+      const data = await refresh(root, suppliedToken);
+      await writeViewerHfToken(suppliedToken, root);
+      return json(data, 200, await issuePrivateSession(request));
+    }
+    if (!(await hasPrivateCredential())) {
+      return json(
+        {
+          error:
+            "No Hugging Face token is configured. Save one in Workbench data pull settings or enter one here.",
+          code: "hf_token_required",
+        },
+        401,
+      );
+    }
     return json(
       await loadImpact(true),
       200,
-      authorization.setCookie
-        ? { "set-cookie": authorization.setCookie }
-        : undefined,
+      await issuePrivateSession(request),
     );
   } catch (error: unknown) {
+    if (error instanceof ImpactSourceError) {
+      return json({ error: error.message, code: error.status }, 401);
+    }
     return json(
       {
         error:
