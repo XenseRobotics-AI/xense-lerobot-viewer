@@ -237,6 +237,17 @@ export const zh: Record<MessageKey, string> = {
   "trash.keep": "保留",
   "trash.empty": "清空回收站",
 
+  // ── homepage: interrupted conversions ───────────────────────────────────
+  "interrupted.title_one": "{count} 个中断的转换",
+  "interrupted.title_other": "{count} 个中断的转换",
+  "interrupted.hint":
+    "转换中途停止：断点文件已写入，但还没有 {file}，所以它还不是数据集，别处都看不到它。重新运行转换脚本会从断点继续；在那之前这些字节一直占着磁盘。",
+  "interrupted.badge": "已中断",
+  "interrupted.episodes_one": "已转换 {count} episodes",
+  "interrupted.episodes_other": "已转换 {count} episodes",
+  "interrupted.unknownProgress": "断点文件无法读取",
+  "interrupted.stopped": "停止于 {day}",
+
   // ── homepage: tags editor ───────────────────────────────────────────────
   "tags.title": "编辑标签",
   "tags.task": "任务",
