@@ -160,6 +160,7 @@ const COPY = {
       "The Hugging Face credential cannot read the complete private Collection or Publisher Analytics.",
     incomplete:
       "Private Collection completeness check failed. Partial public results are not displayed.",
+    sourceWarning: "Some data sources failed to update.",
     stale:
       "The latest refresh failed. Showing the last complete cached snapshot.",
     error: "Unable to load TacVerse Impact data.",
@@ -322,6 +323,7 @@ const COPY = {
     permission:
       "当前 Hugging Face 凭据无法读取完整私有 Collection 或 Publisher Analytics。",
     incomplete: "私有 Collection 完整性检查失败，不展示不完整的公开部分。",
+    sourceWarning: "部分数据源更新失败。",
     stale: "最新刷新失败，当前展示上一次完整缓存。",
     error: "无法加载 TacVerse Impact 数据。",
     unlockTitle: "解锁私有统计",
@@ -673,6 +675,15 @@ export default function TacVerseImpactPanel() {
   const todayDownloads = sourceView.daily.find(
     (row) => row.date === todayUtc,
   )?.totalDownloads;
+  const hasSourceWarning = Boolean(
+    data.sourceStatus.message &&
+    data.sourceStatus.cache !== "stale" &&
+    !(
+      privateMode &&
+      dataSource === "collection" &&
+      data.sourceStatus.collection === "unauthorized"
+    ),
+  );
   const currentWindowText = interpolate(c.publisherTimingCurrent, {
     date: todayUtc,
     start: todayUtc,
@@ -781,6 +792,11 @@ export default function TacVerseImpactPanel() {
       {data.sourceStatus.cache === "stale" && (
         <div className="rounded-md border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-200">
           {c.stale} {data.sourceStatus.message}
+        </div>
+      )}
+      {hasSourceWarning && (
+        <div className="rounded-md border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-200">
+          {c.sourceWarning} {data.sourceStatus.message}
         </div>
       )}
       {privateMode &&
