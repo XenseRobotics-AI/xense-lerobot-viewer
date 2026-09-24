@@ -2,11 +2,15 @@
 
 import { isPathInsideRoot } from "@/utils/browsePath";
 import React, { useCallback, useMemo, useState } from "react";
-import type { LocalDatasetSummary } from "@/lib/local-datasets-discovery";
+import type {
+  InterruptedConversion,
+  LocalDatasetSummary,
+} from "@/lib/local-datasets-discovery";
 import type { DailyDelta } from "@/utils/corpusHistory";
 import { groupDatasetsByPrefix } from "@/utils/datasetGrouping";
 import CorpusDashboard from "@/components/corpus-dashboard";
 import DatasetPathSwitcher from "@/components/dataset-path-switcher";
+import InterruptedConversions from "@/components/interrupted-conversions";
 import LanguageSwitcher from "@/components/language-switcher";
 import RepoFetchPanel from "@/components/repo-fetch-panel";
 import DatasetCardGrid from "./dataset-card-grid";
@@ -17,6 +21,12 @@ type LocalDatasetGridProps = {
   browsePath: string;
   locations: string[];
   datasets: LocalDatasetSummary[];
+  /**
+   * Directories that are a stopped conversion rather than a dataset. A separate
+   * list all the way from the scanner: they are not in `datasets`, so nothing
+   * the grid or the dashboard computes can see them.
+   */
+  interrupted: InterruptedConversion[];
   errors: { path: string; message: string }[];
   delta: DailyDelta;
 };
@@ -43,6 +53,7 @@ export default function LocalDatasetGrid({
   browsePath,
   locations,
   datasets,
+  interrupted,
   errors,
   delta,
 }: LocalDatasetGridProps) {
@@ -142,6 +153,11 @@ export default function LocalDatasetGrid({
           </ul>
         </div>
       )}
+
+      {/* Above the grid *and* above the empty-root panel below: a root whose
+          only occupant is a stopped conversion is exactly when this is the
+          whole story, and the panel would otherwise say nothing is here. */}
+      <InterruptedConversions entries={interrupted} />
 
       {/* Nothing scanned at all is a different answer from "your filters match
           nothing", which is the grid's own `grid.noMatch` — this one names the

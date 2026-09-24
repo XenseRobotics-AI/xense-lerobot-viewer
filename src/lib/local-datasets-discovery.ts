@@ -79,6 +79,41 @@ export type LocalDatasetSummary = {
   facets: DatasetFacets;
 };
 
+/**
+ * A conversion that stopped part-way: `meta/.checkpoint.json` written and no
+ * `meta/info.json` beside it.
+ *
+ * The three states an output directory can be in are the converter's contract,
+ * not a guess — see `xense-dataset-convert/hdf52lerobot/checkpoint.py`:
+ * `info.json` present is finished, a checkpoint without one is interrupted and
+ * resumable, neither is nothing usable. A checkpoint *beside* an `info.json` is
+ * leftover from a finished run and is not this.
+ *
+ * Deliberately **not** a `LocalDatasetSummary`. There is no `codebase_version`,
+ * no episode count, no robot type and no thumbnail to put in one, so folding it
+ * in would mean making those nullable — which changes what every finished
+ * dataset's card renders from. It rides in its own list instead, so the grid,
+ * the corpus tape and the daily snapshot cannot see it at all.
+ *
+ * It is surfaced because the alternative is invisible: discovery keys on
+ * `meta/info.json`, so an interrupted run is not a dataset, shows nowhere, and
+ * holds its bytes silently. One on this machine held 9.2 GB that way.
+ */
+export type InterruptedConversion = {
+  /** Path relative to the browsed directory, named like a dataset's. */
+  relativePath: string;
+  /** Bytes the half-written directory is holding — the reason to show it. */
+  sizeBytes: number;
+  /**
+   * Episodes the interrupted run had already written, read from the checkpoint.
+   * Null when the file cannot be read or carries a version this does not know —
+   * the same cases in which the converter starts over instead of resuming.
+   */
+  episodesConverted: number | null;
+  /** Local ISO day of the checkpoint's last write; null if it cannot be stat'd. */
+  updatedDay: string | null;
+};
+
 export type LocalDatasetsResponse = {
   /** The default root, `LOCAL_DATASET_ROOT`. Anchors the stores. */
   root: string;
@@ -87,6 +122,11 @@ export type LocalDatasetsResponse = {
   /** Alternative directories the switcher offers, in the order added. */
   locations: string[];
   datasets: LocalDatasetSummary[];
+  /**
+   * Directories that are a conversion in progress rather than a dataset. Kept
+   * out of `datasets` on purpose; see `InterruptedConversion`.
+   */
+  interrupted: InterruptedConversion[];
   errors: { path: string; message: string }[];
 };
 
@@ -100,6 +140,69 @@ async function readDatasetInfo(
   } catch {
     return null;
   }
+}
+
+/** The checkpoint a stopped conversion leaves behind, relative to a dataset. */
+const CHECKPOINT_FILE = ["meta", ".checkpoint.json"] as const;
+/** The only version `hdf52lerobot/checkpoint.py` will resume from. */
+const CHECKPOINT_VERSION = 1;
+
+/**
+ * The day as the machine's clock reads it, not UTC.
+ *
+ * An mtime is an instant, so unlike a `recorded_at` string off disk there is no
+ * "as written" form to preserve; the day someone means by "when did this stop"
+ * is their own. `isoDay` in `dataset-facets-server.ts` slices a string for the
+ * opposite reason — there the timezone is already in the data.
+ */
+function localDay(when: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`;
+}
+
+/**
+ * Probe one directory for an interrupted conversion, or null if it is not one.
+ *
+ * Mirrors `Checkpoint.load`: a checkpoint next to an `info.json` is stale and
+ * does not count. `info.json` is tested for **existence** rather than parsed —
+ * a corrupt one is a broken dataset, which is the grid's story to tell, not an
+ * interrupted conversion.
+ */
+async function readCheckpoint(
+  datasetDir: string,
+): Promise<Pick<
+  InterruptedConversion,
+  "episodesConverted" | "updatedDay"
+> | null> {
+  const file = path.join(datasetDir, ...CHECKPOINT_FILE);
+  let mtime: Date;
+  try {
+    mtime = (await fs.stat(file)).mtime;
+  } catch {
+    return null; // no checkpoint: an ordinary directory on the way down
+  }
+  try {
+    await fs.access(path.join(datasetDir, "meta", "info.json"));
+    return null; // finished; the checkpoint is leftover
+  } catch {
+    // absent — genuinely interrupted
+  }
+
+  let episodesConverted: number | null = null;
+  try {
+    const raw = JSON.parse(await fs.readFile(file, "utf-8")) as {
+      version?: unknown;
+      converted?: unknown;
+    };
+    if (raw?.version === CHECKPOINT_VERSION && Array.isArray(raw.converted)) {
+      episodesConverted = raw.converted.length;
+    }
+  } catch {
+    // Truncated or unparseable. The directory still exists and still costs
+    // disk, so it is still worth showing — just without a count.
+  }
+
+  return { episodesConverted, updatedDay: localDay(mtime) };
 }
 
 async function readDatasetTags(datasetDir: string): Promise<DatasetTags> {
@@ -205,11 +308,30 @@ function pickThumbnailVideoPath(info: LocalDatasetInfoJson): string | null {
   });
 }
 
+/**
+ * How a directory is named in the listing: its path under the browsed
+ * directory. The browsed directory can itself be the thing being listed
+ * (someone switched straight to `/archive/TacVerse/TacVerse-RDT`), and then it
+ * has no relative path, so it is named after itself — but only where routes
+ * are absolute, since a relative route of `""` addresses nothing.
+ */
+function relativeName(
+  rootDir: string,
+  currentDir: string,
+  useAbsoluteRoutes: boolean,
+): string {
+  return (
+    path.relative(rootDir, currentDir).split(path.sep).join("/") ||
+    (useAbsoluteRoutes ? path.basename(currentDir) : "")
+  );
+}
+
 async function walkForDatasets(
   rootDir: string,
   currentDir: string,
   depth: number,
   found: LocalDatasetSummary[],
+  interrupted: InterruptedConversion[],
   errors: { path: string; message: string }[],
   sizes: DatasetSizeResolver,
   useAbsoluteRoutes = false,
@@ -229,12 +351,7 @@ async function walkForDatasets(
 
   const info = await readDatasetInfo(currentDir);
   if (info && typeof info.codebase_version === "string") {
-    // The browsed directory can itself be a dataset (someone switched straight
-    // to `/archive/TacVerse/TacVerse-RDT`); it has no relative path, so it is
-    // named after itself.
-    const relativePath =
-      path.relative(rootDir, currentDir).split(path.sep).join("/") ||
-      (useAbsoluteRoutes ? path.basename(currentDir) : "");
+    const relativePath = relativeName(rootDir, currentDir, useAbsoluteRoutes);
     if (relativePath) {
       const encodedPath = encodeLocalDatasetPath(
         useAbsoluteRoutes ? currentDir : relativePath,
@@ -276,6 +393,26 @@ async function walkForDatasets(
     // but keep descending so nested datasets under sibling directories are found.
   }
 
+  // Not a dataset. It may still be a conversion that stopped part-way, which is
+  // worth saying out loud rather than walking past: nothing else in the app can
+  // see one. Stop descending either way — what is under it is `data/`,
+  // `videos/` and `meta/`, never a nested dataset.
+  const checkpoint = await readCheckpoint(currentDir);
+  if (checkpoint) {
+    const relativePath = relativeName(rootDir, currentDir, useAbsoluteRoutes);
+    if (relativePath) {
+      interrupted.push({
+        relativePath,
+        // Through the same cache as a dataset: an abandoned directory is
+        // fingerprint-stable and gets counted once, while one being written
+        // right now re-walks — which is what it would have cost anyway.
+        sizeBytes: await sizes.sizeOf(currentDir),
+        ...checkpoint,
+      });
+      return;
+    }
+  }
+
   await Promise.all(
     entries
       .filter(
@@ -290,6 +427,7 @@ async function walkForDatasets(
           path.join(currentDir, entry.name),
           depth + 1,
           found,
+          interrupted,
           errors,
           sizes,
           useAbsoluteRoutes,
@@ -330,6 +468,7 @@ export async function discoverLocalDatasets(
       browsePath: "",
       locations: [],
       datasets: [],
+      interrupted: [],
       errors: [
         {
           path: "",
@@ -357,6 +496,7 @@ export async function discoverLocalDatasets(
       browsePath,
       locations: paths,
       datasets: [],
+      interrupted: [],
       errors: [
         {
           path: browsePath,
@@ -369,6 +509,7 @@ export async function discoverLocalDatasets(
   }
 
   const datasets: LocalDatasetSummary[] = [];
+  const interrupted: InterruptedConversion[] = [];
   const errors: { path: string; message: string }[] = [];
   // Sizes come from the store when the dataset has not moved since it was last
   // counted; see `dataset-size-cache.ts` for why that matters on a big archive.
@@ -378,12 +519,19 @@ export async function discoverLocalDatasets(
     browsePath,
     0,
     datasets,
+    interrupted,
     errors,
     sizes,
     !isRoot,
   );
   await sizes.flush();
   datasets.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+  // Largest first: the question these answer is what they are costing, and the
+  // list is short enough that nothing else needs ranking.
+  interrupted.sort(
+    (a, b) =>
+      b.sizeBytes - a.sizeBytes || a.relativePath.localeCompare(b.relativePath),
+  );
 
-  return { root, browsePath, locations: paths, datasets, errors };
+  return { root, browsePath, locations: paths, datasets, interrupted, errors };
 }

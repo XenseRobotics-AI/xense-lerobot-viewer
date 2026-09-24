@@ -18,7 +18,7 @@ export default async function Home() {
   // known locations server-side (an unknown value falls back to the root).
   const cookieStore = await cookies();
   const requestedPath = cookieStore.get(BROWSE_PATH_COOKIE)?.value;
-  const { root, browsePath, locations, datasets, errors } =
+  const { root, browsePath, locations, datasets, interrupted, errors } =
     await discoverLocalDatasets(requestedPath);
 
   // Record today's totals and diff against the last day on record. This is the
@@ -35,6 +35,7 @@ export default async function Home() {
       browsePath={browsePath}
       locations={locations}
       datasets={datasets}
+      interrupted={interrupted}
       errors={errors}
       delta={delta}
     />

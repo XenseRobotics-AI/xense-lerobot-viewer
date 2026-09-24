@@ -241,6 +241,19 @@ export const en = {
   "trash.keep": "Keep",
   "trash.empty": "Empty trash",
 
+  // ── homepage: interrupted conversions ───────────────────────────────────
+  // Shown for a directory holding `meta/.checkpoint.json` and no `info.json`.
+  // Not a dataset, so it renders above the grid rather than in it.
+  "interrupted.title_one": "{count} interrupted conversion",
+  "interrupted.title_other": "{count} interrupted conversions",
+  "interrupted.hint":
+    "Stopped part-way: a checkpoint was written but no {file}, so this is not a dataset yet and appears nowhere else. Re-running the converter resumes from the checkpoint; until then the bytes stay on disk.",
+  "interrupted.badge": "Interrupted",
+  "interrupted.episodes_one": "{count} episode converted",
+  "interrupted.episodes_other": "{count} episodes converted",
+  "interrupted.unknownProgress": "checkpoint unreadable",
+  "interrupted.stopped": "stopped {day}",
+
   // ── homepage: tags editor ───────────────────────────────────────────────
   "tags.title": "Edit tags",
   "tags.task": "Task",
