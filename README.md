@@ -333,6 +333,21 @@ organization. Open it from any local dataset episode by clicking the
 http://localhost:3000/?org=TacVerse&tab=workbench
 ```
 
+Shared Workbench configuration and reward rules use a three-way merge against
+the last successfully synchronized remote snapshot. Independent field edits,
+new records, and one-sided deletions are merged automatically. Records are
+matched by ID; assignment and role histories by date; staffing records by
+workstation and date. Conflicting field edits or delete-versus-edit changes
+pause synchronization without overwriting either side. The sync panel lists
+conflicting paths and lets you keep local or remote values for all conflicts,
+while retaining independent changes. If the combined document violates
+configuration constraints, choosing a side uses that entire document instead.
+On first sync, saved local differences require a choice where no common
+snapshot exists; unsaved defaults adopt remote configuration. Read-only sync
+can merge remote changes locally while keeping local changes pending upload.
+Snapshots are stored per organization under
+`<LOCAL_DATASET_ROOT>/.xense-viewer/workbench/shared-sync/baselines/`.
+
 The tab has three subviews:
 
 - **Grouped statistics** rolls datasets up by uploader, task, robot type, Left

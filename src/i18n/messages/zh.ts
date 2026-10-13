@@ -1066,6 +1066,10 @@ export const zh: Record<MessageKey, string> = {
   "workbench.writeTokenAvailable": "HF 写入令牌可用",
   "workbench.publicReadOnly": "公共只读模式",
   "workbench.syncError": "无法同步共享 Workbench 状态。",
+  "workbench.mergeConflict":
+    "两边修改存在冲突，尚未覆盖任何配置。请选择冲突项采用哪一方；其余修改会自动合并。若合并后配置无效，则采用所选一方的整份配置。",
+  "workbench.mergeKeepLocal": "冲突项保留本地",
+  "workbench.mergeKeepRemote": "冲突项保留远程",
   "workbench.dataset": "数据集",
   "workbench.updated": "更新时间",
   "workbench.local": "本地状态",

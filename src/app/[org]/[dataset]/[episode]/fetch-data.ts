@@ -53,7 +53,7 @@ import type {
   LowMovementEpisode,
   SpeedDistEntry,
 } from "@/types/episode-data";
-import { tStandalone } from "@/i18n/standalone";
+import { tStandalone as translateStandalone } from "@/i18n/standalone";
 
 export type {
   AggAlignment,
@@ -1596,7 +1596,9 @@ async function loadEpisodeMetadataV3Simple(
       return metadata;
     }
   }
-  throw new Error(tStandalone("err.episodeNotFound", { id: episodeId }));
+  throw new Error(
+    translateStandalone("err.episodeNotFound", { id: episodeId }),
+  );
 }
 
 // Simple parser for episode row - focuses on key fields for episodes

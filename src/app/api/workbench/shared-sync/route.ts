@@ -1,9 +1,8 @@
 import type { NextRequest } from "next/server";
 import { resolveLocalDatasetRoot } from "@/lib/local-datasets-discovery";
-import {
-  resolveHfToken,
-  tokenForPython,
-} from "@/lib/hf-token-store";
+import { WorkbenchConfigurationConflictError } from "@/lib/workbench-configuration-store";
+import { WorkbenchRewardRulesConflictError } from "@/lib/workbench-reward-store";
+import { resolveHfToken, tokenForPython } from "@/lib/hf-token-store";
 import { isSameOriginRequest, noStoreHeaders } from "@/lib/request-security";
 import {
   WorkbenchSharedHubConflictError,
@@ -23,10 +22,12 @@ import {
   parseWorkbenchSharedConfig,
   readLocalWorkbenchSharedConfigs,
   readWorkbenchSharedSyncMetadata,
+  readWorkbenchSharedSyncBaseline,
   resolveWorkbenchSharedConfig,
   serializeWorkbenchSharedValue,
   workbenchSharedConfigPath,
   writeWorkbenchSharedSyncMetadata,
+  writeWorkbenchSharedSyncBaseline,
   type WorkbenchSharedConfigDocument,
   type WorkbenchSharedConfigKind,
 } from "@/lib/workbench-shared-sync";
@@ -35,6 +36,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_SYNC_ATTEMPTS = 3;
+const syncQueues = new Map<string, Promise<void>>();
 
 function json(payload: unknown, status = 200): Response {
   return Response.json(payload, {
@@ -169,6 +171,24 @@ export async function GET(request: NextRequest): Promise<Response> {
 }
 
 export async function POST(request: NextRequest): Promise<Response> {
+  const key = resolveLocalDatasetRoot();
+  const previous = syncQueues.get(key) ?? Promise.resolve();
+  let release = () => {};
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = previous.catch(() => undefined).then(() => pending);
+  syncQueues.set(key, queued);
+  await previous.catch(() => undefined);
+  try {
+    return await performSync(request);
+  } finally {
+    release();
+    if (syncQueues.get(key) === queued) syncQueues.delete(key);
+  }
+}
+
+async function performSync(request: NextRequest): Promise<Response> {
   if (!isSameOriginRequest(request)) {
     return json(
       { error: "Cross-origin Workbench shared sync is not allowed." },
@@ -188,6 +208,12 @@ export async function POST(request: NextRequest): Promise<Response> {
       return json({ error: "Request body must be an object." }, 400);
     }
     const org = normalizeWorkbenchSharedOrg((body as { org?: unknown }).org);
+    const choice = (body as { conflictPreference?: unknown })
+      .conflictPreference;
+    if (choice !== undefined && choice !== "local" && choice !== "remote") {
+      return json({ error: "Invalid conflict preference." }, 400);
+    }
+    const reviewed = (body as { reviewed?: Record<string, string> }).reviewed;
     const root = resolveLocalDatasetRoot();
     const credential = await resolveHfToken(root);
     const token = credential.token;
@@ -196,24 +222,94 @@ export async function POST(request: NextRequest): Promise<Response> {
     let lastConflict: Error | null = null;
 
     for (let attempt = 1; attempt <= MAX_SYNC_ATTEMPTS; attempt += 1) {
-      const [{ read, documents: remote }, local, allPending] =
+      const [{ read, documents: remote }, local, allPending, base] =
         await Promise.all([
           readRemote(org, pythonToken, useDefaultAuth),
           readLocalWorkbenchSharedConfigs(org, root),
           listPendingWorkbenchSharedEvents(root),
+          readWorkbenchSharedSyncBaseline(org, root),
         ]);
-      const resolutions = WORKBENCH_SHARED_CONFIG_KINDS.map((kind) =>
-        resolveWorkbenchSharedConfig(local[kind], remote[kind]),
+      const fingerprints = Object.fromEntries(
+        WORKBENCH_SHARED_CONFIG_KINDS.map((kind) => [
+          kind,
+          digestWorkbenchSharedValue({
+            local: local[kind],
+            remote: remote[kind],
+            base: base[kind],
+          }),
+        ]),
       );
-
-      const pulled: WorkbenchSharedConfigKind[] = [];
-      for (const resolution of resolutions) {
-        if (resolution.winner !== "remote") continue;
-        await applyRemoteWorkbenchSharedConfig(resolution.document, root);
-        pulled.push(resolution.kind);
+      const preference =
+        choice &&
+        WORKBENCH_SHARED_CONFIG_KINDS.every(
+          (kind) => reviewed?.[kind] === fingerprints[kind],
+        )
+          ? choice
+          : undefined;
+      const resolutions = WORKBENCH_SHARED_CONFIG_KINDS.map((kind) =>
+        resolveWorkbenchSharedConfig(
+          local[kind],
+          remote[kind],
+          base[kind],
+          preference,
+        ),
+      );
+      if (resolutions.some((resolution) => resolution.conflict)) {
+        return json(
+          {
+            code: "WORKBENCH_SHARED_MERGE_CONFLICT",
+            error:
+              "Both sides changed the same fields. Choose which values to keep for conflicting fields.",
+            conflicts: resolutions
+              .filter((resolution) => resolution.conflict)
+              .map((resolution) => ({
+                kind: resolution.kind,
+                paths: resolution.conflictPaths,
+              })),
+            reviewed: fingerprints,
+          },
+          409,
+        );
       }
 
-      const desired = await readLocalWorkbenchSharedConfigs(org, root);
+      const pulled: WorkbenchSharedConfigKind[] = [];
+      const desired = Object.fromEntries(
+        resolutions.map((resolution) => [resolution.kind, resolution.document]),
+      ) as Record<WorkbenchSharedConfigKind, WorkbenchSharedConfigDocument>;
+      const finishLocal = async (published: boolean) => {
+        const baseline = { ...base };
+        for (const resolution of resolutions) {
+          const kind = resolution.kind;
+          const current = await readLocalWorkbenchSharedConfigs(org, root);
+          if (
+            digestWorkbenchSharedValue(current[kind]) !==
+            digestWorkbenchSharedValue(local[kind])
+          )
+            continue;
+          if (
+            digestWorkbenchSharedValue(current[kind]) !==
+            digestWorkbenchSharedValue(desired[kind])
+          ) {
+            try {
+              await applyRemoteWorkbenchSharedConfig(
+                desired[kind],
+                root,
+                local[kind],
+              );
+            } catch (error) {
+              if (
+                error instanceof WorkbenchConfigurationConflictError ||
+                error instanceof WorkbenchRewardRulesConflictError
+              )
+                continue;
+              throw error;
+            }
+            pulled.push(kind);
+          }
+          baseline[kind] = published ? desired[kind] : remote[kind];
+        }
+        await writeWorkbenchSharedSyncBaseline(org, baseline, root);
+      };
       const configFiles = WORKBENCH_SHARED_CONFIG_KINDS.flatMap((kind) => {
         const remoteDocument = remote[kind];
         if (
@@ -241,6 +337,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         .map((resolution) => resolution.kind);
 
       if (!token) {
+        await finishLocal(false);
         const metadata = await writeWorkbenchSharedSyncMetadata(
           {
             lastSyncAt: new Date().toISOString(),
@@ -268,6 +365,7 @@ export async function POST(request: NextRequest): Promise<Response> {
       }
 
       if (files.length === 0) {
+        await finishLocal(true);
         const metadata = await writeWorkbenchSharedSyncMetadata(
           {
             lastSyncAt: new Date().toISOString(),
@@ -307,6 +405,7 @@ export async function POST(request: NextRequest): Promise<Response> {
           throw new Error("Unexpected Hugging Face commit response.");
         }
         await markWorkbenchSharedEventsSent(pending, root);
+        await finishLocal(true);
         const metadata = await writeWorkbenchSharedSyncMetadata(
           {
             lastSyncAt: new Date().toISOString(),

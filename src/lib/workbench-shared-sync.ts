@@ -6,6 +6,7 @@ import path from "node:path";
 import { resolveLocalDatasetRoot } from "@/lib/local-datasets-discovery";
 import {
   readWorkbenchConfiguration,
+  workbenchConfigurationRevision,
   writeWorkbenchConfiguration,
 } from "@/lib/workbench-configuration-store";
 import { normalizeWorkbenchWorkstationMappings } from "@/lib/workbench-config-store";
@@ -19,6 +20,10 @@ import {
   readWorkbenchRewardRules,
   writeWorkbenchRewardRules,
 } from "@/lib/workbench-reward-store";
+import {
+  mergeWorkbenchSharedData,
+  type WorkbenchMergePreference,
+} from "@/lib/workbench-shared-merge";
 
 export const WORKBENCH_SHARED_REPO_ID =
   "XR-Bot0/xense-lerobot-viewer-workbenck-log";
@@ -93,8 +98,9 @@ export type WorkbenchSharedEventInput = {
 
 export type WorkbenchSharedConfigResolution = {
   kind: WorkbenchSharedConfigKind;
-  winner: "local" | "remote" | "equal";
+  winner: "local" | "remote" | "equal" | "merged";
   conflict: boolean;
+  conflictPaths: string[];
   document: WorkbenchSharedConfigDocument;
 };
 
@@ -329,51 +335,153 @@ export function digestWorkbenchSharedValue(value: unknown): string {
 export function resolveWorkbenchSharedConfig(
   local: WorkbenchSharedConfigDocument,
   remote: WorkbenchSharedConfigDocument | null,
+  base: WorkbenchSharedConfigDocument | null = null,
+  preference?: WorkbenchMergePreference,
 ): WorkbenchSharedConfigResolution {
   if (!remote) {
     return {
       kind: local.kind,
       winner: "local",
       conflict: false,
+      conflictPaths: [],
       document: local,
     };
   }
 
-  const localDigest = digestWorkbenchSharedValue(local);
-  const remoteDigest = digestWorkbenchSharedValue(remote);
+  const localDigest = digestWorkbenchSharedValue(local.data);
+  const remoteDigest = digestWorkbenchSharedValue(remote.data);
   if (localDigest === remoteDigest) {
     return {
       kind: local.kind,
       winner: "equal",
       conflict: false,
-      document: local,
+      conflictPaths: [],
+      document:
+        Date.parse(local.updatedAt) > Date.parse(remote.updatedAt)
+          ? local
+          : remote,
     };
   }
 
-  const localTime = Date.parse(local.updatedAt);
-  const remoteTime = Date.parse(remote.updatedAt);
-  if (localTime !== remoteTime) {
-    const localWins = localTime > remoteTime;
+  // An unsaved default can safely adopt the first remote configuration.
+  if (!base && local.updatedAt === DEFAULT_UPDATED_AT) {
     return {
       kind: local.kind,
-      winner: localWins ? "local" : "remote",
+      winner: "remote",
       conflict: false,
-      document: localWins ? local : remote,
+      conflictPaths: [],
+      document: remote,
     };
   }
 
-  const localWins = localDigest.localeCompare(remoteDigest) >= 0;
+  const merged = mergeWorkbenchSharedData(
+    local.data,
+    remote.data,
+    base?.data ?? null,
+    preference,
+  );
+  let document: WorkbenchSharedConfigDocument;
+  try {
+    document = parseWorkbenchSharedConfig(
+      {
+        ...local,
+        updatedAt: new Date(
+          Math.max(Date.parse(local.updatedAt), Date.parse(remote.updatedAt)),
+        ).toISOString(),
+        data: merged.data,
+      },
+      local.kind,
+      local.org,
+    );
+    if (local.kind === "reward-rules") {
+      for (const field of ["levels", "episodeDurationLevels"]) {
+        const raw = merged.data[field] as unknown[];
+        const normalized = document.data[field] as unknown[];
+        if (raw.length !== normalized.length)
+          throw new Error("Merged reward tiers are invalid.");
+      }
+    }
+  } catch {
+    // Independent changes may violate references or reward-tier constraints.
+    merged.conflicts.push("data (combined configuration is invalid)");
+    document = preference === "remote" ? remote : local;
+  }
+  const digest = digestWorkbenchSharedValue(document.data);
   return {
     kind: local.kind,
-    winner: localWins ? "local" : "remote",
-    conflict: true,
-    document: localWins ? local : remote,
+    winner:
+      digest === localDigest
+        ? "local"
+        : digest === remoteDigest
+          ? "remote"
+          : "merged",
+    conflict: merged.conflicts.length > 0 && !preference,
+    conflictPaths: merged.conflicts,
+    document,
   };
+}
+
+function baselinePath(org: string, root: string): string {
+  return path.join(
+    sharedRoot(root),
+    "baselines",
+    normalizeWorkbenchSharedOrg(org) + ".json",
+  );
+}
+
+export async function readWorkbenchSharedSyncBaseline(
+  org: string,
+  root = resolveLocalDatasetRoot(),
+): Promise<
+  Record<WorkbenchSharedConfigKind, WorkbenchSharedConfigDocument | null>
+> {
+  try {
+    const raw = JSON.parse(await fs.readFile(baselinePath(org, root), "utf8"));
+    if (!isRecord(raw)) throw new Error("Invalid Workbench sync baseline.");
+    return Object.fromEntries(
+      WORKBENCH_SHARED_CONFIG_KINDS.map((kind) => [
+        kind,
+        raw[kind] == null
+          ? null
+          : parseWorkbenchSharedConfig(raw[kind], kind, org),
+      ]),
+    ) as Record<
+      WorkbenchSharedConfigKind,
+      WorkbenchSharedConfigDocument | null
+    >;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return { configuration: null, "reward-rules": null };
+  }
+}
+
+export async function writeWorkbenchSharedSyncBaseline(
+  org: string,
+  documents: Record<
+    WorkbenchSharedConfigKind,
+    WorkbenchSharedConfigDocument | null
+  >,
+  root = resolveLocalDatasetRoot(),
+): Promise<void> {
+  const destination = baselinePath(org, root);
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  const temporary = destination + "." + randomUUID() + ".tmp";
+  try {
+    await fs.writeFile(
+      temporary,
+      serializeWorkbenchSharedValue(documents),
+      "utf8",
+    );
+    await fs.rename(temporary, destination);
+  } finally {
+    await fs.unlink(temporary).catch(() => undefined);
+  }
 }
 
 export async function applyRemoteWorkbenchSharedConfig(
   document: WorkbenchSharedConfigDocument,
   root = resolveLocalDatasetRoot(),
+  expectedLocal?: WorkbenchSharedConfigDocument,
 ): Promise<void> {
   const org = normalizeWorkbenchSharedOrg(document.org);
   if (document.kind === "reward-rules") {
@@ -382,6 +490,7 @@ export async function applyRemoteWorkbenchSharedConfig(
       document.data,
       root,
       document.updatedAt,
+      expectedLocal?.data,
     );
     return;
   }
@@ -390,7 +499,13 @@ export async function applyRemoteWorkbenchSharedConfig(
   await writeWorkbenchConfiguration(
     org,
     document.data,
-    current.revision,
+    expectedLocal
+      ? workbenchConfigurationRevision(
+          expectedLocal.data as unknown as Parameters<
+            typeof workbenchConfigurationRevision
+          >[0],
+        )
+      : current.revision,
     root,
     [],
     document.updatedAt,
