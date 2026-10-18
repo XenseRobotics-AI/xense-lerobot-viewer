@@ -37,6 +37,11 @@ import {
 } from "@/utils/spatialTrajectories";
 import type { VideoInfo, AdjacentEpisodeVideos } from "@/types";
 import { tStandalone } from "@/i18n/standalone";
+import {
+  parseTcpFrameConvention,
+  unrecognizedTcpFrameConvention,
+  type TcpFrameConvention,
+} from "@/utils/taccapGripperTransforms";
 
 export type { SpatialTrajectoryData } from "@/utils/spatialTrajectories";
 
@@ -63,6 +68,12 @@ export type DatasetDisplayInfo = {
   total_episodes: number;
   fps: number;
   robot_type: string | null;
+  /** Left/right TCP axis convention from `info.json`; see `TcpFrameConvention`. */
+  tcp_frame_convention: TcpFrameConvention;
+  /** The raw value when `info.json` declares one we do not recognise. */
+  tcp_frame_convention_unrecognized: string | null;
+  /** False when `info.json` omits the key and the legacy default applies. */
+  tcp_frame_convention_declared: boolean;
   codebase_version: string;
   total_tasks: number;
   dataset_size_mb: number;
@@ -557,6 +568,15 @@ export async function getEpisodeData(
     result.datasetInfo = {
       ...result.datasetInfo,
       robot_type: rawInfo.robot_type ?? null,
+      tcp_frame_convention: parseTcpFrameConvention(
+        rawInfo.tcp_frame_convention,
+      ),
+      tcp_frame_convention_unrecognized: unrecognizedTcpFrameConvention(
+        rawInfo.tcp_frame_convention,
+      ),
+      tcp_frame_convention_declared:
+        rawInfo.tcp_frame_convention !== undefined &&
+        rawInfo.tcp_frame_convention !== null,
       codebase_version: rawInfo.codebase_version,
       total_tasks: rawInfo.total_tasks ?? 0,
       dataset_size_mb:
@@ -672,6 +692,9 @@ async function getEpisodeDataV2(
     total_episodes: info.total_episodes,
     fps: info.fps,
     robot_type: null,
+    tcp_frame_convention: "same-axes-v0",
+    tcp_frame_convention_unrecognized: null,
+    tcp_frame_convention_declared: false,
     codebase_version: version,
     total_tasks: 0,
     dataset_size_mb: 0,
@@ -906,6 +929,9 @@ async function getEpisodeDataV3(
     total_episodes: info.total_episodes,
     fps: info.fps,
     robot_type: null,
+    tcp_frame_convention: "same-axes-v0",
+    tcp_frame_convention_unrecognized: null,
+    tcp_frame_convention_declared: false,
     codebase_version: version,
     total_tasks: 0,
     dataset_size_mb: 0,

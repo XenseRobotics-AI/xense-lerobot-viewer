@@ -22,7 +22,7 @@ import type { EpisodeData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import UrdfPlaybackBar from "@/components/urdf-playback-bar";
 import UrdfValueReadout from "@/components/urdf-value-readout";
 import UrdfVideoOverlay from "@/components/urdf-video-overlay";
-import { useT } from "@/context/locale-context";
+import { useLocale } from "@/context/locale-context";
 import {
   type BundledGripperProfile,
   bundledGripperProfile,
@@ -49,6 +49,8 @@ import {
 import {
   tacCapDatasetPointToScene,
   tacCapRecordedTcpSceneMatrix,
+  tcpConventionToModelMatrix,
+  type TcpFrameConvention,
 } from "@/utils/taccapGripperTransforms";
 import {
   type EpisodeGripperCalibration,
@@ -658,6 +660,7 @@ function TacCapGripperModel({
   frame,
   profile,
   side,
+  tcpFrameConvention,
   onReady,
 }: {
   /** Calibrated travel of this side's jaw, radians; null when unrecorded. */
@@ -665,11 +668,26 @@ function TacCapGripperModel({
   frame: TacCapGripperFrame | null;
   profile: BundledGripperProfile;
   side: TacCapSide;
+  tcpFrameConvention: TcpFrameConvention;
   onReady: (side: TacCapSide) => void;
 }) {
   const { scene } = useThree();
   const robotRef = useRef<URDFRobot | null>(null);
+  // Recorded TCP → model root. The profile's constant assumes the
+  // `same-axes-v0` frame; a `mirrored-v1` left hand is turned back into it
+  // first, or the model renders rolled 180° about its tool axis.
+  const recordedTcpToRoot = useMemo(
+    () =>
+      new THREE.Matrix4()
+        .set(...tcpConventionToModelMatrix(side, tcpFrameConvention))
+        .multiply(new THREE.Matrix4().set(...profile.rootFromTcp(side))),
+    [profile, side, tcpFrameConvention],
+  );
+  // Read through a ref by the load callback, which must see the value current
+  // when it fires; null until the URDF has passed its frame-link guard.
   const recordedTcpToRootRef = useRef<THREE.Matrix4 | null>(null);
+  const loadedTcpToRootRef = useRef(recordedTcpToRoot);
+  loadedTcpToRootRef.current = recordedTcpToRoot;
   const frameRef = useRef<TacCapGripperFrame | null>(frame);
   if (frame) frameRef.current = frame;
   // Read through a ref for the same reason `frame` is: the load callback fires
@@ -728,12 +746,10 @@ function TacCapGripperModel({
           );
           return;
         }
-        // Incoming frames use the canonical TCP convention; the profile says
-        // where the model root sits relative to it. Constant, not read from the
-        // model — the link above is only a guard against the wrong URDF.
-        recordedTcpToRootRef.current = new THREE.Matrix4().set(
-          ...profile.rootFromTcp(side),
-        );
+        // The profile says where the model root sits relative to the TCP.
+        // Constant, not read from the model — the link above is only a guard
+        // against the wrong URDF.
+        recordedTcpToRootRef.current = loadedTcpToRootRef.current;
         robot.traverse((child) => {
           child.castShadow = true;
           child.receiveShadow = true;
@@ -772,8 +788,8 @@ function TacCapGripperModel({
 
   useLayoutEffect(() => {
     const robot = robotRef.current;
-    const recordedTcpToRoot = recordedTcpToRootRef.current;
-    if (!robot || !recordedTcpToRoot) return;
+    if (!robot || !recordedTcpToRootRef.current) return;
+    recordedTcpToRootRef.current = recordedTcpToRoot;
 
     robot.visible = frame !== null;
     if (!frame) return;
@@ -785,7 +801,7 @@ function TacCapGripperModel({
       profile.driveJoint,
       calibratedTravel,
     );
-  }, [calibratedTravel, frame, profile.driveJoint]);
+  }, [calibratedTravel, frame, profile.driveJoint, recordedTcpToRoot]);
 
   return null;
 }
@@ -1311,6 +1327,7 @@ function TacCapGripperScene({
   headTrack,
   onReadyChange,
   profile,
+  tcpFrameConvention,
   timeSeconds,
   tracks,
   trailEnabled,
@@ -1322,6 +1339,7 @@ function TacCapGripperScene({
   headTrack: TacCapHeadTrack | null;
   onReadyChange: (ready: boolean) => void;
   profile: BundledGripperProfile;
+  tcpFrameConvention: TcpFrameConvention;
   timeSeconds: number;
   tracks: TacCapGripperTrack[];
   trailEnabled: boolean;
@@ -1364,6 +1382,7 @@ function TacCapGripperScene({
           frame={frameBySide.get(side) ?? null}
           profile={profile}
           side={side}
+          tcpFrameConvention={tcpFrameConvention}
           onReady={handleReady}
         />
       ))}
@@ -1943,7 +1962,7 @@ export default function URDFViewer({
   playToggleRef?: React.RefObject<(() => void) | undefined>;
   seekByRef?: React.RefObject<((seconds: number) => void) | undefined>;
 }) {
-  const t = useT();
+  const { t, tRich } = useLocale();
   const { datasetInfo } = data;
   const fps = datasetInfo.fps || 30;
   const gripperProfile = useMemo(
@@ -2386,6 +2405,7 @@ export default function URDFViewer({
               headTrack={tacCapHeadTrack}
               onReadyChange={setTacCapModelsReady}
               profile={gripperProfile}
+              tcpFrameConvention={datasetInfo.tcp_frame_convention}
               timeSeconds={replayTimeSeconds}
               tracks={tacCapTracks}
               trailEnabled={trailEnabled}
@@ -2444,6 +2464,39 @@ export default function URDFViewer({
           replayRevision={replayRevision}
           videos={data.videosInfo}
         />
+        {/*
+         * The declared TCP convention decides how the left gripper model is
+         * posed, so it is always on screen: neutral when declared, muted when
+         * the key is absent and the legacy default applies, amber when the
+         * value names no convention we know.
+         */}
+        {isBundledGripper &&
+          (datasetInfo.tcp_frame_convention_unrecognized !== null ? (
+            <div
+              className="pointer-events-none absolute bottom-3 right-3 z-10 max-w-[min(26rem,60%)] rounded border border-amber-400/40 bg-slate-950/85 px-2 py-1 text-[11px] leading-snug text-amber-300 shadow backdrop-blur-sm"
+              role="status"
+            >
+              {tRich("urdf.tcpConventionUnknown", {
+                value: (
+                  <span className="font-mono">
+                    {datasetInfo.tcp_frame_convention_unrecognized}
+                  </span>
+                ),
+              })}
+            </div>
+          ) : (
+            <div className="pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-1.5 rounded border border-white/10 bg-slate-950/75 px-2 py-1 text-[10px] shadow backdrop-blur-sm">
+              <span className="text-slate-500">{t("urdf.tcpConvention")}</span>
+              <span className="font-mono text-slate-200">
+                {datasetInfo.tcp_frame_convention}
+              </span>
+              {!datasetInfo.tcp_frame_convention_declared && (
+                <span className="text-slate-500">
+                  {t("urdf.tcpConventionDefault")}
+                </span>
+              )}
+            </div>
+          ))}
         {trajectoryUnavailable && (
           <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg)]/75 px-6 text-center text-sm text-amber-300">
             {t(
