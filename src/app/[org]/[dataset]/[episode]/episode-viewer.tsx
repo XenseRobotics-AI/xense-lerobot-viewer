@@ -122,6 +122,22 @@ type ActiveTab =
   | "urdf"
   | "parquet";
 
+const ACTIVE_TABS: readonly ActiveTab[] = [
+  "episodes",
+  "annotations",
+  "statistics",
+  "frames",
+  "insights",
+  "doctor",
+  "filtering",
+  "urdf",
+  "parquet",
+];
+
+function isActiveTab(value: string | null): value is ActiveTab {
+  return value !== null && (ACTIVE_TABS as readonly string[]).includes(value);
+}
+
 // Subscribes to `currentTime` so its parent doesn't have to. Keeping this
 // in a leaf component means the throttled time ticks (~12.5/s during
 // playback) only re-render this no-op sub-tree, not the entire 700-line
@@ -425,23 +441,13 @@ function EpisodeViewerInner({
   // Safe because EpisodeViewerInner only mounts client-side (behind a loading gate).
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
     if (typeof window !== "undefined") {
+      // `?tab=` wins over the remembered tab, so a shared link can open
+      // straight on e.g. the 3D replay (`?tab=urdf`); sessionStorage is
+      // per browser tab, so a link opened in a new tab never had one.
+      const fromUrl = searchParams.get("tab");
+      if (isActiveTab(fromUrl)) return fromUrl;
       const stored = sessionStorage.getItem("activeTab");
-      if (
-        stored &&
-        [
-          "episodes",
-          "annotations",
-          "statistics",
-          "frames",
-          "insights",
-          "doctor",
-          "filtering",
-          "urdf",
-          "parquet",
-        ].includes(stored)
-      ) {
-        return stored as ActiveTab;
-      }
+      if (isActiveTab(stored)) return stored;
     }
     return "episodes";
   });

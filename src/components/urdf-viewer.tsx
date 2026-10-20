@@ -660,7 +660,9 @@ function TacCapGripperModel({
   frame,
   profile,
   side,
+  smoothTimeRef,
   tcpFrameConvention,
+  track,
   onReady,
 }: {
   /** Calibrated travel of this side's jaw, radians; null when unrecorded. */
@@ -668,7 +670,10 @@ function TacCapGripperModel({
   frame: TacCapGripperFrame | null;
   profile: BundledGripperProfile;
   side: TacCapSide;
+  /** See `PlaybackDriver`: between-row time while playing, else null. */
+  smoothTimeRef: React.MutableRefObject<number | null>;
   tcpFrameConvention: TcpFrameConvention;
+  track: TacCapGripperTrack | null;
   onReady: (side: TacCapSide) => void;
 }) {
   const { scene } = useThree();
@@ -802,6 +807,25 @@ function TacCapGripperModel({
       calibratedTravel,
     );
   }, [calibratedTravel, frame, profile.driveJoint, recordedTcpToRoot]);
+
+  // While playing, re-pose every display frame from the continuous time. The
+  // row-rate layout effect above still runs; any pose it sets is overwritten
+  // here before the scene is drawn, since R3F calls this right before render.
+  useFrame(() => {
+    const time = smoothTimeRef.current;
+    const robot = robotRef.current;
+    const tcpToRoot = recordedTcpToRootRef.current;
+    if (time === null || !robot || !tcpToRoot || !track) return;
+    const sampled = sampleTacCapGripperFrame(track, time);
+    if (!sampled) return;
+    applyTacCapGripperFrame(
+      robot,
+      tcpToRoot,
+      sampled,
+      profile.driveJoint,
+      travelRef.current,
+    );
+  });
 
   return null;
 }
@@ -1288,10 +1312,26 @@ function TacCapHeadsetModel({ originRadius }: { originRadius: number }) {
 function TacCapHeadMarker({
   frame,
   size,
+  smoothTimeRef,
+  track,
 }: {
   frame: TacCapHeadFrame | null;
   size: number;
+  smoothTimeRef: React.MutableRefObject<number | null>;
+  track: TacCapHeadTrack | null;
 }) {
+  const groupRef = useRef<THREE.Group | null>(null);
+  useFrame(() => {
+    const time = smoothTimeRef.current;
+    const group = groupRef.current;
+    if (time === null || !group || !track) return;
+    const sampled = sampleTacCapHeadFrame(track, time);
+    if (!sampled) return;
+    group.matrix.set(
+      ...tacCapRecordedTcpSceneMatrix(sampled.position, sampled.rotation),
+    );
+    group.matrixWorldNeedsUpdate = true;
+  });
   const transform = useMemo(
     () =>
       frame
@@ -1305,7 +1345,7 @@ function TacCapHeadMarker({
 
   const axisLength = Math.max(size, 0.04);
   return (
-    <group matrix={transform} matrixAutoUpdate={false}>
+    <group ref={groupRef} matrix={transform} matrixAutoUpdate={false}>
       <TacCapHeadsetModel originRadius={size} />
       {TACCAP_LOCAL_POSE_AXES.map((axis) => (
         <TacCapAxisArrow
@@ -1327,11 +1367,13 @@ function TacCapGripperScene({
   headTrack,
   onReadyChange,
   profile,
+  smoothTimeRef,
   tcpFrameConvention,
   timeSeconds,
   tracks,
   trailEnabled,
 }: {
+  smoothTimeRef: React.MutableRefObject<number | null>;
   /** This episode's calibration windows, empty when the dataset records none. */
   calibration: EpisodeGripperCalibration;
   frames: TacCapGripperFrame[];
@@ -1382,7 +1424,9 @@ function TacCapGripperScene({
           frame={frameBySide.get(side) ?? null}
           profile={profile}
           side={side}
+          smoothTimeRef={smoothTimeRef}
           tcpFrameConvention={tcpFrameConvention}
+          track={tracks.find((track) => track.side === side) ?? null}
           onReady={handleReady}
         />
       ))}
@@ -1408,6 +1452,8 @@ function TacCapGripperScene({
       )}
       <TacCapHeadMarker
         frame={headFrame}
+        smoothTimeRef={smoothTimeRef}
+        track={headTrack}
         size={Math.max(0.006, Math.min(0.014, bounds.extent * 0.012))}
       />
       <Grid
@@ -1911,6 +1957,8 @@ function PlaybackDriver({
   totalFrames,
   frameRef,
   setFrame,
+  smoothTimeRef,
+  timeAtRow,
 }: {
   playing: boolean;
   /** Chart rows to advance per second — see `rowsPerSecond` in URDFViewer. */
@@ -1919,6 +1967,16 @@ function PlaybackDriver({
   totalFrames: number;
   frameRef: React.MutableRefObject<number>;
   setFrame: React.Dispatch<React.SetStateAction<number>>;
+  /**
+   * Episode time between two rows, refreshed every display frame while
+   * playing (null when paused). `frame` only steps at the row rate — 30 Hz
+   * for a 30 fps dataset — and the models used to snap to each row, which on
+   * a 60–144 Hz screen reads as stutter however light the scene is. The
+   * models sample their pose from this in R3F's loop instead, so motion is
+   * continuous without re-rendering React at the display rate.
+   */
+  smoothTimeRef: React.MutableRefObject<number | null>;
+  timeAtRow: (row: number) => number;
 }) {
   const elapsed = useRef(0);
   const last = useRef(0);
@@ -1938,13 +1996,30 @@ function PlaybackDriver({
           frameRef.current = (frameRef.current + fd) % totalFrames;
           setFrame(frameRef.current);
         }
+        const row = frameRef.current;
+        const t0 = timeAtRow(row);
+        const t1 = row + 1 < totalFrames ? timeAtRow(row + 1) : t0;
+        const alpha = Math.min(Math.max(elapsed.current * rowsPerSecond, 0), 1);
+        smoothTimeRef.current = t0 + (t1 - t0) * alpha;
       }
     };
     last.current = performance.now();
     elapsed.current = 0;
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [playing, rowsPerSecond, replayRevision, totalFrames, frameRef, setFrame]);
+    return () => {
+      cancelAnimationFrame(raf);
+      smoothTimeRef.current = null;
+    };
+  }, [
+    playing,
+    rowsPerSecond,
+    replayRevision,
+    totalFrames,
+    frameRef,
+    setFrame,
+    smoothTimeRef,
+    timeAtRow,
+  ]);
   return null;
 }
 
@@ -2117,6 +2192,7 @@ export default function URDFViewer({
   const [replayRevision, setReplayRevision] = useState(0);
   const [tacCapModelsReady, setTacCapModelsReady] = useState(false);
   const frameRef = useRef(0);
+  const smoothTimeRef = useRef<number | null>(null);
 
   useEffect(() => {
     setFrame(0);
@@ -2138,9 +2214,13 @@ export default function URDFViewer({
     [],
   );
 
-  const replayTimeSeconds =
-    chartData[Math.min(frame, Math.max(totalFrames - 1, 0))]?.timestamp ??
-    frame / rowsPerSecond;
+  const timeAtRow = useCallback(
+    (row: number) => chartData[row]?.timestamp ?? row / rowsPerSecond,
+    [chartData, rowsPerSecond],
+  );
+  const replayTimeSeconds = timeAtRow(
+    Math.min(frame, Math.max(totalFrames - 1, 0)),
+  );
   const tacCapFrames = useMemo(
     () =>
       tacCapTracks.flatMap((track) => {
@@ -2405,6 +2485,7 @@ export default function URDFViewer({
               headTrack={tacCapHeadTrack}
               onReadyChange={setTacCapModelsReady}
               profile={gripperProfile}
+              smoothTimeRef={smoothTimeRef}
               tcpFrameConvention={datasetInfo.tcp_frame_convention}
               timeSeconds={replayTimeSeconds}
               tracks={tacCapTracks}
@@ -2455,6 +2536,8 @@ export default function URDFViewer({
             totalFrames={totalFrames}
             frameRef={frameRef}
             setFrame={setFrame}
+            smoothTimeRef={smoothTimeRef}
+            timeAtRow={timeAtRow}
           />
         </Canvas>
         <UrdfVideoOverlay
