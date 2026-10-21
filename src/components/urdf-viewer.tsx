@@ -529,9 +529,11 @@ function TacCapAxisArrow({
 function TacCapWorldAxes({
   bounds,
   groundY,
+  label,
 }: {
   bounds: SceneBounds;
   groundY: number;
+  label: string;
 }) {
   const length = Math.min(0.16, Math.max(0.08, bounds.extent * 0.18));
   // Put the reference in a stable grid corner. +X, +Y and +Z all point into
@@ -555,6 +557,16 @@ function TacCapWorldAxes({
       {TACCAP_WORLD_AXES.map((axis) => (
         <TacCapAxisArrow key={axis.label} length={length} {...axis} />
       ))}
+      <Html
+        center
+        position={[0, -length * 0.22, 0]}
+        style={{ pointerEvents: "none" }}
+        zIndexRange={[10, 0]}
+      >
+        <span className="whitespace-nowrap rounded border border-white/15 bg-slate-950/85 px-1 py-0.5 font-mono text-[9px] font-semibold leading-none text-slate-300 shadow">
+          {label}
+        </span>
+      </Html>
     </group>
   );
 }
@@ -1462,12 +1474,15 @@ function TacCapGripperScene({
   timeSeconds,
   tracks,
   trailEnabled,
+  worldAxesLabel,
 }: {
   smoothTimeRef: React.MutableRefObject<number | null>;
   /** This episode's calibration windows, empty when the dataset records none. */
   calibration: EpisodeGripperCalibration;
   /** Label for dataset (0, 0, 0); null hides the marker. */
   episodeOrigin: { label: string; frame: boolean } | null;
+  /** Label on the orientation axes in the grid corner. */
+  worldAxesLabel: string;
   frames: TacCapGripperFrame[];
   headFrame: TacCapHeadFrame | null;
   headTrack: TacCapHeadTrack | null;
@@ -1565,7 +1580,7 @@ function TacCapGripperScene({
         sectionColor="#475569"
         fadeDistance={gridSize * 1.5}
       />
-      <TacCapWorldAxes bounds={bounds} groundY={gridY} />
+      <TacCapWorldAxes bounds={bounds} groundY={gridY} label={worldAxesLabel} />
       {episodeOrigin && (
         <TacCapEpisodeOrigin
           groundY={gridY}
@@ -2611,6 +2626,7 @@ export default function URDFViewer({
             <TacCapGripperScene
               calibration={gripperCalibration}
               episodeOrigin={episodeOrigin}
+              worldAxesLabel={t("urdf.worldAxes")}
               frames={tacCapFrames}
               headFrame={tacCapHeadFrame}
               headTrack={tacCapHeadTrack}
