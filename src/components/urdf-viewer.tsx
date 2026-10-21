@@ -370,11 +370,6 @@ const TACCAP_HEADSET = {
 // Front opening of the halo ring, so the strap clears the visor instead of
 // passing through it.
 const TACCAP_HALO_GAP_HALF = 0.62;
-const TACCAP_LOCAL_POSE_AXES = [
-  { label: "X", direction: [1, 0, 0] as const, color: "#ef4444" },
-  { label: "Y", direction: [0, 1, 0] as const, color: "#22c55e" },
-  { label: "Z", direction: [0, 0, 1] as const, color: "#3b82f6" },
-] as const;
 const TACCAP_WORLD_AXES = [
   {
     label: "+X",
@@ -1444,19 +1439,11 @@ function TacCapHeadMarker({
   );
   if (!transform) return null;
 
-  const axisLength = Math.max(size, 0.04);
+  // No local pose axes here: the episode anchor already draws a full axis set
+  // at the head's start pose, and two overlapping sets were unreadable.
   return (
     <group ref={groupRef} matrix={transform} matrixAutoUpdate={false}>
       <TacCapHeadsetModel originRadius={size} />
-      {TACCAP_LOCAL_POSE_AXES.map((axis) => (
-        <TacCapAxisArrow
-          key={axis.label}
-          alwaysVisible
-          length={axisLength}
-          showLabel={false}
-          {...axis}
-        />
-      ))}
     </group>
   );
 }
