@@ -96,6 +96,9 @@ describe("zh translation coverage", () => {
     // Tool names the user also meets as a tab, a CLI and a file extension.
     "viewer.tab.doctor",
     "viewer.tab.parquet",
+    // Coordinate-frame names the operator uses verbatim (world / anchor), so
+    // the 3D replay axis label reads the same in both languages.
+    "urdf.worldAxes",
     // Pure formula — symbols and units only, nothing to translate.
     "doctor.speedFormula",
     // Value + unit, and units render in English in both languages (see the
