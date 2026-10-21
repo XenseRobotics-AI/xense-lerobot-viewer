@@ -30,6 +30,11 @@ import {
 import { CHART_CONFIG } from "@/utils/constants";
 import { fetchDatasetSources } from "@/utils/datasetSourcesClient";
 import {
+  fetchCollectionDevices,
+  readEpisodeWorldFrame,
+  type EpisodeWorldFrame,
+} from "@/utils/episodeWorldFrame";
+import {
   extractTacCapGripperTracks,
   extractTacCapHeadTrack,
   sampleTacCapGripperFrame,
@@ -554,13 +559,97 @@ function TacCapWorldAxes({
   );
 }
 
+/**
+ * The episode origin: dataset (0, 0, 0). For head-start exports this is the
+ * head at recording start (+X its heading, Z up), so the initial hand poses can
+ * be read directly against it. Drawn at its true position, unlike the
+ * orientation-only `TacCapWorldAxes` in the grid corner, with a drop line to the
+ * grid so its height reads at a glance.
+ */
+function TacCapEpisodeOrigin({
+  groundY,
+  label,
+  length,
+}: {
+  groundY: number;
+  label: string;
+  length: number;
+}) {
+  const origin = useMemo(() => tacCapDatasetPointToScene([0, 0, 0]), []);
+  const drop = useMemo(() => {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, groundY - origin[1], 0),
+    ]);
+    const line = new THREE.Line(
+      geometry,
+      new THREE.LineDashedMaterial({
+        color: "#f8fafc",
+        dashSize: length * 0.08,
+        gapSize: length * 0.06,
+        transparent: true,
+        opacity: 0.55,
+      }),
+    );
+    line.computeLineDistances();
+    return line;
+  }, [groundY, length, origin]);
+  useEffect(
+    () => () => {
+      drop.geometry.dispose();
+      (drop.material as THREE.Material).dispose();
+    },
+    [drop],
+  );
+
+  return (
+    <group position={origin}>
+      <mesh renderOrder={22}>
+        <sphereGeometry args={[length * 0.07, 16, 12]} />
+        <meshBasicMaterial
+          color="#f8fafc"
+          depthTest={false}
+          depthWrite={false}
+          toneMapped={false}
+        />
+      </mesh>
+      {TACCAP_WORLD_AXES.map((axis) => (
+        <TacCapAxisArrow
+          key={axis.label}
+          alwaysVisible
+          length={length}
+          {...axis}
+        />
+      ))}
+      <primitive object={drop} />
+      <Html
+        center
+        position={[0, length * 0.32, 0]}
+        style={{ pointerEvents: "none" }}
+        zIndexRange={[10, 0]}
+      >
+        <span className="whitespace-nowrap rounded border border-white/20 bg-slate-950/85 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-slate-100 shadow">
+          {label}
+        </span>
+      </Html>
+    </group>
+  );
+}
+
 function tacCapSceneBounds(
   tracks: TacCapGripperTrack[],
   headTrack: TacCapHeadTrack | null,
   padding: number,
+  includeOrigin = false,
 ): SceneBounds {
   const min = new THREE.Vector3(Infinity, Infinity, Infinity);
   const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+  if (includeOrigin) {
+    // Head-start exports: the origin is the episode start, keep it framed.
+    const origin = new THREE.Vector3(...tacCapDatasetPointToScene([0, 0, 0]));
+    min.min(origin);
+    max.max(origin);
+  }
   const poses = [
     ...tracks.map((track) => track.pose),
     ...(headTrack ? [headTrack.pose] : []),
@@ -1362,6 +1451,7 @@ function TacCapHeadMarker({
 
 function TacCapGripperScene({
   calibration,
+  episodeOrigin,
   frames,
   headFrame,
   headTrack,
@@ -1376,6 +1466,8 @@ function TacCapGripperScene({
   smoothTimeRef: React.MutableRefObject<number | null>;
   /** This episode's calibration windows, empty when the dataset records none. */
   calibration: EpisodeGripperCalibration;
+  /** Label for dataset (0, 0, 0); null hides the marker. */
+  episodeOrigin: { label: string; frame: boolean } | null;
   frames: TacCapGripperFrame[];
   headFrame: TacCapHeadFrame | null;
   headTrack: TacCapHeadTrack | null;
@@ -1388,8 +1480,14 @@ function TacCapGripperScene({
 }) {
   const [readySides, setReadySides] = useState<Set<TacCapSide>>(new Set());
   const bounds = useMemo(
-    () => tacCapSceneBounds(tracks, headTrack, profile.scenePadding),
-    [headTrack, profile.scenePadding, tracks],
+    () =>
+      tacCapSceneBounds(
+        tracks,
+        headTrack,
+        profile.scenePadding,
+        episodeOrigin?.frame ?? false,
+      ),
+    [episodeOrigin?.frame, headTrack, profile.scenePadding, tracks],
   );
   const frameBySide = useMemo(
     () => new Map(frames.map((frame) => [frame.side, frame])),
@@ -1468,6 +1566,13 @@ function TacCapGripperScene({
         fadeDistance={gridSize * 1.5}
       />
       <TacCapWorldAxes bounds={bounds} groundY={gridY} />
+      {episodeOrigin && (
+        <TacCapEpisodeOrigin
+          groundY={gridY}
+          label={episodeOrigin.label}
+          length={Math.min(0.12, Math.max(0.06, bounds.extent * 0.12))}
+        />
+      )}
       <mesh
         rotation={[-Math.PI / 2, 0, 0]}
         position={[bounds.center.x, gridY + 0.001, bounds.center.z]}
@@ -2077,6 +2182,31 @@ export default function URDFViewer({
     [datasetSources, selectedEpisode],
   );
 
+  // Which frame `observation.state` is in, from the Collector export block. Only
+  // head-start exports put a meaningful episode origin at dataset (0, 0, 0).
+  const [collectionDevices, setCollectionDevices] = useState<unknown>(null);
+  useEffect(() => {
+    if (!isBundledGripper) return;
+    let cancelled = false;
+    fetchCollectionDevices(datasetInfo.repoId).then((devices) => {
+      if (!cancelled) setCollectionDevices(devices);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [datasetInfo.repoId, isBundledGripper]);
+  const worldFrame: EpisodeWorldFrame = useMemo(
+    () => readEpisodeWorldFrame(collectionDevices, selectedEpisode),
+    [collectionDevices, selectedEpisode],
+  );
+  const episodeOrigin = useMemo(
+    () =>
+      worldFrame.kind === "head-start"
+        ? { label: t("urdf.episodeOrigin"), frame: true }
+        : null,
+    [t, worldFrame.kind],
+  );
+
   // TacCap poses are read as canonical TCP. The viewer used to offer a
   // Tracker -> TCP switch that re-derived them through measured extrinsics;
   // it was removed as an unused control. `extractTacCapGripperTracks` still
@@ -2480,6 +2610,7 @@ export default function URDFViewer({
           {gripperProfile ? (
             <TacCapGripperScene
               calibration={gripperCalibration}
+              episodeOrigin={episodeOrigin}
               frames={tacCapFrames}
               headFrame={tacCapHeadFrame}
               headTrack={tacCapHeadTrack}
@@ -2569,6 +2700,29 @@ export default function URDFViewer({
             </div>
           ) : (
             <div className="pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-1.5 rounded border border-white/10 bg-slate-950/75 px-2 py-1 text-[10px] shadow backdrop-blur-sm">
+              <span className="text-slate-500">{t("urdf.worldFrame")}</span>
+              <span className="font-mono text-slate-200">
+                {t(
+                  worldFrame.kind === "head-start"
+                    ? "urdf.worldFrameHeadStart"
+                    : worldFrame.kind === "recorded"
+                      ? "urdf.worldFrameRecorded"
+                      : "urdf.worldFrameUnknown",
+                )}
+              </span>
+              {worldFrame.anchor && (
+                <span
+                  className="text-slate-500"
+                  title={t("urdf.worldAnchorTitle")}
+                >
+                  {t("urdf.worldAnchor", {
+                    x: worldFrame.anchor.position[0].toFixed(2),
+                    y: worldFrame.anchor.position[1].toFixed(2),
+                    yaw: worldFrame.anchor.yawDeg.toFixed(1),
+                  })}
+                </span>
+              )}
+              <span className="text-slate-600">·</span>
               <span className="text-slate-500">{t("urdf.tcpConvention")}</span>
               <span className="font-mono text-slate-200">
                 {datasetInfo.tcp_frame_convention}
