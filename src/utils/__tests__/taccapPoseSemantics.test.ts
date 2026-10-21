@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  expandTacCapExtrinsics,
   resolveTacCapPoseProfile,
   rotationMatrixTo6d,
   TACCAP_MEASURED_TRACKER_TO_TCP,
@@ -121,5 +122,29 @@ describe("TacCap pose semantics", () => {
     expect(transformed.position).not.toEqual([
       0.2713445425, -0.0466772392, -0.5154933333,
     ]);
+  });
+});
+
+describe("expandTacCapExtrinsics", () => {
+  test("v4 profiles are merged back into each episode", () => {
+    const v4 = {
+      version: 4,
+      profiles: {
+        extrinsics_0: { tracker_to_ee: { version: 1 }, poses_are_ee: true },
+      },
+      episodes: [{ episode_index: 0, warnings: [], profile: "extrinsics_0" }],
+    };
+    expect(expandTacCapExtrinsics(v4)?.episodes[0]).toEqual({
+      episode_index: 0,
+      warnings: [],
+      tracker_to_ee: { version: 1 },
+      poses_are_ee: true,
+    });
+  });
+
+  test("v3 passes through and junk is rejected", () => {
+    const v3 = { version: 3, episodes: [{ episode_index: 0 }] };
+    expect(expandTacCapExtrinsics(v3)).toEqual(v3 as never);
+    expect(expandTacCapExtrinsics({ version: 4 })).toBeNull();
   });
 });
