@@ -53,6 +53,27 @@ function parseAnchor(value: unknown): EpisodeWorldAnchor | null {
   return { position: xyz as [number, number, number], yawDeg };
 }
 
+type ExportBlock = { world_frame?: unknown; world_anchor?: unknown };
+
+/**
+ * The episode's export block. v1 inlines it; v2 (Collector 0.4.6-rc.2+) stores the
+ * shared part once under `exports[id]` and keeps per-episode fields such as
+ * `world_anchor` inline on the episode, so merge the two.
+ */
+function resolveExport(
+  devices: unknown,
+  entry: { export?: unknown; world_anchor?: unknown } | undefined,
+): ExportBlock | null {
+  const ref = entry?.export;
+  if (typeof ref === "string") {
+    const shared = (devices as { exports?: Record<string, unknown> } | null)
+      ?.exports?.[ref];
+    if (!shared || typeof shared !== "object") return null;
+    return { ...(shared as ExportBlock), world_anchor: entry?.world_anchor };
+  }
+  return ref && typeof ref === "object" ? (ref as ExportBlock) : null;
+}
+
 /** Read one episode's frame from a parsed `xumi_collection_devices.json`. */
 export function readEpisodeWorldFrame(
   devices: unknown,
@@ -65,11 +86,9 @@ export function readEpisodeWorldFrame(
       !!candidate &&
       typeof candidate === "object" &&
       (candidate as { episode_index?: unknown }).episode_index === episodeIndex,
-  ) as
-    | { export?: { world_frame?: unknown; world_anchor?: unknown } }
-    | undefined;
-  const exported = entry?.export;
-  if (!exported || typeof exported !== "object") return UNKNOWN;
+  ) as { export?: unknown; world_anchor?: unknown } | undefined;
+  const exported = resolveExport(devices, entry);
+  if (!exported) return UNKNOWN;
   if (exported.world_frame === WORLD_FRAME_HEAD_START) {
     return { kind: "head-start", anchor: parseAnchor(exported.world_anchor) };
   }

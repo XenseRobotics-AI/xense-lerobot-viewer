@@ -58,4 +58,39 @@ describe("readEpisodeWorldFrame", () => {
     expect(readEpisodeWorldFrame(null, 0).kind).toBe("unknown");
     expect(readEpisodeWorldFrame({ episodes: "x" }, 0).kind).toBe("unknown");
   });
+
+  test("v2 files resolve the shared export and keep the anchor inline", () => {
+    const v2 = {
+      version: 2,
+      exports: {
+        export_0: {
+          world_frame: "head_yaw_at_episode_start",
+          exporter: "taccap-collector",
+        },
+        export_1: { world_frame: "recorded" },
+      },
+      episodes: [
+        {
+          episode_index: 0,
+          export: "export_0",
+          world_anchor: {
+            position: [-0.34, -0.32, 0],
+            yaw_deg: 0.3,
+            time_ns: 5,
+          },
+        },
+        { episode_index: 1, export: "export_1" },
+        { episode_index: 2, export: "export_9" },
+      ],
+    };
+    expect(readEpisodeWorldFrame(v2, 0)).toEqual({
+      kind: "head-start",
+      anchor: { position: [-0.34, -0.32, 0], yawDeg: 0.3 },
+    });
+    expect(readEpisodeWorldFrame(v2, 1)).toEqual({
+      kind: "recorded",
+      anchor: null,
+    });
+    expect(readEpisodeWorldFrame(v2, 2).kind).toBe("unknown");
+  });
 });
