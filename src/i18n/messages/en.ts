@@ -1112,6 +1112,10 @@ export const en = {
   "workbench.writeTokenAvailable": "HF write token available",
   "workbench.publicReadOnly": "Public read-only mode",
   "workbench.syncError": "Unable to synchronize shared Workbench state.",
+  "workbench.mergeConflict":
+    "Both sides have conflicting changes. No configuration has been overwritten. Choose which side to keep for conflicts; other changes will be merged. If the combined configuration is invalid, the selected side's entire configuration is used.",
+  "workbench.mergeKeepLocal": "Keep local conflicts",
+  "workbench.mergeKeepRemote": "Keep remote conflicts",
   "workbench.dataset": "Dataset",
   "workbench.updated": "Updated",
   "workbench.local": "Local",

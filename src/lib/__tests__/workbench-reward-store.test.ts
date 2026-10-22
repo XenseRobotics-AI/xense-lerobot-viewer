@@ -8,6 +8,7 @@ import {
   readWorkbenchRewardRules,
   workbenchRewardRulesPath,
   writeWorkbenchRewardRules,
+  WorkbenchRewardRulesConflictError,
 } from "@/lib/workbench-reward-store";
 
 const temporaryRoots: string[] = [];
@@ -29,6 +30,28 @@ async function temporaryRoot(): Promise<string> {
 }
 
 describe("workbench reward rules store", () => {
+  test("rejects stale sync writes without overwriting newly saved rules", async () => {
+    const root = await temporaryRoot();
+    const original = defaultWorkbenchRewardRules("TacVerse");
+    await writeWorkbenchRewardRules(
+      "TacVerse",
+      { ...original, dailyTargetHours: 8 },
+      root,
+    );
+    await expect(
+      writeWorkbenchRewardRules(
+        "TacVerse",
+        original,
+        root,
+        undefined,
+        original,
+      ),
+    ).rejects.toBeInstanceOf(WorkbenchRewardRulesConflictError);
+    expect(
+      (await readWorkbenchRewardRules("TacVerse", root)).dailyTargetHours,
+    ).toBe(8);
+  });
+
   test("returns default TacVerse reward rules when no config exists", async () => {
     const root = await temporaryRoot();
     const config = await readWorkbenchRewardRules("TacVerse", root);

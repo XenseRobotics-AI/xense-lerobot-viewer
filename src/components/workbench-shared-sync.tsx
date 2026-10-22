@@ -19,6 +19,10 @@ type SharedSyncStatus = {
   message?: string;
   error?: string;
 };
+type MergeConflict = {
+  conflicts: Array<{ kind: string; paths: string[] }>;
+  reviewed: Record<string, string>;
+};
 
 type WorkbenchSharedSyncProps = {
   organization: string;
@@ -67,11 +71,14 @@ export default function WorkbenchSharedSync({
   const [status, setStatus] = useState<SharedSyncStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [conflict, setConflict] = useState<MergeConflict | null>(null);
+  const conflictRef = useRef(conflict);
+  conflictRef.current = conflict;
   const onSyncedRef = useRef(onSynced);
   onSyncedRef.current = onSynced;
 
   const sync = useCallback(
-    async (signal?: AbortSignal) => {
+    async (signal?: AbortSignal, preference?: "local" | "remote") => {
       if (!organization.trim()) return;
       setSyncing(true);
       setError(null);
@@ -79,11 +86,25 @@ export default function WorkbenchSharedSync({
         const response = await fetch("/api/workbench/shared-sync", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ org: organization }),
+          body: JSON.stringify({
+            org: organization,
+            conflictPreference: preference,
+            reviewed: preference ? conflictRef.current?.reviewed : undefined,
+          }),
           cache: "no-store",
           signal,
         });
+        if (response.status === 409) {
+          const payload = await response.json();
+          if (payload.code === "WORKBENCH_SHARED_MERGE_CONFLICT") {
+            setConflict(payload as MergeConflict);
+            setError(t("workbench.mergeConflict"));
+            return;
+          }
+          throw new Error(payload.error ?? t("workbench.syncError"));
+        }
         const payload = await readPayload(response, t);
+        setConflict(null);
         setStatus(payload);
         onSyncedRef.current?.();
       } catch (caught: unknown) {
@@ -99,9 +120,11 @@ export default function WorkbenchSharedSync({
 
   useEffect(() => {
     const controller = new AbortController();
+    conflictRef.current = null;
+    setConflict(null);
     void sync(controller.signal);
     const timer = window.setInterval(() => {
-      void sync();
+      if (!conflictRef.current) void sync();
     }, AUTO_SYNC_INTERVAL_MS);
     return () => {
       controller.abort();
@@ -159,6 +182,37 @@ export default function WorkbenchSharedSync({
               >
                 {error ?? status?.message}
               </p>
+            )}
+            {conflict && (
+              <div className="mt-2 text-xs text-amber-200">
+                <ul className="mb-2 list-disc pl-4">
+                  {conflict.conflicts.flatMap(({ kind, paths }) =>
+                    paths.map((field) => (
+                      <li key={`${kind}:${field}`}>
+                        {kind}: {field}
+                      </li>
+                    )),
+                  )}
+                </ul>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={syncing}
+                    onClick={() => void sync(undefined, "local")}
+                    className="rounded border border-amber-300/30 px-2 py-1 disabled:opacity-50"
+                  >
+                    {t("workbench.mergeKeepLocal")}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={syncing}
+                    onClick={() => void sync(undefined, "remote")}
+                    className="rounded border border-amber-300/30 px-2 py-1 disabled:opacity-50"
+                  >
+                    {t("workbench.mergeKeepRemote")}
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </div>

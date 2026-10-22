@@ -333,7 +333,55 @@ export async function readWorkbenchRewardRules(
   }
 }
 
+export class WorkbenchRewardRulesConflictError extends Error {
+  constructor() {
+    super("Workbench reward rules changed during synchronization.");
+  }
+}
+
+const writeQueues = new Map<string, Promise<void>>();
+
 export async function writeWorkbenchRewardRules(
+  org: string,
+  rules: unknown,
+  root = resolveLocalDatasetRoot(),
+  updatedAtOverride?: string | null,
+  expectedRules?: Record<string, unknown>,
+): Promise<WorkbenchRewardRules> {
+  const key = rewardRulesPath(root, normalizeOrg(org));
+  const previous = writeQueues.get(key) ?? Promise.resolve();
+  let release = () => {};
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = previous.catch(() => undefined).then(() => pending);
+  writeQueues.set(key, queued);
+  await previous.catch(() => undefined);
+  try {
+    if (expectedRules) {
+      const current = normalizeWorkbenchRewardRulesInput(
+        await readWorkbenchRewardRules(org, root),
+      );
+      const expected = normalizeWorkbenchRewardRulesInput({
+        ...expectedRules,
+        org,
+      });
+      if (JSON.stringify(current) !== JSON.stringify(expected))
+        throw new WorkbenchRewardRulesConflictError();
+    }
+    return await persistWorkbenchRewardRules(
+      org,
+      rules,
+      root,
+      updatedAtOverride,
+    );
+  } finally {
+    release();
+    if (writeQueues.get(key) === queued) writeQueues.delete(key);
+  }
+}
+
+async function persistWorkbenchRewardRules(
   org: string,
   rules: unknown,
   root = resolveLocalDatasetRoot(),
