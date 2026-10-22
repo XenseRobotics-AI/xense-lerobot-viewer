@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +10,20 @@ const previousRoot = process.env.LOCAL_DATASET_ROOT;
 const originalFetch = globalThis.fetch;
 let requestedUrls: string[] = [];
 let requestedHeaders: Headers[] = [];
+
+function expireRequestTimeouts() {
+  const setRequestTimeout = globalThis.setTimeout;
+  return spyOn(globalThis, "setTimeout").mockImplementation(((
+    callback,
+    delay,
+    ...args
+  ) =>
+    setRequestTimeout(
+      callback,
+      delay === 30_000 ? 0 : delay,
+      ...args,
+    )) as typeof setTimeout);
+}
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "modelscope-catalog-route-"));
@@ -148,6 +162,131 @@ afterEach(async () => {
 });
 
 describe("ModelScope catalog route", () => {
+  test("retries a timed-out tree request and completes the catalog", async () => {
+    const fetchCatalog = globalThis.fetch;
+    const timerSpy = expireRequestTimeouts();
+    let treeAttempts = 0;
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      if (String(input).includes("/repo/tree?") && ++treeAttempts === 1) {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(init.signal?.reason),
+            {
+              once: true,
+            },
+          );
+        });
+      }
+      return fetchCatalog(input, init);
+    }) as typeof fetch;
+    try {
+      const response = await POST(
+        new NextRequest("http://localhost/api/modelscope/catalog", {
+          method: "POST",
+          body: JSON.stringify({ org: "TacVerse" }),
+        }),
+      );
+      const events = (await response.text())
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(treeAttempts).toBe(5);
+      expect(events.at(-1)).toMatchObject({
+        type: "result",
+        result: { datasets: [{ metadataState: "ok" }] },
+      });
+    } finally {
+      timerSpy.mockRestore();
+    }
+  });
+
+  test("reports an actionable error after repeated timeouts without replacing the cache", async () => {
+    const cache = path.join(
+      root,
+      ".xense-viewer",
+      "modelscope-catalog",
+      "TacVerse.json",
+    );
+    await fs.mkdir(path.dirname(cache), { recursive: true });
+    await fs.writeFile(cache, '{"datasets":[]}');
+    const timerSpy = expireRequestTimeouts();
+    let attempts = 0;
+    globalThis.fetch = (async (_input: string | URL, init?: RequestInit) => {
+      attempts += 1;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(init.signal?.reason),
+          { once: true },
+        );
+      });
+    }) as typeof fetch;
+    try {
+      const response = await POST(
+        new NextRequest("http://localhost/api/modelscope/catalog", {
+          method: "POST",
+          body: JSON.stringify({ org: "TacVerse" }),
+        }),
+      );
+      const event = JSON.parse((await response.text()).trim());
+      expect(attempts).toBe(3);
+      expect(event.type).toBe("error");
+      expect(event.error).toContain("request timed out after 30s");
+      expect(event.error).toContain("after 3 attempts");
+      expect(event.error).toContain(
+        "https://modelscope.cn/openapi/v1/datasets",
+      );
+      expect(await fs.readFile(cache, "utf8")).toBe('{"datasets":[]}');
+    } finally {
+      timerSpy.mockRestore();
+    }
+  });
+
+  test("retries transient server errors", async () => {
+    const fetchCatalog = globalThis.fetch;
+    let attempts = 0;
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      if (String(input).includes("/openapi/v1/datasets?") && ++attempts < 3) {
+        return new Response("Temporarily unavailable", {
+          status: attempts === 1 ? 429 : 503,
+        });
+      }
+      return fetchCatalog(input, init);
+    }) as typeof fetch;
+    const response = await POST(
+      new NextRequest("http://localhost/api/modelscope/catalog", {
+        method: "POST",
+        body: JSON.stringify({ org: "TacVerse" }),
+      }),
+    );
+    const events = (await response.text())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(attempts).toBe(3);
+    expect(events.at(-1)?.type).toBe("result");
+  });
+
+  test("does not retry when the refresh is cancelled", async () => {
+    const controller = new AbortController();
+    let attempts = 0;
+    globalThis.fetch = (async () => {
+      attempts += 1;
+      controller.abort();
+      throw controller.signal.reason;
+    }) as typeof fetch;
+    const response = await POST(
+      new NextRequest("http://localhost/api/modelscope/catalog", {
+        method: "POST",
+        signal: controller.signal,
+        body: JSON.stringify({ org: "TacVerse" }),
+      }),
+    );
+    await response.text();
+    expect(attempts).toBe(1);
+  });
+
   test("lists datasets, reads LeRobot metadata, and writes the cache", async () => {
     const response = await POST(
       new NextRequest("http://localhost/api/modelscope/catalog", {
@@ -259,6 +398,9 @@ describe("ModelScope catalog route", () => {
       code: "MODELSCOPE_ACCESS_DENIED",
       error: expect.stringContaining("ModelScope 无权访问该数据集"),
     });
+    expect(
+      requestedUrls.filter((url) => url.includes("/repo/tree?")),
+    ).toHaveLength(1);
   });
 
   test("sends the SDK-compatible ModelScope session cookie when a token is provided", async () => {

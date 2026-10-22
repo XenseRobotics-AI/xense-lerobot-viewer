@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   readDatasetXumiDeviceInfo,
   resolveLocalDatasetRoot,
@@ -24,6 +25,7 @@ const MODELSCOPE_ENDPOINT = "https://modelscope.cn";
 // ModelScope OpenAPI rejects page_size values above 50.
 const PAGE_SIZE = 50;
 const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_REQUEST_ATTEMPTS = 3;
 const MAX_TOKEN_LENGTH = 4096;
 
 type ModelScopeDataset = {
@@ -136,24 +138,50 @@ async function fetchJson(
   token: string | null,
   requestSignal?: AbortSignal,
 ): Promise<unknown> {
-  const timeout = new AbortController();
-  const timer = setTimeout(() => timeout.abort(), REQUEST_TIMEOUT_MS);
-  const signal = requestSignal
-    ? AbortSignal.any([requestSignal, timeout.signal])
-    : timeout.signal;
-  try {
-    const response = await fetch(url, {
-      headers: authHeaders(token),
-      signal,
-      cache: "no-store",
-    });
-    if (!response.ok) {
-      const detail = (await response.text().catch(() => "")).trim();
-      throw modelScopeRequestError(response.status, detail);
+  for (let attempt = 1; ; attempt += 1) {
+    requestSignal?.throwIfAborted();
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), REQUEST_TIMEOUT_MS);
+    const signal = requestSignal
+      ? AbortSignal.any([requestSignal, timeout.signal])
+      : timeout.signal;
+    let retryable = true;
+    try {
+      const response = await fetch(url, {
+        headers: authHeaders(token),
+        signal,
+        cache: "no-store",
+      });
+      retryable = response.status === 429 || response.status >= 500;
+      if (!response.ok) {
+        const detail = (await response.text().catch(() => "")).trim();
+        throw modelScopeRequestError(response.status, detail);
+      }
+      return await response.json();
+    } catch (error: unknown) {
+      requestSignal?.throwIfAborted();
+      // A request timeout is independent of a user cancelling the refresh.
+      // Keep the timer active while reading the response body, too.
+      if (error instanceof ModelScopeAccessDeniedError) throw error;
+      if (
+        !retryable &&
+        !timeout.signal.aborted &&
+        !(error instanceof TypeError)
+      ) {
+        throw error;
+      }
+      if (attempt === MAX_REQUEST_ATTEMPTS) {
+        const reason = timeout.signal.aborted
+          ? `request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`
+          : safeError(error, token);
+        throw new Error(
+          `ModelScope request failed after ${attempt} attempts (${url}): ${reason}`,
+        );
+      }
+    } finally {
+      clearTimeout(timer);
     }
-    return await response.json();
-  } finally {
-    clearTimeout(timer);
+    await delay(250 * 2 ** (attempt - 1), undefined, { signal: requestSignal });
   }
 }
 
