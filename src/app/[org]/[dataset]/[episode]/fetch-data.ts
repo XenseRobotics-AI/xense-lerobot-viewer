@@ -36,14 +36,49 @@ import {
   type SpatialTrajectoryData,
 } from "@/utils/spatialTrajectories";
 import type { VideoInfo, AdjacentEpisodeVideos } from "@/types";
+import type {
+  CameraInfo,
+  DatasetDisplayInfo,
+  ChartRow,
+  ColumnMinMax,
+  EpisodeLengthStats,
+  EpisodeFrameInfo,
+  EpisodeFramesData,
+  EpisodeData,
+  LowMovementEpisode,
+  AggVelocityStat,
+  AggAutocorrelation,
+  SpeedDistEntry,
+  AggAlignment,
+  JerkyEpisode,
+  CrossEpisodeVarianceData,
+} from "@/types/episode-data";
 import { tStandalone } from "@/i18n/standalone";
 import {
   parseTcpFrameConvention,
   unrecognizedTcpFrameConvention,
-  type TcpFrameConvention,
 } from "@/utils/taccapGripperTransforms";
 
-export type { SpatialTrajectoryData } from "@/utils/spatialTrajectories";
+export type {
+  CameraInfo,
+  DatasetDisplayInfo,
+  ChartRow,
+  ColumnMinMax,
+  EpisodeLengthInfo,
+  EpisodeLengthHistogramBin,
+  EpisodeLengthStats,
+  EpisodeFrameInfo,
+  EpisodeFramesData,
+  EpisodeData,
+  LowMovementEpisode,
+  AggVelocityStat,
+  AggAutocorrelation,
+  SpeedDistEntry,
+  AggAlignment,
+  JerkyEpisode,
+  CrossEpisodeVarianceData,
+  SpatialTrajectoryData,
+} from "@/types/episode-data";
 
 const SERIES_NAME_DELIMITER = CHART_CONFIG.SERIES_NAME_DELIMITER;
 const CHARTABLE_NUMERIC_DTYPES = new Set([
@@ -60,34 +95,6 @@ const CHARTABLE_NUMERIC_DTYPES = new Set([
   "uint64",
 ]);
 
-export type CameraInfo = { name: string; width: number; height: number };
-
-export type DatasetDisplayInfo = {
-  repoId: string;
-  total_frames: number;
-  total_episodes: number;
-  fps: number;
-  robot_type: string | null;
-  /** Left/right TCP axis convention from `info.json`; see `TcpFrameConvention`. */
-  tcp_frame_convention: TcpFrameConvention;
-  /** The raw value when `info.json` declares one we do not recognise. */
-  tcp_frame_convention_unrecognized: string | null;
-  /** False when `info.json` omits the key and the legacy default applies. */
-  tcp_frame_convention_declared: boolean;
-  codebase_version: string;
-  total_tasks: number;
-  dataset_size_mb: number;
-  cameras: CameraInfo[];
-};
-
-export type ChartRow = Record<string, number | Record<string, number>>;
-
-export type ColumnMinMax = {
-  column: string;
-  min: number;
-  max: number;
-};
-
 export function isChartableNumericFeature(feature: {
   dtype: string;
   shape: number[];
@@ -97,72 +104,6 @@ export function isChartableNumericFeature(feature: {
     feature.shape.length === 1
   );
 }
-
-export type EpisodeLengthInfo = {
-  episodeIndex: number;
-  lengthSeconds: number;
-  frames: number;
-};
-
-export type EpisodeLengthHistogramBin = {
-  binLabel: string;
-  count: number;
-};
-
-export type EpisodeLengthStats = {
-  shortestEpisodes: EpisodeLengthInfo[];
-  longestEpisodes: EpisodeLengthInfo[];
-  allEpisodeLengths: EpisodeLengthInfo[];
-  meanEpisodeLength: number;
-  medianEpisodeLength: number;
-  stdEpisodeLength: number;
-  episodeLengthHistogram: EpisodeLengthHistogramBin[];
-  /**
-   * Bin geometry for `episodeLengthHistogram`. Lets the client recover which
-   * episodes fall in each bin from `allEpisodeLengths` via `assignEpisodesToBins`,
-   * instead of the server shipping every episode index a second time.
-   */
-  episodeLengthHistogramBinning: HistogramBinning;
-};
-
-export type EpisodeFrameInfo = {
-  episodeIndex: number;
-  videoUrl: string;
-  firstFrameTime: number;
-  lastFrameTime: number | null; // null = seek to video.duration on client
-};
-
-export type EpisodeFramesData = {
-  cameras: string[];
-  framesByCamera: Record<string, EpisodeFrameInfo[]>;
-};
-
-export type EpisodeData = {
-  datasetInfo: DatasetDisplayInfo;
-  episodeId: number;
-  videosInfo: VideoInfo[];
-  chartDataGroups: ChartRow[][];
-  velocityChartDataGroups: ChartRow[][];
-  flatChartData: Record<string, number>[];
-  episodes: number[];
-  ignoredColumns: string[];
-  duration: number;
-  task?: string;
-  /**
-   * v3.1 language atoms read from `language_persistent` and `language_events`
-   * (lerobot#3467). Empty when the dataset hasn't been annotated yet.
-   * The annotations panel uses this to seed its editor state when no
-   * annotation backend is running.
-   */
-  languageAtoms?: import("@/types/language.types").LanguageAtom[];
-  /**
-   * Sorted source-frame timestamps from the data parquet, in seconds. Used by
-   * the annotations editor to snap atom timestamps to exact frame times —
-   * avoiding sub-frame drift from a throttled `currentTime` and keeping
-   * events compatible with the writer in lerobot#3471.
-   */
-  frameTimestamps?: number[];
-};
 
 type EpisodeMetadataV3 = {
   episode_index: number;
@@ -183,6 +124,23 @@ type ColumnDef = {
   key: string;
   value: string[];
 };
+
+function vectorValues(value: unknown): unknown[] | null {
+  if (Array.isArray(value)) return value;
+  if (!ArrayBuffer.isView(value)) return null;
+
+  const view = value as unknown as ArrayLike<unknown>;
+  return typeof view.length === "number" ? Array.from(view) : null;
+}
+
+function featureNames(names: unknown): string[] {
+  if (Array.isArray(names)) {
+    return names.filter((name): name is string => typeof name === "string");
+  }
+  if (!names || typeof names !== "object") return [];
+
+  return Object.values(names).flatMap(featureNames);
+}
 
 function parsePositiveIntEnv(
   value: string | undefined,
@@ -1293,7 +1251,7 @@ function extractLanguageAtoms(
 }
 
 // Process episode data for charts (v3.0 compatible)
-function processEpisodeDataForCharts(
+export function processEpisodeDataForCharts(
   episodeData: Record<string, unknown>[],
   info: DatasetMetadata,
 ): {
@@ -1343,21 +1301,18 @@ function processEpisodeDataForCharts(
         isChartableNumericFeature(value) && !excludedColumns.includes(key),
     )
     .map(([key, feature]) => {
-      let column_names: unknown = feature.names;
-      while (typeof column_names === "object" && column_names !== null) {
-        if (Array.isArray(column_names)) break;
-        column_names = Object.values(column_names)[0];
-      }
+      const columnNames = featureNames(feature.names);
       return {
         key,
-        value: Array.isArray(column_names)
-          ? column_names.map(
-              (name: string) => `${key}${SERIES_NAME_DELIMITER}${name}`,
-            )
-          : Array.from(
-              { length: feature.shape[0] || 1 },
-              (_, i) => `${key}${CHART_CONFIG.SERIES_NAME_DELIMITER}${i}`,
-            ),
+        value:
+          columnNames.length > 0
+            ? columnNames.map(
+                (name: string) => `${key}${SERIES_NAME_DELIMITER}${name}`,
+              )
+            : Array.from(
+                { length: feature.shape[0] || 1 },
+                (_, i) => `${key}${CHART_CONFIG.SERIES_NAME_DELIMITER}${i}`,
+              ),
       };
     });
 
@@ -1380,10 +1335,11 @@ function processEpisodeDataForCharts(
 
       // Find the matching column definition to get proper names
       const columnDef = columns.find((col) => col.key === featureName);
-      if (columnDef && Array.isArray(value) && value.length > 0) {
+      const vector = vectorValues(value);
+      if (columnDef && vector && vector.length > 0) {
         // Use the proper hierarchical naming from column definition
         columnDef.value.forEach((seriesName, idx) => {
-          if (idx < value.length) {
+          if (idx < vector.length) {
             allKeys.push(seriesName);
           }
         });
@@ -1431,9 +1387,10 @@ function processEpisodeDataForCharts(
         // Find the matching column definition to get proper series names
         const columnDef = columns.find((col) => col.key === featureName);
 
-        if (Array.isArray(value) && columnDef) {
+        const vector = vectorValues(value);
+        if (vector && columnDef) {
           // For array values like observation.state and action, use proper hierarchical naming
-          value.forEach((val, idx) => {
+          vector.forEach((val, idx) => {
             if (idx < columnDef.value.length) {
               const seriesName = columnDef.value[idx];
               obj[seriesName] = typeof val === "number" ? val : Number(val);
@@ -2042,69 +1999,6 @@ export async function loadAllEpisodeFrameInfo(
 }
 
 // ─── Cross-episode action variance ──────────────────────────────
-
-export type LowMovementEpisode = {
-  episodeIndex: number;
-  totalMovement: number;
-};
-
-export type AggVelocityStat = {
-  name: string;
-  std: number; // normalized by motor range
-  maxAbs: number; // normalized by motor range
-  bins: number[];
-  lo: number; // normalized by motor range
-  hi: number; // normalized by motor range
-  motorRange: number;
-  inactive?: boolean; // true if p95(|Δa|) < 1% of motor range
-  discrete?: boolean; // true if motor has very few unique values (e.g. open/close gripper)
-};
-
-export type AggAutocorrelation = {
-  chartData: Record<string, number>[];
-  suggestedChunk: number | null;
-  shortKeys: string[];
-};
-
-export type SpeedDistEntry = {
-  episodeIndex: number;
-  speed: number;
-};
-
-export type AggAlignment = {
-  ccData: { lag: number; max: number; mean: number; min: number }[];
-  meanPeakLag: number;
-  meanPeakCorr: number;
-  maxPeakLag: number;
-  maxPeakCorr: number;
-  minPeakLag: number;
-  minPeakCorr: number;
-  lagRangeMin: number;
-  lagRangeMax: number;
-  numPairs: number;
-};
-
-export type JerkyEpisode = {
-  episodeIndex: number;
-  meanAbsDelta: number;
-};
-
-export type CrossEpisodeVarianceData = {
-  actionNames: string[];
-  timeBins: number[];
-  variance: number[][];
-  /** Episodes successfully loaded for the bounded statistical sample. */
-  numEpisodes: number;
-  /** Actual episode metadata entries in the dataset. */
-  totalEpisodes: number;
-  lowMovementEpisodes: LowMovementEpisode[];
-  aggVelocity: AggVelocityStat[];
-  aggAutocorrelation: AggAutocorrelation | null;
-  speedDistribution: SpeedDistEntry[];
-  jerkyEpisodes: JerkyEpisode[];
-  aggAlignment: AggAlignment | null;
-  spatialTrajectories: SpatialTrajectoryData | null;
-};
 
 export async function loadCrossEpisodeActionVariance(
   repoId: string,

@@ -7,7 +7,7 @@ import type {
   LowMovementEpisode,
   EpisodeLengthStats,
   EpisodeLengthInfo,
-} from "@/app/[org]/[dataset]/[episode]/fetch-data";
+} from "@/types/episode-data";
 import {
   ActionVelocitySection,
   FullscreenWrapper,

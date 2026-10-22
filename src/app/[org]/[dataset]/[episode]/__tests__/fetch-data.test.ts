@@ -3,6 +3,7 @@ import {
   buildEpisodeChartTimestamps,
   computeColumnMinMax,
   isChartableNumericFeature,
+  processEpisodeDataForCharts,
 } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import type { ChartRow } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 
@@ -59,6 +60,99 @@ describe("buildEpisodeChartTimestamps", () => {
         30,
       ),
     ).toEqual([0, 1 / 30, 2 / 30]);
+  });
+});
+
+describe("processEpisodeDataForCharts — v3 vector poses", () => {
+  const poseNames = [
+    "left_tcp.x",
+    "left_tcp.y",
+    "left_tcp.z",
+    "left_tcp.r1",
+    "left_tcp.r2",
+    "left_tcp.r3",
+    "left_tcp.r4",
+    "left_tcp.r5",
+    "left_tcp.r6",
+    "left_gripper.pos",
+    "right_tcp.x",
+    "right_tcp.y",
+    "right_tcp.z",
+    "right_tcp.r1",
+    "right_tcp.r2",
+    "right_tcp.r3",
+    "right_tcp.r4",
+    "right_tcp.r5",
+    "right_tcp.r6",
+    "right_gripper.pos",
+    "head.x",
+    "head.y",
+    "head.z",
+    "head.r1",
+    "head.r2",
+    "head.r3",
+    "head.r4",
+    "head.r5",
+    "head.r6",
+  ];
+
+  const info = {
+    codebase_version: "v3.0",
+    robot_type: "xtac_umi_g1",
+    total_episodes: 1,
+    total_frames: 2,
+    total_tasks: 1,
+    total_videos: 0,
+    total_chunks: 1,
+    chunks_size: 1000,
+    fps: 30,
+    splits: {},
+    data_path: "",
+    video_path: "",
+    features: {
+      action: { dtype: "float32", shape: [29], names: poseNames },
+      "observation.state": {
+        dtype: "float32",
+        shape: [29],
+        names: poseNames,
+      },
+      timestamp: { dtype: "float32", shape: [1], names: null },
+    },
+  };
+
+  test("flattens typed-array pose vectors into named 3D chart columns", () => {
+    const action = Float32Array.from({ length: 29 }, (_, index) => index);
+    const state = Float32Array.from({ length: 29 }, (_, index) => index + 100);
+    const result = processEpisodeDataForCharts(
+      [
+        { action, "observation.state": state, timestamp: 10 },
+        { action, "observation.state": state, timestamp: 11 },
+      ],
+      info,
+    );
+
+    expect(result.flatChartData).toHaveLength(2);
+    expect(result.flatChartData[0]["action | left_tcp.x"]).toBe(0);
+    expect(result.flatChartData[0]["action | left_tcp.z"]).toBe(2);
+    expect(result.flatChartData[0]["observation.state | left_tcp.x"]).toBe(100);
+    expect(result.flatChartData[0]["observation.state | right_tcp.z"]).toBe(
+      112,
+    );
+  });
+
+  test("flattens ordinary array pose vectors from v3 parquet rows", () => {
+    const action = Array.from({ length: 29 }, (_, index) => index);
+    const state = Array.from({ length: 29 }, (_, index) => index + 100);
+    const result = processEpisodeDataForCharts(
+      [{ action, "observation.state": state, timestamp: 10 }],
+      info,
+    );
+
+    expect(result.flatChartData[0]["action | left_tcp.x"]).toBe(0);
+    expect(result.flatChartData[0]["action | right_tcp.x"]).toBe(10);
+    expect(result.flatChartData[0]["observation.state | right_tcp.z"]).toBe(
+      112,
+    );
   });
 });
 

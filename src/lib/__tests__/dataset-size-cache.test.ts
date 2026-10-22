@@ -50,6 +50,20 @@ afterAll(async () => {
 });
 
 describe("datasetSizeFingerprint", () => {
+  test("changes when an existing chunk file grows without a directory mtime change", async () => {
+    const dir = await tempDir("fp-rewrite-");
+    await makeDataset(dir);
+    const chunk = path.join(dir, "data", "chunk-000");
+    const beforeStat = await fs.stat(chunk);
+    const before = await datasetSizeFingerprint(dir);
+    await fs.writeFile(
+      path.join(chunk, "file-000.parquet"),
+      "a larger replacement",
+    );
+    await fs.utimes(chunk, beforeStat.atime, beforeStat.mtime);
+    expect(await datasetSizeFingerprint(dir)).not.toBe(before);
+  });
+
   test("is stable for an untouched dataset", async () => {
     const dir = await tempDir("fp-stable-");
     await makeDataset(dir);

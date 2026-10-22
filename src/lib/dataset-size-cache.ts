@@ -52,13 +52,38 @@ export function datasetSizeCachePath(root: string): string {
   return path.join(root, STORE_DIR, STORE_FILE);
 }
 
-async function mtimeOf(target: string): Promise<string> {
+async function directoryFingerprint(target: string): Promise<string> {
+  let stat: import("node:fs").Stats;
   try {
-    const stat = await fs.stat(target);
-    return String(stat.mtimeMs);
+    stat = await fs.stat(target);
   } catch {
-    return "-"; // absent is a fingerprint too: adding `videos/` must invalidate
+    return "-"; // absent is a fingerprint too: adding it must invalidate
   }
+  if (!stat.isDirectory()) return `file:${stat.size}:${stat.mtimeMs}`;
+
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(target, { withFileTypes: true });
+  } catch {
+    return `dir:${stat.mtimeMs}:?`;
+  }
+
+  const childParts = await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() || entry.isDirectory())
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(async (entry) => {
+        const child = path.join(target, entry.name);
+        try {
+          const childStat = await fs.stat(child);
+          const kind = entry.isDirectory() ? "d" : "f";
+          return `${kind}:${entry.name}:${childStat.size}:${childStat.mtimeMs}`;
+        } catch {
+          return `?:${entry.name}`;
+        }
+      }),
+  );
+  return `dir:${stat.mtimeMs}:${childParts.join(",")}`;
 }
 
 /**
@@ -69,24 +94,23 @@ async function mtimeOf(target: string): Promise<string> {
  * `export_subtasks.py` run writes inside `data/chunk-000/`, which moves that
  * directory's mtime and nothing above it. The fingerprint therefore covers the
  * dataset directory, `meta/`, `data/`, `videos/` **and the immediate children
- * of the latter two**, which is where lerobot puts its chunks. That is ~12
- * syscalls against the ~300 an `lstat` of every file costs.
+ * of the latter two**, which is where lerobot puts its chunks. The fingerprint
+ * also includes the size and mtime of their direct files so overwriting an
+ * existing chunk invalidates the cached total.
  *
- * It is a heuristic, and the thing it can miss is a file rewritten in place
- * with no directory change at all. The cost of missing is a stale number in a
- * storage column, not a wrong dataset — so this is the right trade. Deleting
- * the file forces a full recount.
+ * It is still a heuristic: a change deeper than these directories can be
+ * missed. Deleting the cache file forces a full recount.
  */
 export async function datasetSizeFingerprint(
   datasetDir: string,
 ): Promise<string> {
   const parts = [
-    await mtimeOf(datasetDir),
-    await mtimeOf(path.join(datasetDir, "meta")),
+    await directoryFingerprint(datasetDir),
+    await directoryFingerprint(path.join(datasetDir, "meta")),
   ];
   for (const name of ["data", "videos"]) {
     const dir = path.join(datasetDir, name);
-    parts.push(await mtimeOf(dir));
+    parts.push(await directoryFingerprint(dir));
     let children: import("node:fs").Dirent[] = [];
     try {
       children = await fs.readdir(dir, { withFileTypes: true });
@@ -98,7 +122,7 @@ export async function datasetSizeFingerprint(
       .map((entry) => entry.name)
       .sort();
     for (const sub of subdirs) {
-      parts.push(`${sub}=${await mtimeOf(path.join(dir, sub))}`);
+      parts.push(`${sub}=${await directoryFingerprint(path.join(dir, sub))}`);
     }
   }
   return parts.join("|");
