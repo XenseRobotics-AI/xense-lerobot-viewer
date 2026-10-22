@@ -19,7 +19,7 @@ import type {
   SpeedDistEntry,
   JerkyEpisode,
   AggAlignment,
-} from "@/app/[org]/[dataset]/[episode]/fetch-data";
+} from "@/types/episode-data";
 import { useLocale, useT } from "@/context/locale-context";
 import SpatialTrajectoryViewer from "@/components/spatial-trajectory-viewer";
 

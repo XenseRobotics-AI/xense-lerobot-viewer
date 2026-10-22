@@ -24,13 +24,23 @@ describe("bucketOf", () => {
 });
 
 describe("dateFromName", () => {
+  test("validates leap days instead of normalizing impossible dates", () => {
+    expect(dateFromName("capture-240229")).toBe("2024-02-29");
+    expect(dateFromName("capture-260229")).toBeNull();
+    expect(dateFromName("capture-260431")).toBeNull();
+  });
+
   test("reads an -MMDD suffix", () => {
     expect(dateFromName("taccap-g1-wipe-mirror-0822")).toBe("2026-08-22");
+    expect(dateFromName("xtac-umi-g1-install-wire-harness-260915")).toBe(
+      "2026-09-15",
+    );
   });
 
   test("returns null rather than guessing", () => {
     expect(dateFromName("taccap-g1-wipe-mirror")).toBeNull();
     expect(dateFromName("taccap-g1-x-9999")).toBeNull(); // month 99
+    expect(dateFromName("xtac-umi-g1-x-991331")).toBeNull();
   });
 });
 

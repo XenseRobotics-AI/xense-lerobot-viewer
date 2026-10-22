@@ -27,7 +27,10 @@ import {
 import { evenlySampleArray } from "@/utils/sampling";
 import type { ChartSeriesRow } from "@/types/chart.types";
 
-const EpisodePose3DViewer = React.lazy(
+import { lazyWithChunkRecovery } from "@/utils/lazyChunkRecovery";
+
+const EpisodePose3DViewer = lazyWithChunkRecovery(
+  "episode-pose-3d-viewer",
   () => import("@/components/episode-pose-3d-viewer"),
 );
 

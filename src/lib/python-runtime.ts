@@ -36,6 +36,40 @@ const DISTRIBUTION_ALIASES: Record<string, string> = {
 const PROBE_TIMEOUT_MS = 8_000;
 const CACHE_TTL_MS = 5 * 60_000;
 const MAX_DISCOVERY_PROBES = 24;
+const MAX_SPAWN_ENV_BYTES = 512 * 1024;
+const MAX_SPAWN_ENV_ENTRY_BYTES = 64 * 1024;
+
+const ESSENTIAL_PYTHON_ENV_KEYS = new Set([
+  "ALL_PROXY",
+  "CONDA_DEFAULT_ENV",
+  "CONDA_ENVS_DIRS",
+  "CONDA_ENVS_PATH",
+  "CONDA_EXE",
+  "CONDA_PREFIX",
+  "CONDA_ROOT",
+  "CONDA_SHLVL",
+  "CONDA_PYTHON_EXE",
+  "HOME",
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "LANG",
+  "LC_ALL",
+  "MAMBA_ROOT_PREFIX",
+  "MODELSCOPE_API_TOKEN",
+  "MODELSCOPE_DATASET_REPO",
+  "NO_PROXY",
+  "PATH",
+  "PYTHON_BIN",
+  "REQUESTS_CA_BUNDLE",
+  "SSL_CERT_DIR",
+  "SSL_CERT_FILE",
+  "TMPDIR",
+  "VIRTUAL_ENV",
+  "all_proxy",
+  "https_proxy",
+  "http_proxy",
+  "no_proxy",
+]);
 
 export interface PythonProbe {
   bin: string;
@@ -98,12 +132,66 @@ const isWindows = process.platform === "win32";
  * "run against that interpreter's packages".
  */
 export function pythonSpawnEnv(base: EnvLike = process.env): NodeJS.ProcessEnv {
-  // Cast rather than build: Next's ProcessEnv marks NODE_ENV required, which a
-  // structural copy of an EnvLike cannot prove it carries.
-  const env = { ...base } as NodeJS.ProcessEnv;
-  delete env.PYTHONPATH;
-  delete env.PYTHONHOME;
+  const entries = Object.entries(base).filter(
+    (entry): entry is [string, string] =>
+      entry[1] !== undefined &&
+      entry[0] !== "PYTHONPATH" &&
+      entry[0] !== "PYTHONHOME",
+  );
+  const sized = entries.map(([key, value], index) => ({
+    key,
+    value,
+    index,
+    bytes: envEntryBytes(key, value),
+  }));
+  const totalBytes = sized.reduce((sum, entry) => sum + entry.bytes, 0);
+  const oversized = sized.some(
+    (entry) => entry.bytes > MAX_SPAWN_ENV_ENTRY_BYTES,
+  );
+
+  if (!oversized && totalBytes <= MAX_SPAWN_ENV_BYTES) {
+    // Cast rather than build: Next's ProcessEnv marks NODE_ENV required, which
+    // a structural copy of an EnvLike cannot prove it carries.
+    return Object.fromEntries(entries) as NodeJS.ProcessEnv;
+  }
+
+  // A Next/dev shell can contain very large injected variables. Passing the
+  // entire environment to Python can fail before the interpreter starts with
+  // E2BIG, so compact it while preserving runtime-critical configuration.
+  const env = {} as NodeJS.ProcessEnv;
+  let usedBytes = 0;
+  const add = (entry: (typeof sized)[number]): void => {
+    if (env[entry.key] !== undefined) return;
+    if (entry.bytes > MAX_SPAWN_ENV_ENTRY_BYTES) return;
+    if (usedBytes + entry.bytes > MAX_SPAWN_ENV_BYTES) return;
+    env[entry.key] = entry.value;
+    usedBytes += entry.bytes;
+  };
+
+  for (const entry of sized.filter((item) => essentialPythonEnvKey(item.key))) {
+    add(entry);
+  }
+  for (const entry of sized
+    .filter((item) => !essentialPythonEnvKey(item.key))
+    .sort((a, b) => a.bytes - b.bytes || a.index - b.index)) {
+    add(entry);
+  }
+
   return env;
+}
+
+function envEntryBytes(key: string, value: string): number {
+  return Buffer.byteLength(`${key}=${value}`, "utf8") + 1;
+}
+
+function essentialPythonEnvKey(key: string): boolean {
+  return (
+    ESSENTIAL_PYTHON_ENV_KEYS.has(key) ||
+    key.startsWith("HF_") ||
+    key.startsWith("HUGGINGFACE_") ||
+    key.startsWith("MODELSCOPE_") ||
+    key.startsWith("XENSE_")
+  );
 }
 
 /** Interpreter path inside an env/venv directory. */

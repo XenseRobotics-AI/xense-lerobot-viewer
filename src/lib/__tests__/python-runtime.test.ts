@@ -76,6 +76,25 @@ describe("pythonSpawnEnv", () => {
     pythonSpawnEnv(base);
     expect(base.PYTHONPATH).toBe("/opt/ros");
   });
+
+  test("compacts huge environments before spawning Python", () => {
+    const huge = "x".repeat(80 * 1024);
+    const env = pythonSpawnEnv({
+      PATH: "/usr/bin",
+      HOME: "/home/u",
+      MODELSCOPE_API_TOKEN: "ms_token",
+      HF_TOKEN: "hf_token",
+      CODEX_CONTEXT: huge,
+      PYTHONPATH: "/opt/ros",
+    });
+
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HOME).toBe("/home/u");
+    expect(env.MODELSCOPE_API_TOKEN).toBe("ms_token");
+    expect(env.HF_TOKEN).toBe("hf_token");
+    expect(env.CODEX_CONTEXT).toBeUndefined();
+    expect(env.PYTHONPATH).toBeUndefined();
+  });
 });
 
 describe("condaEnvRoots", () => {
