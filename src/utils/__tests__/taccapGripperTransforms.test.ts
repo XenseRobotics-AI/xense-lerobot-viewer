@@ -10,67 +10,137 @@ import {
   tcpConventionToModelMatrix,
   unrecognizedTcpFrameConvention,
 } from "@/utils/taccapGripperTransforms";
+import { bundledGripperProfile } from "@/utils/bundledGrippers";
 
 const TACCAP_MAX_FINGER_ANGLE_DEGREES = 28.92;
 const TACCAP_MAX_FINGER_ANGLE_RADIANS =
   (TACCAP_MAX_FINGER_ANGLE_DEGREES * Math.PI) / 180;
 
-describe("TacCap replay coordinate transforms", () => {
-  test("uses joint1 as the drive joint and gives both fingers a 28.92 degree range", () => {
-    for (const side of ["left", "right"] as const) {
-      const urdf = readFileSync(
-        resolve(`public/urdf/taccap-grippers/${side}/gripper.urdf`),
-        "utf8",
-      );
-      const joint1 = urdf.match(/<joint name="joint1"[\s\S]*?<\/joint>/)?.[0];
-      const joint2 = urdf.match(/<joint name="joint2"[\s\S]*?<\/joint>/)?.[0];
-      const joint1Limit = joint1?.match(
-        /<limit lower="([^"]+)" upper="([^"]+)"/,
-      );
-      const joint2Limit = joint2?.match(
-        /<limit lower="([^"]+)" upper="([^"]+)"/,
-      );
+type Origin = { xyz: number[]; rpy: number[] };
 
-      expect(joint1).toBeDefined();
-      expect(joint2).toBeDefined();
-      expect(Number(joint1Limit?.[1])).toBe(0);
-      expect(Number(joint1Limit?.[2])).toBeCloseTo(
+function readMasterUrdf(side: "left" | "right"): string {
+  return readFileSync(
+    resolve(`public${bundledGripperProfile("bi_taccap_gripper")!.urdf(side)}`),
+    "utf8",
+  );
+}
+
+function jointBlock(urdf: string, name: string): string | undefined {
+  return urdf.match(new RegExp(`<joint name="${name}"[\\s\\S]*?</joint>`))?.[0];
+}
+
+function parseOrigin(attributes: string): Origin {
+  const read = (key: string) =>
+    (attributes.match(new RegExp(`${key}="([^"]+)"`))?.[1] ?? "0 0 0")
+      .trim()
+      .split(/\s+/)
+      .map(Number);
+  return { xyz: read("xyz"), rpy: read("rpy") };
+}
+
+function jointOrigin(urdf: string, name: string): Origin {
+  const origin = jointBlock(urdf, name)?.match(/<origin ([^>]*)\/>/)?.[1];
+  if (!origin) throw new Error(`${name} has no origin`);
+  return parseOrigin(origin);
+}
+
+/** URDF `<origin>` as a row-major 4×4: `Rz(yaw)·Ry(pitch)·Rx(roll)`. */
+function originMatrix({ xyz, rpy }: Origin): number[] {
+  const [cr, sr] = [Math.cos(rpy[0]), Math.sin(rpy[0])];
+  const [cp, sp] = [Math.cos(rpy[1]), Math.sin(rpy[1])];
+  const [cy, sy] = [Math.cos(rpy[2]), Math.sin(rpy[2])];
+  return [
+    cy * cp,
+    cy * sp * sr - sy * cr,
+    cy * sp * cr + sy * sr,
+    xyz[0],
+    sy * cp,
+    sy * sp * sr + cy * cr,
+    sy * sp * cr - cy * sr,
+    xyz[1],
+    -sp,
+    cp * sr,
+    cp * cr,
+    xyz[2],
+    0,
+    0,
+    0,
+    1,
+  ];
+}
+
+describe("TacCap replay coordinate transforms", () => {
+  test("drives the right finger and mirrors the left over a 28.92 degree range", () => {
+    for (const side of ["left", "right"] as const) {
+      const urdf = readMasterUrdf(side);
+      const drive = jointBlock(urdf, `${side}_right_joint`);
+      const mimic = jointBlock(urdf, `${side}_left_joint`);
+      const driveLimit = drive?.match(/<limit lower="([^"]+)" upper="([^"]+)"/);
+      const mimicLimit = mimic?.match(/<limit lower="([^"]+)" upper="([^"]+)"/);
+
+      expect(bundledGripperProfile("bi_taccap_gripper")!.driveJoint(side)).toBe(
+        `${side}_right_joint`,
+      );
+      expect(drive).toBeDefined();
+      expect(mimic).toBeDefined();
+      expect(Number(driveLimit?.[1])).toBe(0);
+      expect(Number(driveLimit?.[2])).toBeCloseTo(
         TACCAP_MAX_FINGER_ANGLE_RADIANS,
         14,
       );
-      expect(joint1).not.toContain("<mimic");
-      expect(Number(joint2Limit?.[1])).toBeCloseTo(
+      expect(drive).not.toContain("<mimic");
+      expect(Number(mimicLimit?.[1])).toBeCloseTo(
         -TACCAP_MAX_FINGER_ANGLE_RADIANS,
         14,
       );
-      expect(Number(joint2Limit?.[2])).toBe(0);
-      expect(joint2).toContain(
-        '<mimic joint="joint1" multiplier="-1" offset="0" />',
+      expect(Number(mimicLimit?.[2])).toBe(0);
+      expect(mimic).toContain(
+        `<mimic joint="${side}_right_joint" multiplier="-1" offset="0" />`,
       );
     }
   });
 
-  test("defines matching link4 X/Y axes in both bundled URDFs", () => {
+  test("takes the root → TCP translation from each URDF's eef joint", () => {
+    // The transform is a constant rather than read from the loaded model, so
+    // this is what keeps it from drifting off the asset it is applied to.
     for (const side of ["left", "right"] as const) {
-      const urdf = readFileSync(
-        resolve(`public/urdf/taccap-grippers/${side}/gripper.urdf`),
-        "utf8",
-      );
-      const joint4 = urdf.match(/<joint name="joint4"[\s\S]*?<\/joint>/)?.[0];
-      expect(joint4).toBeDefined();
-      expect(joint4).toContain('rpy="0 0 0"');
+      const urdf = readMasterUrdf(side);
+      const profile = bundledGripperProfile("bi_taccap_gripper")!;
+      expect(urdf).toContain(`<link name="${profile.tcpFrameLink(side)}" />`);
+      const eef = jointOrigin(urdf, `${side}_eef_joint`);
+      expect(eef.rpy).toEqual([0, 0, 0]);
+      expect(eef.xyz).toEqual([
+        ...TACCAP_ROOT_TO_RECORDED_TCP_TRANSLATION[side],
+      ]);
     }
   });
 
-  test("keeps the left link4 STL correction on the visual only", () => {
-    const urdf = readFileSync(
-      resolve("public/urdf/taccap-grippers/left/gripper.urdf"),
-      "utf8",
-    );
-    const link4 = urdf.match(/<link name="link4">[\s\S]*?<\/link>/)?.[0];
-    const joint4 = urdf.match(/<joint name="joint4"[\s\S]*?<\/joint>/)?.[0];
-    expect(link4).toContain('rpy="0 0 -1.5707963267949"');
-    expect(joint4).toContain('rpy="0 0 0"');
+  test("places every mesh where the SolidWorks export it replaced did", () => {
+    // The previous assets were the same STLs rooted at their native CAD frame,
+    // with root → link4 (the recorded TCP) a pure translation. Re-rooting moved
+    // the root, not the gripper: each mesh must still land in the same place
+    // relative to the TCP, to within the 0.08 mm the mesh-derived EEF differs
+    // from the old link4 origin.
+    const solidworksRootToTcp = {
+      left: [0.164636788170065, 0, -0.0158499715519367],
+      right: [0.164643038155223, 0, -0.01599997155194],
+    } as const;
+    for (const side of ["left", "right"] as const) {
+      const urdf = readMasterUrdf(side);
+      const visual = urdf.match(
+        /<visual name="[a-z]+_body_visual">\s*<origin ([^>]*)\/>/,
+      )?.[1];
+      expect(visual).toBeDefined();
+      const meshInTcp = multiply4(
+        tacCapRecordedTcpToRootMatrix(side),
+        originMatrix(parseOrigin(visual!)),
+      );
+      const [x, y, z] = solidworksRootToTcp[side];
+      const legacy = [1, 0, 0, -x, 0, 1, 0, -y, 0, 0, 1, -z, 0, 0, 0, 1];
+      meshInTcp.forEach((value, index) => {
+        expect(Math.abs(value - legacy[index])).toBeLessThan(1e-4);
+      });
+    }
   });
 
   test("maps the world convention to the Three.js Y-up scene", () => {
@@ -80,29 +150,21 @@ describe("TacCap replay coordinate transforms", () => {
     ).toEqual([1, 0, 0, 1, 0, 0, 1, 3, 0, -1, 0, -2, 0, 0, 0, 1]);
   });
 
-  test("keeps both grippers aligned to the same canonical TCP axes", () => {
-    expect(TACCAP_ROOT_TO_RECORDED_TCP_TRANSLATION.left[0]).toBeCloseTo(
-      TACCAP_ROOT_TO_RECORDED_TCP_TRANSLATION.right[0],
-      4,
-    );
-    expect(TACCAP_ROOT_TO_RECORDED_TCP_TRANSLATION.left[1]).toBe(0);
-    expect(TACCAP_ROOT_TO_RECORDED_TCP_TRANSLATION.right[1]).toBe(0);
-
+  test("turns the URDF's +Z tool axis onto the recorded TCP's +X", () => {
     for (const side of ["left", "right"] as const) {
-      const tcpToRoot = tacCapRecordedTcpToRootMatrix(side);
-      // Both rotation blocks are identity, matching the canonical link4 axes
-      // now declared by both bundled URDFs.
-      expect([
-        tcpToRoot[0],
-        tcpToRoot[1],
-        tcpToRoot[2],
-        tcpToRoot[4],
-        tcpToRoot[5],
-        tcpToRoot[6],
-        tcpToRoot[8],
-        tcpToRoot[9],
-        tcpToRoot[10],
-      ]).toEqual([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+      const m = tacCapRecordedTcpToRootMatrix(side);
+      // Columns are the root axes in TCP coordinates.
+      expect([m[2], m[6], m[10]]).toEqual([1, 0, 0]); // root +Z → TCP +X
+      expect([m[1], m[5], m[9]]).toEqual([0, 1, 0]); // root +Y → TCP +Y
+      expect([m[0], m[4], m[8]]).toEqual([0, 0, -1]); // root +X → TCP -Z
+      // The EEF origin itself maps onto the TCP origin.
+      const [tx, ty, tz] = TACCAP_ROOT_TO_RECORDED_TCP_TRANSLATION[side];
+      for (const row of [0, 1, 2]) {
+        const base = row * 4;
+        expect(
+          m[base] * tx + m[base + 1] * ty + m[base + 2] * tz + m[base + 3],
+        ).toBeCloseTo(0, 12);
+      }
     }
   });
 });

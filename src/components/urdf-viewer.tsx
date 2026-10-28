@@ -399,10 +399,10 @@ type SceneBounds = {
 };
 
 /**
- * Build the Three.js transform whose local frame is the recorded link4 frame.
+ * Build the Three.js transform whose local frame is the recorded TCP frame.
  * Dataset coordinates use Z-up; the scene uses Y-up.
  */
-function tacCapLink4SceneMatrix(frame: TacCapGripperFrame): THREE.Matrix4 {
+function tacCapTcpSceneMatrix(frame: TacCapGripperFrame): THREE.Matrix4 {
   return new THREE.Matrix4().set(
     ...tacCapRecordedTcpSceneMatrix(frame.position, frame.rotation),
   );
@@ -427,7 +427,7 @@ function applyTacCapGripperFrame(
       calibratedTravel,
     ),
   );
-  robot.matrix.copy(tacCapLink4SceneMatrix(frame)).multiply(recordedTcpToRoot);
+  robot.matrix.copy(tacCapTcpSceneMatrix(frame)).multiply(recordedTcpToRoot);
   robot.matrixWorldNeedsUpdate = true;
   robot.updateMatrixWorld(true);
 }
@@ -841,9 +841,9 @@ function TacCapGripperModel({
         robot.matrixAutoUpdate = false;
         robot.updateMatrixWorld(true);
 
-        if (!robot.links[profile.tcpFrameLink]) {
+        if (!robot.links[profile.tcpFrameLink(side)]) {
           console.error(
-            `${side} gripper URDF has no ${profile.tcpFrameLink} frame`,
+            `${side} gripper URDF has no ${profile.tcpFrameLink(side)} frame`,
           );
           return;
         }
@@ -861,7 +861,7 @@ function TacCapGripperModel({
             robot,
             recordedTcpToRootRef.current,
             frameRef.current,
-            profile.driveJoint,
+            profile.driveJoint(side),
             travelRef.current,
           );
         } else {
@@ -899,10 +899,10 @@ function TacCapGripperModel({
       robot,
       recordedTcpToRoot,
       frame,
-      profile.driveJoint,
+      profile.driveJoint(side),
       calibratedTravel,
     );
-  }, [calibratedTravel, frame, profile.driveJoint, recordedTcpToRoot]);
+  }, [calibratedTravel, frame, profile, recordedTcpToRoot, side]);
 
   // While playing, re-pose every display frame from the continuous time. The
   // row-rate layout effect above still runs; any pose it sets is overwritten
@@ -918,7 +918,7 @@ function TacCapGripperModel({
       robot,
       tcpToRoot,
       sampled,
-      profile.driveJoint,
+      profile.driveJoint(side),
       travelRef.current,
     );
   });
