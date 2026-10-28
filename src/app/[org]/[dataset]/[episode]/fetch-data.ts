@@ -9,7 +9,10 @@ import {
   getDatasetVersionAndInfo,
   buildVersionedUrl,
 } from "@/utils/versionUtils";
-import { repoIdFromRouteParams } from "@/utils/datasetRoute";
+import {
+  getLocalDatasetFileBase,
+  repoIdFromRouteParams,
+} from "@/utils/datasetRoute";
 import { PADDING, CHART_CONFIG, EXCLUDED_COLUMNS } from "@/utils/constants";
 import {
   processChartDataGroups,
@@ -237,6 +240,7 @@ const episodeMetadataFileInFlight = new Map<
   Promise<Record<string, unknown>[] | null>
 >();
 const episodeMetadataRowCache = new Map<string, EpisodeMetadataV3>();
+const episodeMetadataShardListCache = new Map<string, string[]>();
 const MAX_EPISODE_METADATA_FILES = 96;
 const MAX_EPISODE_METADATA_ROWS = 4096;
 
@@ -250,6 +254,120 @@ function rememberMetadataFile(
     rows,
     MAX_EPISODE_METADATA_FILES,
   );
+}
+
+async function getEpisodeMetadataShardPaths(
+  repoId: string,
+  version: string,
+): Promise<string[] | null> {
+  const cacheKey = `${repoId}\u0000${version}`;
+  const cached = touchLru(episodeMetadataShardListCache, cacheKey);
+  if (cached) return cached;
+
+  try {
+    const response = await fetch(
+      `${getLocalDatasetFileBase(repoId)}/shards?kind=episode-metadata`,
+      { cache: "no-store" },
+    );
+    if (!response.ok) return null;
+    const payload: unknown = await response.json();
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      !("paths" in payload) ||
+      !Array.isArray(payload.paths) ||
+      !payload.paths.every((path) => typeof path === "string")
+    ) {
+      return null;
+    }
+    const paths = payload.paths as string[];
+    rememberInLru(
+      episodeMetadataShardListCache,
+      cacheKey,
+      paths,
+      MAX_EPISODE_METADATA_FILES,
+    );
+    return paths;
+  } catch {
+    // Keep the sequential probe as a fallback if the shard-list route is
+    // unavailable (for example, while an older server is still running).
+    return null;
+  }
+}
+
+async function readEpisodeMetadataFileV3(
+  repoId: string,
+  version: string,
+  path: string,
+): Promise<Record<string, unknown>[] | null> {
+  const url = buildVersionedUrl(repoId, version, path);
+  if (episodeMetadataFileCache.has(url)) {
+    return touchLru(episodeMetadataFileCache, url) ?? null;
+  }
+
+  const inFlight = episodeMetadataFileInFlight.get(url);
+  if (inFlight) {
+    const rows = await inFlight;
+    rememberMetadataFile(url, rows);
+    return rows;
+  }
+
+  const request = (async () => {
+    try {
+      const buf = await fetchParquetFile(url);
+      return await readParquetAsObjects(buf, []);
+    } catch {
+      return null;
+    }
+  })();
+  episodeMetadataFileInFlight.set(url, request);
+  try {
+    const rows = await request;
+    rememberMetadataFile(url, rows);
+    return rows;
+  } finally {
+    if (episodeMetadataFileInFlight.get(url) === request) {
+      episodeMetadataFileInFlight.delete(url);
+    }
+  }
+}
+
+async function fetchEpisodeMetadataRowV3(
+  repoId: string,
+  episodeId: number,
+): Promise<{ row: Record<string, unknown> | null; failure?: string }> {
+  let endpoint = "";
+  try {
+    endpoint =
+      getLocalDatasetFileBase(repoId) + "/episode-metadata/" + episodeId;
+    const response = await fetch(endpoint, { cache: "no-store" });
+    if (!response.ok) {
+      return {
+        row: null,
+        failure: "HTTP " + response.status + " from " + endpoint,
+      };
+    }
+
+    const payload: unknown = await response.json();
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      !("row" in payload) ||
+      !payload.row ||
+      typeof payload.row !== "object"
+    ) {
+      return { row: null, failure: "Invalid response from " + endpoint };
+    }
+    return { row: payload.row as Record<string, unknown> };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      row: null,
+      failure: endpoint
+        ? "Request to " + endpoint + " failed: " + detail
+        : detail,
+    };
+  }
 }
 
 function episodeDataCacheKey(
@@ -1562,22 +1680,28 @@ function extractVideoInfoV3WithSegmentation(
   return videosInfo;
 }
 
-// Walks v3.0 episode-metadata parquet files across chunks/files. A new chunk
-// begins when the current chunk's files run out (404 or empty); iteration ends
-// when file-000 of the next chunk 404s. `chunks_size` caps files per chunk, so
-// large datasets can spill past chunk-000.
+// Prefer actual v3 metadata shards. Sequential probing remains a compatibility
+// fallback for servers that do not expose the shard-list endpoint.
 async function* iterateEpisodeMetadataFilesV3(
   repoId: string,
   version: string,
 ): AsyncGenerator<Record<string, unknown>[], void, unknown> {
-  let chunkIndex = 0;
-  let fileIndex = 0;
-  // One metadata row per episode, so the episode count tells us when the last
-  // shard has been read. Without it the only way to learn where the tree ends
-  // is to request shards that are not there — two 404s per walk, which the dev
-  // server logs as errors even though the walk succeeded. This is a stop
-  // condition, not the terminator: an info.json that under-reports just falls
-  // through to the probe below, exactly as before.
+  // Prefer the server-enumerated shard list: it tolerates missing
+  // intermediate files and non-zero starting indices that the sequential
+  // file-000 probe cannot express. The probe below remains the fallback for
+  // environments where the shard-list route is unavailable.
+  const shardPaths = await getEpisodeMetadataShardPaths(repoId, version);
+  if (shardPaths) {
+    for (const shardPath of shardPaths) {
+      const rows = await readEpisodeMetadataFileV3(repoId, version, shardPath);
+      if (!rows || rows.length === 0) continue;
+      yield rows;
+    }
+    // info.json may describe episodes that are no longer present. Re-probing
+    // listed files would duplicate rows; a smaller count would skip real shards.
+    return;
+  }
+
   let remainingEpisodes = Number.POSITIVE_INFINITY;
   try {
     const { info } = await getDatasetVersionAndInfo(repoId);
@@ -1586,40 +1710,11 @@ async function* iterateEpisodeMetadataFilesV3(
     // No usable info.json — probe for the missing shard instead.
   }
 
+  let chunkIndex = 0;
+  let fileIndex = 0;
   while (true) {
     const path = buildV3EpisodesMetadataPath(chunkIndex, fileIndex);
-    const url = buildVersionedUrl(repoId, version, path);
-    let rows: Record<string, unknown>[] | null;
-    // `has` rather than a truthiness check: a cached `null` is the *result*
-    // "this shard does not exist", and it has to stop the refetch just as a
-    // cached row array does.
-    if (episodeMetadataFileCache.has(url)) {
-      rows = touchLru(episodeMetadataFileCache, url) ?? null;
-    } else {
-      const inFlight = episodeMetadataFileInFlight.get(url);
-      if (inFlight) {
-        rows = await inFlight;
-        rememberMetadataFile(url, rows);
-      } else {
-        const request = (async () => {
-          try {
-            const buf = await fetchParquetFile(url);
-            return await readParquetAsObjects(buf, []);
-          } catch {
-            return null;
-          }
-        })();
-        episodeMetadataFileInFlight.set(url, request);
-        try {
-          rows = await request;
-        } finally {
-          if (episodeMetadataFileInFlight.get(url) === request) {
-            episodeMetadataFileInFlight.delete(url);
-          }
-        }
-        rememberMetadataFile(url, rows);
-      }
-    }
+    const rows = await readEpisodeMetadataFileV3(repoId, version, path);
 
     if (!rows || rows.length === 0) {
       if (fileIndex === 0) return;
@@ -1645,6 +1740,23 @@ async function loadEpisodeMetadataV3Simple(
   const cached = touchLru(episodeMetadataRowCache, key);
   if (cached) return cached;
 
+  const rowLookup = await fetchEpisodeMetadataRowV3(repoId, episodeId);
+  const row = rowLookup.row;
+  if (row) {
+    const metadata = parseEpisodeRowSimple(row);
+    if (metadata.episode_index === episodeId) {
+      rememberInLru(
+        episodeMetadataRowCache,
+        key,
+        metadata,
+        MAX_EPISODE_METADATA_ROWS,
+      );
+      return metadata;
+    }
+    rowLookup.failure =
+      "endpoint returned episode_index " + metadata.episode_index;
+  }
+
   for await (const rows of iterateEpisodeMetadataFilesV3(repoId, version)) {
     for (const row of rows) {
       const metadata = parseEpisodeRowSimple(row);
@@ -1658,7 +1770,14 @@ async function loadEpisodeMetadataV3Simple(
       return metadata;
     }
   }
-  throw new Error(tStandalone("err.episodeNotFound", { id: episodeId }));
+  throw new Error(
+    tStandalone("err.episodeNotFound", { id: episodeId }) +
+      " for " +
+      repoId +
+      ". Direct metadata lookup: " +
+      (rowLookup.failure ?? "no matching row") +
+      ".",
+  );
 }
 
 // Simple parser for episode row - focuses on key fields for episodes
@@ -1832,26 +1951,13 @@ export async function loadAllEpisodeLengthsV3(
 ): Promise<EpisodeLengthStats | null> {
   try {
     const allEpisodes: { index: number; length: number }[] = [];
-    let fileIndex = 0;
-    const chunkIndex = 0;
-
-    while (true) {
-      const path = `meta/episodes/chunk-${chunkIndex.toString().padStart(3, "0")}/file-${fileIndex.toString().padStart(3, "0")}.parquet`;
-      const url = buildVersionedUrl(repoId, version, path);
-      try {
-        const buf = await fetchParquetFile(url);
-        const rows = await readParquetAsObjects(buf, []);
-        if (rows.length === 0 && fileIndex > 0) break;
-        for (const row of rows) {
-          const parsed = parseEpisodeRowSimple(row);
-          allEpisodes.push({
-            index: parsed.episode_index,
-            length: parsed.length,
-          });
-        }
-        fileIndex++;
-      } catch {
-        break;
+    for await (const rows of iterateEpisodeMetadataFilesV3(repoId, version)) {
+      for (const row of rows) {
+        const parsed = parseEpisodeRowSimple(row);
+        allEpisodes.push({
+          index: parsed.episode_index,
+          length: parsed.length,
+        });
       }
     }
 

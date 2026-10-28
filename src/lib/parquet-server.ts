@@ -44,6 +44,7 @@ const MAX_CACHED_FILES = 8;
 /** Safety rails for the episode-metadata walk (v3 chunk/file directories). */
 const MAX_EPISODE_CHUNKS = 64;
 const MAX_FILES_PER_CHUNK = 4096;
+const MAX_EPISODE_INDEX_CACHE_ENTRIES = 32;
 const warnedNonstandardShardRoots = new Set<string>();
 
 export interface ParquetHandle {
@@ -53,6 +54,10 @@ export interface ParquetHandle {
 }
 
 const handleCache = new Map<string, Promise<ParquetHandle>>();
+const episodeIndexCache = new Map<
+  string,
+  { fingerprint: string; indices: number[] }
+>();
 
 function describePrimitive(element: SchemaElement): string {
   const logical = element.logical_type;
@@ -336,6 +341,67 @@ export async function listV3EpisodeMetadataFiles(
   }
 
   return sortV3EpisodeMetadataShards(paths);
+}
+
+export async function listV3EpisodeIndices(
+  datasetRoot: string,
+): Promise<number[]> {
+  const paths = await listV3EpisodeMetadataFiles(datasetRoot);
+  const files: {
+    relPath: string;
+    absolutePath: string;
+    size: number;
+    mtimeMs: number;
+  }[] = [];
+
+  for (const relPath of paths) {
+    const absolutePath = resolveInsideDataset(datasetRoot, relPath);
+    if (!absolutePath) continue;
+    const stat = await statFileOrNull(absolutePath);
+    if (stat) files.push({ relPath, absolutePath, ...stat });
+  }
+
+  const fingerprint = files
+    .map(({ relPath, size, mtimeMs }) => `${relPath}:${size}:${mtimeMs}`)
+    .join("|");
+  const cached = episodeIndexCache.get(datasetRoot);
+  if (cached?.fingerprint === fingerprint) {
+    episodeIndexCache.delete(datasetRoot);
+    episodeIndexCache.set(datasetRoot, cached);
+    return [...cached.indices];
+  }
+
+  const indices = new Set<number>();
+  for (const file of files) {
+    try {
+      const handle = await openParquet(
+        file.absolutePath,
+        file.relPath,
+        file.size,
+        file.mtimeMs,
+      );
+      const rows = (await parquetReadObjects({
+        file: handle.file,
+        metadata: handle.metadata,
+        columns: ["episode_index"],
+      })) as Record<string, unknown>[];
+      for (const row of rows) {
+        const index = bigIntToNumber(row["episode_index"], -1);
+        if (Number.isSafeInteger(index) && index >= 0) indices.add(index);
+      }
+    } catch {
+      // A damaged shard should not hide valid episodes in other shards.
+    }
+  }
+
+  const sortedIndices = [...indices].sort((left, right) => left - right);
+  episodeIndexCache.set(datasetRoot, { fingerprint, indices: sortedIndices });
+  while (episodeIndexCache.size > MAX_EPISODE_INDEX_CACHE_ENTRIES) {
+    const oldest = episodeIndexCache.keys().next();
+    if (oldest.done) break;
+    episodeIndexCache.delete(oldest.value);
+  }
+  return [...sortedIndices];
 }
 
 const LOCATOR_COLUMNS = [

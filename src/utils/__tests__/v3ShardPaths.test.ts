@@ -61,4 +61,28 @@ describe("v3 episode metadata shard paths", () => {
       ]),
     ).toBe(false);
   });
+
+  it.each([
+    ["nonzero first file", ["meta/episodes/chunk-000/file-001.parquet"]],
+    [
+      "file gap",
+      [
+        "meta/episodes/chunk-000/file-000.parquet",
+        "meta/episodes/chunk-000/file-002.parquet",
+      ],
+    ],
+    [
+      "chunk gap",
+      [
+        "meta/episodes/chunk-000/file-000.parquet",
+        "meta/episodes/chunk-002/file-000.parquet",
+      ],
+    ],
+    ["nonzero first chunk", ["meta/episodes/chunk-001/file-000.parquet"]],
+  ])(
+    "requires a layout notice for %s even when an episode is readable",
+    (_reason, paths) => {
+      expect(matchesFixedV3EpisodeMetadataProbing(paths)).toBe(false);
+    },
+  );
 });
