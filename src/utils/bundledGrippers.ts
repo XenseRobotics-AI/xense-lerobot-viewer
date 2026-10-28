@@ -24,14 +24,17 @@ import { isRdtGripperRobot, isTacCapRobot } from "@/lib/so101-robot";
 export type BundledGripperProfile = {
   /** Which URDF to load for a side. TacCap ships two files; RDT ships one. */
   urdf: (side: TacCapSide) => string;
-  /** The single joint the normalized opening drives. Its mimics follow. */
-  driveJoint: string;
+  /**
+   * The single joint the normalized opening drives, per side — TacCap prefixes
+   * every name with the side. Its mimics follow.
+   */
+  driveJoint: (side: TacCapSide) => string;
   /**
    * A link that must exist once the URDF is loaded. Purely a guard against
    * loading the wrong file — the transform below is a constant, not read from
    * the model.
    */
-  tcpFrameLink: string;
+  tcpFrameLink: (side: TacCapSide) => string;
   /**
    * Recorded canonical TCP → model root, row-major. Applied as
    * `robot.matrix = tcpSceneMatrix * rootFromTcp`, so it answers "where does
@@ -70,7 +73,7 @@ const RDT_ROOT_TO_TCP_Z = 0.2572;
 /**
  * RDT recorded TCP → model root, row-major.
  *
- * Unlike TacCap this is **not** translation-only. The URDF approaches along its
+ * Like TacCap this is **not** translation-only. The URDF approaches along its
  * own `+Z` and opens along `±X`, while the viewer's canonical TCP frame is
  * `+X forward, +Y left, +Z up`, so the TCP axes expressed in model coordinates
  * are `X_tcp = +Z_model`, `Y_tcp = +X_model`, `Z_tcp = +Y_model` — an axis
@@ -87,11 +90,14 @@ function rdtRootFromTcpMatrix(): Matrix4Elements {
 }
 
 const TACCAP_PROFILE: BundledGripperProfile = {
-  urdf: (side) => `/urdf/taccap-grippers/${side}/gripper.urdf`,
-  driveJoint: "joint1",
-  tcpFrameLink: "link4",
+  // Verbatim copies of XTac-UMI-Description's master URDFs; see the README
+  // beside them.
+  urdf: (side) => `/urdf/taccap-grippers/urdf/taccap_g1_master_${side}.urdf`,
+  // The right finger (-Y) drives; the left finger mimics it ×-1.
+  driveJoint: (side) => `${side}_right_joint`,
+  tcpFrameLink: (side) => `${side}_eef_link`,
   rootFromTcp: (side) => tacCapRecordedTcpToRootMatrix(side),
-  // The link4 origin sits about 16.5 cm ahead of base_link.
+  // The EEF sits about 19 cm ahead of the root.
   scenePadding: 0.2,
   tintFingersPerSide: false,
 };
@@ -100,8 +106,8 @@ const RDT_PROFILE: BundledGripperProfile = {
   // One file for both arms: `Left_*` / `Right_*` in this URDF are the two jaws
   // of a single gripper, not two arms, so the same model is instantiated twice.
   urdf: () => "/urdf/rdt-gripper/gripper.urdf",
-  driveJoint: "R2",
-  tcpFrameLink: "Left_Pad_Link",
+  driveJoint: () => "R2",
+  tcpFrameLink: () => "Left_Pad_Link",
   rootFromTcp: rdtRootFromTcpMatrix,
   // Taller than TacCap: the jaws sit ~25.7 cm from the root, against ~16.5 cm.
   scenePadding: 0.3,
