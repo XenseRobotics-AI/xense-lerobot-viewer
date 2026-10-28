@@ -1,5 +1,6 @@
 import type { HistogramBinning } from "@/utils/episodeLengthHistogram";
 import type { SpatialTrajectoryData } from "@/utils/spatialTrajectories";
+import type { TcpFrameConvention } from "@/utils/taccapGripperTransforms";
 import type { LanguageAtom } from "./language.types";
 import type { VideoInfo } from "./video.types";
 
@@ -13,6 +14,12 @@ export type DatasetDisplayInfo = {
   total_episodes: number;
   fps: number;
   robot_type: string | null;
+  /** Left/right TCP axis convention from `info.json`; see `TcpFrameConvention`. */
+  tcp_frame_convention: TcpFrameConvention;
+  /** The raw value when `info.json` declares one we do not recognise. */
+  tcp_frame_convention_unrecognized: string | null;
+  /** False when `info.json` omits the key and the legacy default applies. */
+  tcp_frame_convention_declared: boolean;
   codebase_version: string;
   total_tasks: number;
   dataset_size_mb: number;

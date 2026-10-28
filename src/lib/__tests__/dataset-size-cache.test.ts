@@ -26,6 +26,21 @@ async function makeDataset(dir: string): Promise<void> {
     path.join(dir, "data", "chunk-000", "file-000.parquet"),
     "x",
   );
+  // Age the tree. Kernel mtimes are coarse (about 1 ms on ext4 here), so a write
+  // landing in the same tick as setup would leave the fingerprint unchanged
+  // and make the "changes when ..." tests flaky. Backdating every directory by
+  // 10 s makes any later write observable regardless of clock granularity.
+  const past = new Date(Date.now() - 10_000);
+  for (const sub of [
+    "",
+    "meta",
+    "data",
+    "data/chunk-000",
+    "videos",
+    "videos/chunk-000",
+  ]) {
+    await fs.utimes(path.join(dir, sub), past, past);
+  }
 }
 
 afterAll(async () => {

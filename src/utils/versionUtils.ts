@@ -23,6 +23,8 @@ type FeatureInfo = {
 export interface DatasetInfo {
   codebase_version: string;
   robot_type: string | null;
+  /** TacVerse left/right TCP axis convention; absent on legacy datasets. */
+  tcp_frame_convention?: unknown;
   total_episodes: number;
   total_frames: number;
   total_tasks: number;

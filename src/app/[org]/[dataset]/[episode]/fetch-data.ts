@@ -54,6 +54,10 @@ import type {
   SpeedDistEntry,
 } from "@/types/episode-data";
 import { tStandalone as translateStandalone } from "@/i18n/standalone";
+import {
+  parseTcpFrameConvention,
+  unrecognizedTcpFrameConvention,
+} from "@/utils/taccapGripperTransforms";
 
 export type {
   AggAlignment,
@@ -522,6 +526,15 @@ export async function getEpisodeData(
     result.datasetInfo = {
       ...result.datasetInfo,
       robot_type: rawInfo.robot_type ?? null,
+      tcp_frame_convention: parseTcpFrameConvention(
+        rawInfo.tcp_frame_convention,
+      ),
+      tcp_frame_convention_unrecognized: unrecognizedTcpFrameConvention(
+        rawInfo.tcp_frame_convention,
+      ),
+      tcp_frame_convention_declared:
+        rawInfo.tcp_frame_convention !== undefined &&
+        rawInfo.tcp_frame_convention !== null,
       codebase_version: rawInfo.codebase_version,
       total_tasks: rawInfo.total_tasks ?? 0,
       dataset_size_mb:
@@ -637,6 +650,9 @@ async function getEpisodeDataV2(
     total_episodes: info.total_episodes,
     fps: info.fps,
     robot_type: null,
+    tcp_frame_convention: "same-axes-v0",
+    tcp_frame_convention_unrecognized: null,
+    tcp_frame_convention_declared: false,
     codebase_version: version,
     total_tasks: 0,
     dataset_size_mb: 0,
@@ -871,6 +887,9 @@ async function getEpisodeDataV3(
     total_episodes: info.total_episodes,
     fps: info.fps,
     robot_type: null,
+    tcp_frame_convention: "same-axes-v0",
+    tcp_frame_convention_unrecognized: null,
+    tcp_frame_convention_declared: false,
     codebase_version: version,
     total_tasks: 0,
     dataset_size_mb: 0,
