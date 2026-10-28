@@ -295,6 +295,16 @@ export const en = {
 
   // ── episode viewer: body ────────────────────────────────────────────────
   "ep.episodeLabel": "Episode · {id}",
+  "ep.redirectTitle": "Requested episode is unavailable",
+  "ep.redirectDescription":
+    "Episode {requested} has no metadata in this local dataset. You have been redirected to the nearest available episode, {target}.",
+  "ep.redirectHint":
+    "To view the original episode, restore its metadata and data files from the dataset source.",
+  "ep.dismissRedirect": "Dismiss",
+  "ep.metadataLayoutTitle": "Episode metadata shard numbering differs",
+  "ep.metadataLayoutDescription":
+    "The discovered episode metadata shards do not follow consecutive chunk/file numbering starting at chunk-000/file-000. The viewer is loading the actual shard list; this numbering difference alone does not mean episode data is missing.",
+  "ep.metadataLayoutFiles": "Discovered metadata shards ({count})",
   "ep.editTags": "Edit tags",
   "ep.languageInstruction": "Language Instruction",
   "ep.groundedVqa": "Grounded VQA",

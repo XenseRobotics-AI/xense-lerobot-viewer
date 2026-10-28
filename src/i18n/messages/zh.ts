@@ -287,6 +287,16 @@ export const zh: Record<MessageKey, string> = {
 
   // ── episode viewer: body ────────────────────────────────────────────────
   "ep.episodeLabel": "Episode · {id}",
+  "ep.redirectTitle": "请求的 episode 不可用",
+  "ep.redirectDescription":
+    "本地数据集中缺少 episode {requested} 的元数据，已自动跳转到最近可用的 episode {target}。",
+  "ep.redirectHint":
+    "如需查看原 episode，请从数据源补齐对应的元数据和数据文件。",
+  "ep.dismissRedirect": "关闭提示",
+  "ep.metadataLayoutTitle": "Episode 元数据分片编号与固定探测规则不一致",
+  "ep.metadataLayoutDescription":
+    "实际发现的 episode 元数据分片不符合从 chunk-000/file-000 开始连续编号的固定探测规则。查看器已按实际分片列表加载；仅编号不一致不能说明 episode 数据缺失。",
+  "ep.metadataLayoutFiles": "实际发现的元数据分片（{count} 个）",
   "ep.editTags": "编辑标签",
   "ep.languageInstruction": "语言指令",
   "ep.groundedVqa": "具身 VQA",
