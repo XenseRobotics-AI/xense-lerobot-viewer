@@ -4,6 +4,107 @@ A web tool by **Xense Robotics** for interactive exploration of **local** LeRobo
 
 This fork removes the Hugging Face Hub remote-loading path; everything reads from your local LeRobot cache (`~/.cache/huggingface/lerobot` by default).
 
+## Startup and browser recovery
+
+Public episode URLs remain `/_local/...`. An internal `/viewer/...` route avoids
+Next 15 dev client navigation under-encoding escaped underscore script paths.
+The UI uses installed system fonts; starting or building the viewer does not
+require Google Fonts. Dataset-card and episode-list links load on selection
+instead of prefetching routes while you browse. Preview videos detach when they
+leave the viewport or the grid unmounts, and local files stream with cancellation
+rather than buffering complete videos in memory. Cold dataset-size scans use a
+bounded filesystem queue; concurrent refreshes share the same in-progress scan.
+The first scan of a large archive can still take time, especially on slow storage.
+
+If a browser tab was open against another app or an older build on the same
+host and port, close those old tabs and perform a hard refresh. The viewer has
+no `/api/workbench/shared-sync` endpoint or caller. Persistent requests to that
+path come from another client; use the browser Network panel's Initiator column
+to identify it. Do not run `bun run build` while `bun dev` is running in the
+same checkout: both write `.next/`. A failed JavaScript asset triggers at most
+one automatic recovery reload per tab, so a persistent failure reaches the error
+UI instead of repeatedly reloading while a slow compilation finishes.
+
+## Human episode inspection
+
+The **Episode** and **3D Replay** tabs share manual inspection marks. Select a
+preset inspector, then click **Mark as inspected** after checking an episode.
+The last selected inspector is remembered in the browser across episodes, tabs
+and datasets. Playback alone never creates a mark. Multiple inspectors can
+inspect the same episode; undo removes only the selected inspector's mark.
+Each new mark records the inspector name, roster role, server timestamp (UTC+8) and entry tab
+(`episodes` or `urdf`). Names are self-selected labels, not authenticated identities.
+
+Records are stored together under the directory selected by the homepage's path
+switcher, **not inside an individual dataset** and not always under
+`LOCAL_DATASET_ROOT`:
+
+```text
+<selected-browse-directory>/.xense-viewer/episode-reviews.json
+<selected-browse-directory>/.xense-viewer/reviewers.json
+```
+
+The roster is local configuration, read fresh from the **currently selected work
+directory** on each API request. There are no hardcoded personal names, shared
+roster cache, or environment-variable fallbacks. Switching browse directories
+also switches both the roster and inspection records. Edit that directory's
+reviewers.json to update people without rebuilding the application. A missing or
+explicitly empty file disables marking; existing records remain readable.
+
+Use role objects; legacy arrays of names are still accepted as inspectors:
+
+    [
+      { "name": "Inspector A", "role": "inspector" },
+      { "name": "Administrator A", "role": "admin" },
+      { "name": "Developer A", "role": "developer" }
+    ]
+
+Roles are labels, not authentication or access control. Both reviewers.json and
+episode-reviews.json belong in .xense-viewer, which is excluded by .gitignore;
+never commit personal configuration or review data with the source code.
+The selected work directory must be writable for marking.
+
+New records use ISO 8601 timestamps with an explicit +08:00 offset. Historical
+UTC timestamps retain their actual instant and are converted to UTC+8 on read,
+display and export; they are not shifted twice. Browser/OS timezone settings do
+not change the inspection time shown.
+
+The record file is keyed by each dataset's path relative to the browse directory,
+then by episode index, so identically numbered episodes in different datasets do
+not collide. The viewer pins the selected browse directory when it opens, so
+switching the homepage directory in another browser tab cannot redirect a save.
+An episode outside that directory must be reopened from the correct dataset list.
+
+The sidebar shows inspection progress, per-person counts, and filters for
+uninspected / inspected / awaiting cross-review / cross-reviewed / awaiting my
+check / inspected by me. Two or more **different people** marking an episode
+make it cross-reviewed; repeated marks by the same name count once. Undo removes
+only that person's mark and updates the status. A mark records that somebody
+checked the episode, not a quality pass or fail.
+
+The **homepage** provides collection-wide counts and CSV / JSON export under
+“Inspection management”. CSV contains one row per person and episode with the
+dataset path, role, UTC+8 timestamp, entry tab, status and number of inspectors.
+Statistics include saved historical records even if a dataset is no longer
+present. The overview only reads the shared record file; it never scans media.
+
+Other open viewers refresh on focus and every 30 seconds while visible; the
+homepage overview refreshes every 60 seconds while visible. Requests do not
+overlap and reads are aborted when the owning view unmounts. Writes merge under
+an exclusive lock and replace the JSON atomically; failures are shown without
+displaying an unsaved checkmark. If the server crashes while writing and leaves
+episode-reviews.json.lock behind, stop all viewer processes before removing
+that stale lock directory.
+
+Resource handling preserves active playback: paused 3D scenes render on demand
+(including seeking, camera controls and asynchronously loaded models), active
+playback keeps the full render loop, and inactive/hidden 3D views stop rendering.
+Episode pose plots and spatial trajectory scenes also redraw only when their
+data or controls change, retaining the existing dataset-frame playback clock.
+Hiding the browser tab pauses playback without automatically resuming it on
+return. Offscreen previews and unmounted videos release their media sources;
+metadata/parquet loading for the active episode is not throttled away.
+
 ## Features
 
 - **Local dataset browser**: the homepage lists every LeRobot dataset under your local root with a video preview and metadata badge (robot type, codebase version, episode count). Filter by name, robot type, or **dataset tags** (see below). Source cards name the robot types they hold, and each dataset card shows its shape (`20-dim + 7 streams`) — amber when that shape contradicts the dataset's declared `robot_type`, which is how a half-configured capture gets caught.

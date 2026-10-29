@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
-import fs from "node:fs/promises";
+import { createReadStream, type ReadStream } from "node:fs";
+import { Readable } from "node:stream";
 import path from "node:path";
 import { statDatasetFile } from "@/lib/local-dataset-paths";
 
@@ -8,6 +9,17 @@ export const dynamic = "force-dynamic";
 
 const VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".m4v"]);
 const DEFAULT_VIDEO_RANGE_CHUNK_SIZE = 2 * 1024 * 1024;
+
+function responseStream(stream: ReadStream): ReadableStream<Uint8Array> {
+  // Node's default Web-stream queue counts chunks, not bytes. Keep the queue
+  // bounded for large videos and slow clients as well as metadata previews.
+  return Readable.toWeb(stream, {
+    strategy: {
+      highWaterMark: 64 * 1024,
+      size: (chunk: Uint8Array) => chunk.byteLength,
+    },
+  }) as unknown as ReadableStream<Uint8Array>;
+}
 
 function inferContentType(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
@@ -74,8 +86,11 @@ export async function GET(
   const rangeHeader = req.headers.get("range");
   if (!rangeHeader) {
     const headers = buildCommonHeaders(file.absolutePath, file.size);
-    const buffer = await fs.readFile(file.absolutePath);
-    return new Response(buffer, { status: 200, headers });
+    const stream = createReadStream(file.absolutePath, { signal: req.signal });
+    return new Response(responseStream(stream), {
+      status: 200,
+      headers,
+    });
   }
 
   const range = normalizeRange(rangeHeader, file.size);
@@ -88,17 +103,21 @@ export async function GET(
     });
   }
 
-  const handle = await fs.open(file.absolutePath, "r");
-  const body = new Uint8Array(range.end - range.start + 1);
-  await handle.read(body, 0, body.byteLength, range.start);
-  await handle.close();
-  const headers = buildCommonHeaders(file.absolutePath, body.byteLength);
+  const stream = createReadStream(file.absolutePath, {
+    start: range.start,
+    end: range.end,
+    signal: req.signal,
+  });
+  const headers = buildCommonHeaders(
+    file.absolutePath,
+    range.end - range.start + 1,
+  );
   headers.set(
     "content-range",
     `bytes ${range.start}-${range.end}/${file.size}`,
   );
 
-  return new Response(body, {
+  return new Response(responseStream(stream), {
     status: 206,
     headers,
   });

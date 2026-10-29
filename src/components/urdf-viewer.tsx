@@ -19,6 +19,7 @@ import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import type { EpisodeData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
+import { useDocumentVisible } from "@/hooks/use-document-visible";
 import UrdfPlaybackBar from "@/components/urdf-playback-bar";
 import UrdfValueReadout from "@/components/urdf-value-readout";
 import UrdfVideoOverlay from "@/components/urdf-video-overlay";
@@ -692,7 +693,7 @@ function tacCapSceneBounds(
 }
 
 function TacCapCameraFit({ bounds }: { bounds: SceneBounds }) {
-  const { camera, controls } = useThree();
+  const { camera, controls, invalidate } = useThree();
 
   useEffect(() => {
     const perspective = camera as THREE.PerspectiveCamera;
@@ -717,7 +718,8 @@ function TacCapCameraFit({ bounds }: { bounds: SceneBounds }) {
     };
     orbit?.target?.copy(bounds.center);
     orbit?.update?.();
-  }, [bounds, camera, controls]);
+    invalidate();
+  }, [bounds, camera, controls, invalidate]);
 
   return null;
 }
@@ -772,7 +774,7 @@ function TacCapGripperModel({
   track: TacCapGripperTrack | null;
   onReady: (side: TacCapSide) => void;
 }) {
-  const { scene } = useThree();
+  const { scene, invalidate } = useThree();
   const robotRef = useRef<URDFRobot | null>(null);
   // Recorded TCP → model root. The profile's constant assumes the
   // `same-axes-v0` frame; a `mirrored-v1` left hand is turned back into it
@@ -811,6 +813,7 @@ function TacCapGripperModel({
       }
       readyReported = true;
       onReady(side);
+      invalidate();
     };
 
     manager.onLoad = () => {
@@ -825,6 +828,7 @@ function TacCapGripperModel({
           mesh.castShadow = true;
           mesh.receiveShadow = true;
           onLoad(mesh);
+          invalidate();
           if (profile.tintFingersPerSide) {
             tintBundledGripperFinger(mesh, side);
           }
@@ -885,7 +889,7 @@ function TacCapGripperModel({
       if (robotRef.current === mountedRobot) robotRef.current = null;
       recordedTcpToRootRef.current = null;
     };
-  }, [onReady, profile, scene, side]);
+  }, [onReady, profile, scene, side, invalidate]);
 
   useLayoutEffect(() => {
     const robot = robotRef.current;
@@ -1588,6 +1592,25 @@ function TacCapGripperScene({
   );
 }
 
+/** Imperative poses must repaint on seeking, even when the render loop is idle. */
+function SceneInvalidation({
+  frame,
+  revision,
+  jointValues,
+  active,
+}: {
+  frame: number;
+  revision: string;
+  jointValues: Record<string, number>;
+  active: boolean;
+}) {
+  const invalidate = useThree((state) => state.invalidate);
+  useEffect(() => {
+    if (active) invalidate();
+  }, [active, frame, revision, jointValues, invalidate]);
+  return null;
+}
+
 // ─── Robot scene (imperative, inside Canvas) ───
 function RobotScene({
   urdfUrl,
@@ -1606,7 +1629,7 @@ function RobotScene({
   trailResetKey: string;
   scale: number;
 }) {
-  const { scene, camera, controls, size } = useThree();
+  const { scene, camera, controls, size, invalidate } = useThree();
   const robotRef = useRef<URDFRobot | null>(null);
   const tipLinksRef = useRef<THREE.Object3D[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -1872,6 +1895,7 @@ function RobotScene({
           if (!isOpenArm) c.receiveShadow = true;
         });
         robot.updateMatrixWorld(true);
+        invalidate();
 
         // Auto-fit camera: URDFs can ship world→base offsets (SO-arm does)
         // that put the robot far from origin, so a fixed camera pose crops
@@ -1977,7 +2001,16 @@ function RobotScene({
       }
       tipLinksRef.current = [];
     };
-  }, [urdfUrl, scale, scene, camera, controls, onJointsLoaded, ensureTrails]);
+  }, [
+    urdfUrl,
+    scale,
+    scene,
+    camera,
+    controls,
+    onJointsLoaded,
+    ensureTrails,
+    invalidate,
+  ]);
 
   const tipWorldPos = useMemo(() => new THREE.Vector3(), []);
 
@@ -2145,6 +2178,7 @@ export default function URDFViewer({
   seekByRef?: React.RefObject<((seconds: number) => void) | undefined>;
 }) {
   const { t, tRich } = useLocale();
+  const visible = useDocumentVisible();
   const { datasetInfo } = data;
   const fps = datasetInfo.fps || 30;
   const gripperProfile = useMemo(
@@ -2334,8 +2368,8 @@ export default function URDFViewer({
   }, [selectedEpisode]);
 
   useEffect(() => {
-    if (!active) setPlaying(false);
-  }, [active]);
+    if (!active || !visible) setPlaying(false);
+  }, [active, visible]);
 
   const handleFrameChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2377,7 +2411,8 @@ export default function URDFViewer({
   const urdfLoading = isBundledGripper
     ? !tacCapDataUnavailable && !tacCapModelsReady
     : urdfJointNames.length === 0;
-  const playbackDisabled = !active || urdfLoading || trajectoryUnavailable;
+  const playbackDisabled =
+    !active || !visible || urdfLoading || trajectoryUnavailable;
 
   useEffect(() => {
     if (playbackDisabled) setPlaying(false);
@@ -2559,7 +2594,9 @@ export default function URDFViewer({
         )}
         <Canvas
           shadows
-          frameloop={active ? "always" : "never"}
+          frameloop={
+            !active || !visible ? "never" : playing ? "always" : "demand"
+          }
           camera={{
             position: isG1
               ? [1.5, 1.0, 1.5]
@@ -2575,6 +2612,18 @@ export default function URDFViewer({
             toneMappingExposure: 0.9,
           }}
         >
+          <SceneInvalidation
+            frame={frame}
+            revision={[
+              selectedEpisode,
+              replayRevision,
+              trailEnabled,
+              tacCapModelsReady,
+              urdfJointNames.length,
+            ].join(":")}
+            jointValues={jointValues}
+            active={active && visible}
+          />
           <color attach="background" args={["#1a2433"]} />
           {/*
            * Keep the lighting self-contained. Drei's `Environment preset`
@@ -2675,7 +2724,7 @@ export default function URDFViewer({
           />
         </Canvas>
         <UrdfVideoOverlay
-          active={active}
+          active={active && visible}
           episodeTimeSeconds={replayTimeSeconds}
           playing={playing}
           replayRevision={replayRevision}

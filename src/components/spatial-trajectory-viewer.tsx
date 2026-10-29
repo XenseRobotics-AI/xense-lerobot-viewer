@@ -184,6 +184,7 @@ function TrajectoryScene({
 
   return (
     <Canvas
+      frameloop="demand"
       dpr={[1, 1.5]}
       camera={{ position: [1, 1, 1], fov: 45, near: 0.001, far: 100 }}
       gl={{ antialias: true, alpha: false }}

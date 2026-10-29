@@ -38,10 +38,10 @@ html {
 }
 
 body {
-  /* Inter carries no CJK glyphs; the fallbacks are what the Chinese UI renders
-     in. Without them the browser falls back per-glyph, usually to a serif. */
+  /* Local fonts only: starting the viewer must not download Google Fonts.
+     Keep explicit CJK fallbacks so the Chinese UI stays sans-serif. */
   font-family:
-    var(--font-inter), "Noto Sans SC", "PingFang SC", "Hiragino Sans GB",
+    Inter, Arial, "Noto Sans SC", "PingFang SC", "Hiragino Sans GB",
     "Microsoft YaHei", system-ui, sans-serif;
   background: var(--bg);
   color: var(--text-primary);

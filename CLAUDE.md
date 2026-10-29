@@ -169,7 +169,7 @@ Internally a local dataset is referred to by a `local:`-prefixed `repoId` (legac
 - `routePathFromRepoId(repoId, episodeId?)` → `/_local/<encoded>/episode_N`
 - `getLinkedHubDatasetRepoId` exists but is unused since the cloud path is gone.
 
-The browser URL for episodes is `/_local/<base64url-encoded-relative-path>/episode_N`. The on-disk directory is `src/app/%5Flocal/...` because `_` is URL-encoded in directory names.
+The browser URL for episodes is `/_local/<base64url-encoded-relative-path>/episode_N`. The on-disk directory is `src/app/viewer/...`; `next.config.ts` rewrites `/_local/:path*` to that internal route. Keep public links on `/_local`. Escaping an underscore as `%5F` in a physical route folder causes under-encoded JavaScript chunk URLs and HTTP 400 during Next 15 dev client navigation.
 
 ### File serving
 

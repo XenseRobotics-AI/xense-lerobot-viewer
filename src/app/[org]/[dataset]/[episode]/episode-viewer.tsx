@@ -1,8 +1,13 @@
 "use client";
+import {
+  matchesReviewFilter,
+  type ReviewFilter,
+} from "@/types/episode-review.types";
 
 import Link from "next/link";
 import {
   useState,
+  useMemo,
   useEffect,
   useRef,
   useCallback,
@@ -27,6 +32,11 @@ import {
 import { AnnotationsPanel } from "@/components/annotations-panel";
 import { AnnotationsTimeline } from "@/components/annotations-timeline";
 import { SubtaskPanel } from "@/components/subtask-panel";
+import {
+  EpisodeReviewsProvider,
+  useEpisodeReviews,
+} from "@/context/episode-reviews-context";
+import EpisodeReviewPanel from "@/components/episode-review-panel";
 import Sidebar from "@/components/side-nav";
 import LanguageSwitcher from "@/components/language-switcher";
 import { useLocale, useT } from "@/context/locale-context";
@@ -219,7 +229,9 @@ export default function EpisodeViewer({
   org,
   dataset,
   episodeId,
+  reviewBrowsePath,
 }: {
+  reviewBrowsePath: string;
   org: string;
   dataset: string;
   episodeId: number;
@@ -338,20 +350,26 @@ export default function EpisodeViewer({
 
   return (
     <TimeProvider duration={data!.duration} resetKey={data!.episodeId}>
-      <FlaggedEpisodesProvider>
-        <AnnotationsProvider>
-          <EpisodeBootstrap data={data!} />
-          <EpisodeViewerInner
-            data={data!}
-            org={org}
-            dataset={dataset}
-            episodeLoading={episodeLoading}
-            episodeError={error}
-            selectedEpisodeId={selectedEpisodeId}
-            onEpisodeSelect={selectEpisode}
-          />
-        </AnnotationsProvider>
-      </FlaggedEpisodesProvider>
+      <EpisodeReviewsProvider
+        key={data!.datasetInfo.repoId + reviewBrowsePath}
+        repoId={data!.datasetInfo.repoId}
+        browsePath={reviewBrowsePath}
+      >
+        <FlaggedEpisodesProvider>
+          <AnnotationsProvider>
+            <EpisodeBootstrap data={data!} />
+            <EpisodeViewerInner
+              data={data!}
+              org={org}
+              dataset={dataset}
+              episodeLoading={episodeLoading}
+              episodeError={error}
+              selectedEpisodeId={selectedEpisodeId}
+              onEpisodeSelect={selectEpisode}
+            />
+          </AnnotationsProvider>
+        </FlaggedEpisodesProvider>
+      </EpisodeReviewsProvider>
     </TimeProvider>
   );
 }
@@ -849,11 +867,28 @@ function EpisodeViewerInner({
     if (activeTab === "urdf") setUrdfMounted(true);
   }, [activeTab]);
 
+  const { file: reviewFile, reviewer } = useEpisodeReviews();
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
+  const reviewFilteredEpisodes = useMemo(
+    () =>
+      episodes.filter((episode) =>
+        matchesReviewFilter(
+          reviewFile.episodes[String(episode)] ?? [],
+          reviewFilter,
+          reviewer,
+        ),
+      ),
+    [episodes, reviewFile, reviewFilter, reviewer],
+  );
+
   // Pagination state
   const pageSize = 100;
   const [currentPage, setCurrentPage] = useState(1);
-  const totalPages = Math.ceil(episodes.length / pageSize);
-  const paginatedEpisodes = episodes.slice(
+  const totalPages = Math.max(
+    1,
+    Math.ceil(reviewFilteredEpisodes.length / pageSize),
+  );
+  const paginatedEpisodes = reviewFilteredEpisodes.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize,
   );
@@ -880,12 +915,19 @@ function EpisodeViewerInner({
 
   // Initialize page based on the current episode. Splitting this out from
   // the keyboard listener effect lets the listener attach exactly once.
+  const pagedEpisodeRef = useRef<number | null>(null);
   useEffect(() => {
-    const episodeIndex = episodes.indexOf(selectedEpisodeId);
+    if (pagedEpisodeRef.current === selectedEpisodeId) return;
+    pagedEpisodeRef.current = selectedEpisodeId;
+    const episodeIndex = reviewFilteredEpisodes.indexOf(selectedEpisodeId);
     if (episodeIndex !== -1) {
       setCurrentPage(Math.floor(episodeIndex / pageSize) + 1);
     }
-  }, [episodes, pageSize, selectedEpisodeId]);
+  }, [reviewFilteredEpisodes, pageSize, selectedEpisodeId]);
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
 
   // Mirror the values the keydown handler needs into a ref. Without this,
   // `useCallback` would produce a new handler whenever `activeTab` /
@@ -1033,6 +1075,12 @@ function EpisodeViewerInner({
           <Sidebar
             datasetInfo={datasetInfo}
             paginatedEpisodes={paginatedEpisodes}
+            reviewFilter={reviewFilter}
+            onReviewFilterChange={(filter) => {
+              setReviewFilter(filter);
+              setCurrentPage(1);
+            }}
+            reviewFilteredEpisodes={reviewFilteredEpisodes}
             episodeId={selectedEpisodeId}
             totalPages={totalPages}
             currentPage={currentPage}
@@ -1076,6 +1124,18 @@ function EpisodeViewerInner({
                 </p>
               </div>
             </div>
+          )}
+
+          {(activeTab === "episodes" || activeTab === "urdf") && (
+            <EpisodeReviewPanel
+              episodeId={episodeId}
+              source={activeTab === "urdf" ? "urdf" : "episodes"}
+              disabled={
+                episodeLoading ||
+                selectedEpisodeId !== episodeId ||
+                !!episodeError
+              }
+            />
           )}
 
           {activeTab === "episodes" && (

@@ -239,10 +239,32 @@ async function isDirectoryWithContent(dir: string): Promise<boolean> {
  * attribute another dataset's storage to this one. Apparent size is summed, not
  * allocated blocks, so a sparse file reads larger here than in `du`.
  */
+// Size scans must leave the filesystem queue available to episode/video reads.
+// Reserve slots across the whole scan, rather than per directory (which would
+// multiply concurrency at every level of a large archive).
+const SIZE_WALK_CONCURRENCY = 4;
+let sizeWalkActive = 0;
+const sizeWalkWaiting: (() => void)[] = [];
+
+async function sizeWalkIo<T>(read: () => Promise<T>): Promise<T> {
+  if (sizeWalkActive >= SIZE_WALK_CONCURRENCY) {
+    await new Promise<void>((resolve) => sizeWalkWaiting.push(resolve));
+  } else {
+    sizeWalkActive++;
+  }
+  try {
+    return await read();
+  } finally {
+    const next = sizeWalkWaiting.shift();
+    if (next) next();
+    else sizeWalkActive--;
+  }
+}
+
 export async function directorySizeBytes(dir: string): Promise<number> {
   let entries: import("node:fs").Dirent[];
   try {
-    entries = await fs.readdir(dir, { withFileTypes: true });
+    entries = await sizeWalkIo(() => fs.readdir(dir, { withFileTypes: true }));
   } catch {
     return 0; // unreadable subtree contributes nothing rather than failing the scan
   }
@@ -253,7 +275,7 @@ export async function directorySizeBytes(dir: string): Promise<number> {
       if (entry.isDirectory()) return directorySizeBytes(full);
       if (!entry.isFile()) return 0; // symlink, socket, fifo…
       try {
-        return (await fs.lstat(full)).size;
+        return (await sizeWalkIo(() => fs.lstat(full))).size;
       } catch {
         return 0; // vanished mid-scan (an export rewriting a parquet, say)
       }
@@ -456,7 +478,7 @@ export function resolveLocalDatasetRoot(): string {
  * `resolveBrowsePath` — an unknown value falls back to the root rather than
  * scanning wherever it points).
  */
-export async function discoverLocalDatasets(
+async function discoverLocalDatasetsUncached(
   requestedBrowsePath?: string,
 ): Promise<LocalDatasetsResponse> {
   let root: string;
@@ -534,4 +556,28 @@ export async function discoverLocalDatasets(
   );
 
   return { root, browsePath, locations: paths, datasets, interrupted, errors };
+}
+
+const scansInFlight = new Map<string, Promise<LocalDatasetsResponse>>();
+
+/** Concurrent page refreshes share one cold scan instead of flooding storage. */
+export async function discoverLocalDatasets(
+  requestedBrowsePath?: string,
+): Promise<LocalDatasetsResponse> {
+  let root: string;
+  try {
+    root = resolveLocalDatasetRoot();
+  } catch {
+    return discoverLocalDatasetsUncached(requestedBrowsePath);
+  }
+  const key = JSON.stringify([root, requestedBrowsePath ?? ""]);
+  const existing = scansInFlight.get(key);
+  if (existing) return existing;
+  const scan = discoverLocalDatasetsUncached(requestedBrowsePath);
+  scansInFlight.set(key, scan);
+  try {
+    return await scan;
+  } finally {
+    if (scansInFlight.get(key) === scan) scansInFlight.delete(key);
+  }
 }

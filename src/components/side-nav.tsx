@@ -3,12 +3,21 @@
 import Link from "next/link";
 import React, { useMemo, useState } from "react";
 import { useFlaggedEpisodes } from "@/context/flagged-episodes-context";
+import { useEpisodeReviews } from "@/context/episode-reviews-context";
+import {
+  reviewerCounts,
+  reviewStatus,
+  type ReviewFilter,
+} from "@/types/episode-review.types";
 import { useT } from "@/context/locale-context";
 import { routePathFromRepoId } from "@/utils/datasetRoute";
 
 import type { DatasetDisplayInfo } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 
 interface SidebarProps {
+  reviewFilter: ReviewFilter;
+  onReviewFilterChange: (value: ReviewFilter) => void;
+  reviewFilteredEpisodes: number[];
   datasetInfo: DatasetDisplayInfo;
   paginatedEpisodes: number[];
   episodeId: number;
@@ -23,6 +32,9 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({
   datasetInfo,
+  reviewFilter,
+  onReviewFilterChange,
+  reviewFilteredEpisodes,
   paginatedEpisodes,
   episodeId,
   totalPages,
@@ -35,12 +47,27 @@ const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const t = useT();
   const [mobileVisible, setMobileVisible] = useState(false);
+  const { file: reviewFile, loaded: reviewsLoaded } = useEpisodeReviews();
+  const reviewedCount = Object.values(reviewFile.episodes).filter(
+    (records) => records.length > 0,
+  ).length;
+  const countsByReviewer = useMemo(
+    () => reviewerCounts(reviewFile),
+    [reviewFile],
+  );
   const { flagged, count, toggle } = useFlaggedEpisodes();
 
   const displayEpisodes = useMemo(() => {
     if (!showFlaggedOnly || count === 0) return paginatedEpisodes;
-    return [...flagged].sort((a, b) => a - b);
-  }, [paginatedEpisodes, showFlaggedOnly, flagged, count]);
+    const allowed = new Set(reviewFilteredEpisodes);
+    return [...flagged].filter((id) => allowed.has(id)).sort((a, b) => a - b);
+  }, [
+    paginatedEpisodes,
+    showFlaggedOnly,
+    flagged,
+    count,
+    reviewFilteredEpisodes,
+  ]);
 
   return (
     <div className="flex z-10 shrink-0">
@@ -68,6 +95,60 @@ const Sidebar: React.FC<SidebarProps> = ({
           </dt>
           <dd className="text-slate-200">{datasetInfo.fps}</dd>
         </dl>
+
+        <div className="mt-4 space-y-2 text-[11px] text-slate-400">
+          <p className="text-emerald-300">
+            {reviewsLoaded
+              ? t("review.progress", {
+                  reviewed: reviewedCount,
+                  total: datasetInfo.total_episodes,
+                })
+              : t("review.loading")}
+          </p>
+          <p>
+            {t("review.crossProgress", {
+              count: Object.values(reviewFile.episodes).filter(
+                (records) => reviewStatus(records) === "crossReviewed",
+              ).length,
+            })}
+          </p>
+          <label className="block">
+            <span className="sr-only">{t("review.filter")}</span>
+            <select
+              value={reviewFilter}
+              disabled={!reviewsLoaded}
+              onChange={(event) =>
+                onReviewFilterChange(event.target.value as ReviewFilter)
+              }
+              className="w-full rounded border border-white/10 bg-[var(--surface-0)] px-2 py-1"
+            >
+              <option value="all">{t("review.filterAll")}</option>
+              <option value="reviewed">{t("review.filterReviewed")}</option>
+              <option value="unreviewed">{t("review.filterUnreviewed")}</option>
+              <option value="pending">{t("review.filterPending")}</option>
+              <option value="crossReviewed">
+                {t("review.filterCrossReviewed")}
+              </option>
+              <option value="pendingMine">
+                {t("review.filterPendingMine")}
+              </option>
+              <option value="mine">{t("review.filterMine")}</option>
+            </select>
+          </label>
+          <details>
+            <summary className="cursor-pointer">
+              {t("review.byReviewer")}
+            </summary>
+            <ul className="mt-1 space-y-1">
+              {countsByReviewer.map(([name, count]) => (
+                <li key={name} className="flex justify-between gap-2">
+                  <span className="truncate">{name}</span>
+                  <span>{count}</span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        </div>
 
         <div className="mt-5 flex items-center justify-between">
           <p className="text-[10px] uppercase tracking-wide text-slate-500">
@@ -106,6 +187,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                   */}
                   <Link
                     href={routePathFromRepoId(datasetInfo.repoId, episode)}
+                    prefetch={false}
                     data-episode-link="true"
                     onClick={
                       onEpisodeSelect
@@ -129,6 +211,28 @@ const Sidebar: React.FC<SidebarProps> = ({
                   >
                     {t("nav.episodeItem", { index: episode })}
                   </Link>
+                  {(reviewFile.episodes[String(episode)]?.length ?? 0) > 0 && (
+                    <span
+                      className="text-emerald-300"
+                      role="img"
+                      aria-label={t("review.checkedBy", {
+                        names: reviewFile.episodes[String(episode)]
+                          .map((review) => review.reviewer)
+                          .join(", "),
+                      })}
+                      title={t("review.checkedBy", {
+                        names: reviewFile.episodes[String(episode)]
+                          .map((review) => review.reviewer)
+                          .join(", "),
+                      })}
+                    >
+                      {reviewStatus(
+                        reviewFile.episodes[String(episode)] ?? [],
+                      ) === "crossReviewed"
+                        ? "✓✓"
+                        : "✓"}
+                    </span>
+                  )}
                   <button
                     onClick={() => toggle(episode)}
                     className={`text-xs leading-none transition-colors ${
@@ -147,6 +251,10 @@ const Sidebar: React.FC<SidebarProps> = ({
             );
           })}
         </ul>
+
+        {displayEpisodes.length === 0 && (
+          <p className="mt-3 text-xs text-slate-500">{t("review.noMatches")}</p>
+        )}
 
         {!showFlaggedOnly && totalPages > 1 && (
           <div className="mt-3 flex items-center gap-2 text-[10px] uppercase tracking-wide text-slate-400">

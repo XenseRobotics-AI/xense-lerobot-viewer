@@ -8,9 +8,10 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useThree } from "@react-three/fiber";
 import { Grid, Html, Line, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
+import { useDocumentVisible } from "@/hooks/use-document-visible";
 import { useT } from "@/context/locale-context";
 import {
   AxisGuide,
@@ -73,6 +74,7 @@ function formatCoordinate(value: number): string {
  */
 function useFramePlaybackTime(fps: number | undefined): number {
   const { currentTime, duration, isPlaying, subscribe } = useTime();
+  const visible = useDocumentVisible();
   const frameRate =
     Number.isFinite(fps) && (fps ?? 0) > 0 ? (fps as number) : 30;
   const snapToFrame = useCallback(
@@ -120,7 +122,7 @@ function useFramePlaybackTime(fps: number | undefined): number {
   }, [snapToFrame, subscribe]);
 
   useEffect(() => {
-    if (!isPlaying) {
+    if (!isPlaying || !visible) {
       const next = snapToFrame(currentTimeRef.current);
       setFrameTime((previous) => (previous === next ? previous : next));
       return;
@@ -148,7 +150,7 @@ function useFramePlaybackTime(fps: number | undefined): number {
 
     animationFrame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animationFrame);
-  }, [isPlaying, snapToFrame]);
+  }, [isPlaying, snapToFrame, visible]);
 
   return frameTime;
 }
@@ -245,7 +247,9 @@ function PoseOrientationFrame({
     [axes, origin, size],
   );
 
+  const invalidate = useThree((state) => state.invalidate);
   useLayoutEffect(() => {
+    invalidate();
     const positions = resources.geometry.getAttribute(
       "position",
     ) as THREE.BufferAttribute;
@@ -260,7 +264,7 @@ function PoseOrientationFrame({
     });
     positions.needsUpdate = true;
     resources.material.opacity = highlighted ? 1 : 0.8;
-  }, [endpoints, highlighted, resources, sceneOrigin]);
+  }, [endpoints, highlighted, resources, sceneOrigin, invalidate]);
 
   useEffect(
     () => () => {
@@ -335,7 +339,9 @@ function ActiveTrajectoryLine({
     };
   }, [color, points]);
 
+  const invalidate = useThree((state) => state.invalidate);
   useLayoutEffect(() => {
+    invalidate();
     resources.prefixGeometry.setDrawRange(0, playback.completedPointCount);
     resources.material.opacity = highlighted ? 1 : 0.9;
 
@@ -351,7 +357,7 @@ function ActiveTrajectoryLine({
     positions.setXYZ(0, start.x, start.y, start.z);
     positions.setXYZ(1, end[0], end[1], end[2]);
     positions.needsUpdate = true;
-  }, [highlighted, playback, points, resources]);
+  }, [highlighted, playback, points, resources, invalidate]);
 
   useEffect(
     () => () => {
@@ -499,6 +505,7 @@ function PoseScene({
 
   return (
     <Canvas
+      frameloop="demand"
       dpr={[1, 1.5]}
       camera={{ position: [1, 1, 1], fov: 45, near: 0.001, far: 100 }}
       gl={{ antialias: true, alpha: false }}

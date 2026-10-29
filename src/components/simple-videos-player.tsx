@@ -9,6 +9,7 @@ import {
   episodeTimeFromMediaTime,
   mediaTimeFromEpisodeTime,
 } from "@/utils/videoSegments";
+import { useDocumentVisible } from "@/hooks/use-document-visible";
 import { useT } from "@/context/locale-context";
 
 const THRESHOLDS = {
@@ -49,6 +50,7 @@ export const SimpleVideosPlayer = ({
   annotationOverlay = false,
 }: VideoPlayerProps) => {
   const t = useT();
+  const visible = useDocumentVisible();
   const { seek, setIsPlaying } = useTimeControls();
   const { currentTime, externalSeekVersion, isPlaying } = useTimeState();
   const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
@@ -68,6 +70,17 @@ export const SimpleVideosPlayer = ({
   while (videoRefCallbacksRef.current.length < videosInfo.length) {
     const idx = videoRefCallbacksRef.current.length;
     videoRefCallbacksRef.current.push((el: HTMLVideoElement | null) => {
+      const previous = videoRefs.current[idx];
+      if (previous && previous !== el) {
+        previous.pause();
+        // React Strict Mode can reattach the same node immediately. Only
+        // release the stream after it really left this player's ref slot.
+        queueMicrotask(() => {
+          if (videoRefs.current[idx] === previous) return;
+          previous.removeAttribute("src");
+          previous.load();
+        });
+      }
       videoRefs.current[idx] = el;
       setVideoEls((prev) => {
         if (prev[idx] === el) return prev;
@@ -116,6 +129,12 @@ export const SimpleVideosPlayer = ({
   useEffect(() => {
     onVideosReadyRef.current = onVideosReady;
   }, [onVideosReady]);
+
+  useEffect(() => {
+    if (visible) return;
+    setIsPlaying(false);
+    videoRefs.current.forEach((video) => video?.pause());
+  }, [visible, setIsPlaying]);
 
   // Initialize video refs array
   useEffect(() => {
@@ -174,7 +193,7 @@ export const SimpleVideosPlayer = ({
       resolved = true;
       setVideosReady(true);
       onVideosReadyRef.current?.();
-      setIsPlaying(true);
+      setIsPlaying(!document.hidden);
     };
 
     const checkReady = () => {
@@ -382,7 +401,7 @@ export const SimpleVideosPlayer = ({
 
     videoRefs.current.forEach((video, idx) => {
       if (!video || hiddenSet.has(videosInfo[idx].filename)) return;
-      if (isPlaying) {
+      if (isPlaying && visible) {
         video.play().catch((e) => {
           if (e.name !== "AbortError") {
             console.error("Error playing video");
@@ -392,7 +411,7 @@ export const SimpleVideosPlayer = ({
         video.pause();
       }
     });
-  }, [isPlaying, videosReady, hiddenSet, videosInfo]);
+  }, [isPlaying, videosReady, hiddenSet, videosInfo, visible]);
 
   // Drive every video to currentTime on external seeks (slider drag, chart
   // click, loop reset). The version-based check replaces a 0.3s heuristic
