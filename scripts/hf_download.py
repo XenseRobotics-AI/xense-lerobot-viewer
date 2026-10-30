@@ -18,7 +18,6 @@ import sys
 import tempfile
 import threading
 import time
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -36,7 +35,7 @@ STAGING_DIR = "hf-download-staging"
 BACKUP_DIR = "hf-download-backups"
 STATE_DIR = "hf-download-state"
 PROGRESS_REPORT_INTERVAL = 0.5
-DEFAULT_DOWNLOAD_CONCURRENCY = 4
+DEFAULT_DOWNLOAD_CONCURRENCY = 8
 MAX_DOWNLOAD_CONCURRENCY = 8
 
 
@@ -63,13 +62,11 @@ def emit(payload: dict[str, Any]) -> None:
         sys.stdout.flush()
 
 
-def _progress_tqdm_class(callback: Callable[[int], None]) -> type[Any] | None:
-    """Build a silent Hugging Face progress bar that forwards byte deltas.
-
-    ``hf_hub_download`` already streams in chunks and accepts a ``tqdm_class``
-    hook. Using that hook keeps the Hub cache, resume, and Xet support intact
-    while allowing the NDJSON stream to carry progress during a large file.
-    """
+def _progress_tqdm_class(
+    on_bytes: Callable[[int, str | None], None],
+    on_files: Callable[[int], None],
+) -> type[Any] | None:
+    """Forward snapshot-download file and byte progress without terminal bars."""
     try:
         from huggingface_hub.utils import tqdm as hf_tqdm
     except (ImportError, ModuleNotFoundError):
@@ -77,23 +74,26 @@ def _progress_tqdm_class(callback: Callable[[int], None]) -> type[Any] | None:
 
     class DownloadProgressTqdm(hf_tqdm):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            # Xet uses the same bar for reconstruction and transfer when the
-            # class exposes update_transfer. Report only transfer bytes for
-            # Xet, while regular HTTP downloads report from update().
-            name = str(kwargs.get("name") or "")
-            self._xense_is_xet = name.startswith("huggingface_hub.xet_get")
+            self._xense_is_file_counter = "Fetching" in str(kwargs.get("desc") or "")
+            self._xense_file = str(kwargs.get("desc") or "") or None
+            self._xense_name = str(kwargs.get("name") or "")
             kwargs["disable"] = True
             super().__init__(*args, **kwargs)
 
         def update(self, n: int | float = 1) -> Any:
             result = super().update(n)
-            if not self._xense_is_xet and n:
-                callback(int(n))
+            if n and self._xense_is_file_counter:
+                on_files(int(n))
+            elif n and self._xense_name in (
+                "huggingface_hub.http_get",
+                "huggingface_hub.snapshot_download.transfer",
+            ):
+                on_bytes(int(n), self._xense_file)
             return result
 
         def update_transfer(self, n: int | float = 1) -> None:
-            if self._xense_is_xet and n:
-                callback(int(n))
+            if n and self._xense_name == "huggingface_hub.xet_get":
+                on_bytes(int(n), self._xense_file)
 
     return DownloadProgressTqdm
 
@@ -388,7 +388,7 @@ def download(request: dict[str, Any], token: str | None) -> dict[str, Any]:
     actual_sha = str(getattr(info, "sha", "") or "")
     if actual_sha != expected_sha:
         raise DownloadConflict("The repository changed after it was checked. Check the download again.")
-    from huggingface_hub import hf_hub_download
+    from huggingface_hub import snapshot_download
 
     files = selected_files(list(getattr(info, "siblings", None) or []), subfolder, scope)
     if not files:
@@ -409,32 +409,28 @@ def download(request: dict[str, Any], token: str | None) -> dict[str, Any]:
     workers = min(download_concurrency(request.get("concurrency")), len(files))
     started = time.monotonic()
     progress_lock = threading.Lock()
-    downloaded_by_file: dict[str, int] = {}
-    active_files: set[str] = set()
+    bytes_done = 0
+    files_done = 0
     last_report = 0.0
 
     def progress_payload(
         current_file: str | None = None,
-        current_file_bytes: int | None = None,
-        current_file_total: int | None = None,
     ) -> dict[str, Any]:
-        bytes_done = processed + sum(downloaded_by_file.values())
         elapsed = max(time.monotonic() - started, 0.001)
         if total_known > 0:
             percent = min(99.9, round(bytes_done / total_known * 100, 1))
         else:
-            percent = round(completed / len(files) * 100, 1)
-        visible_active = sorted(active_files)[:workers]
+            percent = round(files_done / len(files) * 100, 1)
         return {
             "phase": "downloading",
-            "currentFile": current_file or (visible_active[0] if visible_active else None),
-            "filesDone": completed,
+            "currentFile": current_file,
+            "filesDone": files_done,
             "filesTotal": len(files),
             "bytes": bytes_done,
             "totalBytes": total_known,
-            "currentFileBytes": current_file_bytes,
-            "currentFileTotalBytes": current_file_total,
-            "activeFiles": visible_active,
+            "currentFileBytes": bytes_done,
+            "currentFileTotalBytes": total_known or None,
+            "activeFiles": [],
             "concurrency": workers,
             "bytesPerSecond": round(bytes_done / elapsed),
             "percent": percent,
@@ -443,8 +439,6 @@ def download(request: dict[str, Any], token: str | None) -> dict[str, Any]:
     def emit_progress(
         *,
         current_file: str | None = None,
-        current_file_bytes: int | None = None,
-        current_file_total: int | None = None,
         force: bool = False,
     ) -> None:
         nonlocal last_report
@@ -453,106 +447,65 @@ def download(request: dict[str, Any], token: str | None) -> dict[str, Any]:
             if not force and now - last_report < PROGRESS_REPORT_INTERVAL:
                 return
             last_report = now
-            payload = progress_payload(current_file, current_file_bytes, current_file_total)
+            payload = progress_payload(current_file)
         emit({"type": "progress", "progress": payload})
 
-    def download_one(entry: dict[str, Any]) -> int:
-        nonlocal processed, completed
+    def report_bytes(delta: int, remote_path: str | None) -> None:
+        nonlocal bytes_done
         if _cancelled:
-            raise DownloadCancelled("Download cancelled.")
-
-        remote_path = entry["remotePath"]
-        expected_size = entry["size"]
+            return
         with progress_lock:
-            active_files.add(remote_path)
-            downloaded_by_file[remote_path] = 0
-        emit_progress(
-            current_file=remote_path,
-            current_file_bytes=0,
-            current_file_total=expected_size,
-            force=True,
-        )
+            bytes_done += delta
+        emit_progress(current_file=remote_path)
 
-        def report_file_progress(delta: int, *, force: bool = False) -> None:
-            if _cancelled:
-                return
-            with progress_lock:
-                downloaded_by_file[remote_path] = max(
-                    0, downloaded_by_file.get(remote_path, 0) + delta
-                )
-                current_bytes = downloaded_by_file[remote_path]
-            emit_progress(
-                current_file=remote_path,
-                current_file_bytes=current_bytes,
-                current_file_total=expected_size,
-                force=force,
-            )
-
-        progress_class = _progress_tqdm_class(report_file_progress)
-        download_kwargs: dict[str, Any] = {
-            "repo_id": repo_id,
-            "filename": remote_path,
-            "repo_type": "dataset",
-            "revision": expected_sha,
-            "token": token,
-        }
-        if progress_class is not None:
-            download_kwargs["tqdm_class"] = progress_class
-        try:
-            cached = hf_hub_download(**download_kwargs)
-            if _cancelled:
-                raise DownloadCancelled("Download cancelled.")
-            local = snapshot.joinpath(*entry["localPath"].split("/"))
-            local.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(cached, local)
-            actual_size = local.stat().st_size
-            if expected_size is not None and actual_size != expected_size:
-                raise IOError(f"Size verification failed for {remote_path}.")
-
-            with progress_lock:
-                previous_file_bytes = downloaded_by_file.pop(remote_path, 0)
-                active_files.discard(remote_path)
-                processed += actual_size
-                completed += 1
-                current_file_bytes = max(previous_file_bytes, actual_size)
-                payload = progress_payload(remote_path, current_file_bytes, expected_size)
-                payload["bytes"] = processed + sum(downloaded_by_file.values())
-                payload["filesDone"] = completed
-                payload["percent"] = (
-                    round(completed / len(files) * 100, 1)
-                    if total_known <= 0
-                    else min(100, round(payload["bytes"] / total_known * 100, 1))
-                )
-        except BaseException:
-            with progress_lock:
-                downloaded_by_file.pop(remote_path, None)
-                active_files.discard(remote_path)
-            raise
-        emit({"type": "progress", "progress": payload})
-        return actual_size
+    def report_files(delta: int) -> None:
+        nonlocal files_done
+        if _cancelled:
+            return
+        with progress_lock:
+            files_done += delta
+        emit_progress()
 
     try:
         emit_progress(force=True)
-        executor = ThreadPoolExecutor(max_workers=workers)
-        pending: set[Future[int]] = set()
-        try:
-            pending = {executor.submit(download_one, entry) for entry in files}
-            while pending:
-                if _cancelled:
-                    for future in pending:
-                        future.cancel()
-                    raise DownloadCancelled("Download cancelled.")
-                done, pending = wait(
-                    pending, timeout=0.2, return_when=FIRST_COMPLETED
-                )
-                for future in done:
-                    future.result()
-        except BaseException:
-            for future in pending:
-                future.cancel()
-            raise
-        finally:
-            executor.shutdown(wait=True, cancel_futures=True)
+        if _cancelled:
+            raise DownloadCancelled("Download cancelled.")
+        progress_class = _progress_tqdm_class(report_bytes, report_files)
+        download_root = job / "remote"
+        download_root.mkdir()
+        download_kwargs: dict[str, Any] = {
+            "repo_id": repo_id,
+            "repo_type": "dataset",
+            "revision": expected_sha,
+            "token": token,
+            "allow_patterns": [entry["remotePath"] for entry in files],
+            "local_dir": str(download_root),
+            "max_workers": workers,
+        }
+        if progress_class is not None:
+            download_kwargs["tqdm_class"] = progress_class
+        snapshot_download(**download_kwargs)
+        if _cancelled:
+            raise DownloadCancelled("Download cancelled.")
+
+        for entry in files:
+            remote_path = entry["remotePath"]
+            local = download_root.joinpath(*remote_path.split("/"))
+            if not local.is_file():
+                raise IOError(f"Downloaded file is missing: {remote_path}.")
+            actual_size = local.stat().st_size
+            if entry["size"] is not None and actual_size != entry["size"]:
+                raise IOError(f"Size verification failed for {remote_path}.")
+            staged = snapshot.joinpath(*entry["localPath"].split("/"))
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(local, staged)
+            processed += actual_size
+            completed += 1
+
+        with progress_lock:
+            bytes_done = processed
+            files_done = completed
+        emit_progress(force=True)
 
         if _cancelled:
             raise DownloadCancelled("Download cancelled.")

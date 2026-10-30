@@ -23,7 +23,7 @@ import type {
 const SOURCE =
   /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)?$/u;
 const CHECK_TIMEOUT_MS = 120_000;
-export const DEFAULT_HF_DOWNLOAD_CONCURRENCY = 4;
+export const DEFAULT_HF_DOWNLOAD_CONCURRENCY = 8;
 export const MAX_HF_DOWNLOAD_CONCURRENCY = 8;
 
 export type ParsedHfDownloadRequest = Omit<HfDownloadRequest, "token"> & {
@@ -128,7 +128,7 @@ export async function parseHfDownloadRequest(
 
 export async function hfDownloadPython(): Promise<string> {
   try {
-    return (await resolvePython(["huggingface_hub"])).bin;
+    return (await resolvePython(["huggingface_hub", "hf_xet"])).bin;
   } catch (error) {
     throw new Error(
       error instanceof PythonUnavailableError ? error.message : String(error),
@@ -147,6 +147,8 @@ export function spawnHfDownload(
     {
       ...pythonSpawnEnv(),
       HF_ENDPOINT: request.endpoint,
+      HF_HUB_DISABLE_XET:
+        request.endpoint === "https://hf-mirror.com" ? "1" : "0",
       ...(request.token ? { XENSE_HF_TOKEN: request.token } : {}),
     } as NodeJS.ProcessEnv,
     request.endpoint,

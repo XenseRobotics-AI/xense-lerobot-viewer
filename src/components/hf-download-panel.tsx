@@ -77,7 +77,7 @@ const SOURCE =
   /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)?$/u;
 const MODELSCOPE_SOURCE =
   /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)+$/u;
-const DEFAULT_DOWNLOAD_CONCURRENCY = 4;
+const DEFAULT_DOWNLOAD_CONCURRENCY = 8;
 const MIN_DOWNLOAD_CONCURRENCY = 1;
 const MAX_DOWNLOAD_CONCURRENCY = 8;
 const DEFAULT_QUEUE_CONCURRENCY = 2;
