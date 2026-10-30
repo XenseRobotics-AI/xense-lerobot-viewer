@@ -39,7 +39,6 @@ import {
 import EpisodeReviewPanel from "@/components/episode-review-panel";
 import Sidebar from "@/components/side-nav";
 import EpisodeListLoading from "@/components/episode-list-loading";
-import { useDocumentVisible } from "@/hooks/use-document-visible";
 import LanguageSwitcher from "@/components/language-switcher";
 import { useLocale, useT } from "@/context/locale-context";
 import StatsPanel from "@/components/stats-panel";
@@ -50,7 +49,6 @@ import {
   computeColumnMinMax,
   getEpisodeDataSafe,
   getEpisodeList,
-  warmEpisodeListMetadata,
   loadAllEpisodeLengthsV3,
   loadAllEpisodeFrameInfo,
   loadCrossEpisodeActionVariance,
@@ -919,48 +917,6 @@ function EpisodeViewerInner({
     (currentPage - 1) * pageSize,
     currentPage * pageSize,
   );
-  const documentVisible = useDocumentVisible();
-  const preloadPageKey = paginatedEpisodes.join(",");
-  useEffect(() => {
-    if (!documentVisible || episodeTransitioning || !videosReady) return;
-    const connection = (
-      navigator as Navigator & {
-        connection?: { saveData?: boolean; effectiveType?: string };
-      }
-    ).connection;
-    if (
-      navigator.onLine === false ||
-      connection?.saveData ||
-      ["slow-2g", "2g"].includes(connection?.effectiveType ?? "")
-    )
-      return;
-    let disposed = false;
-    const run = () => {
-      void warmEpisodeListMetadata(
-        datasetInfo.repoId,
-        datasetInfo.codebase_version,
-        preloadPageKey.split(",").filter(Boolean).map(Number),
-        () => !disposed && !document.hidden,
-      ).catch(() => undefined);
-    };
-    const idle = typeof window.requestIdleCallback === "function";
-    const handle = idle
-      ? window.requestIdleCallback(run)
-      : window.setTimeout(run, 750);
-    return () => {
-      disposed = true;
-      if (idle) window.cancelIdleCallback(handle);
-      else window.clearTimeout(handle);
-    };
-  }, [
-    datasetInfo.repoId,
-    datasetInfo.codebase_version,
-    documentVisible,
-    episodeTransitioning,
-    videosReady,
-    preloadPageKey,
-  ]);
-
   // Apply a URL time only after the route and loaded episode agree. Without
   // this guard, a paused `?t=` from the previous episode can issue a second
   // seek while the new media is already decoding its first frame.
@@ -1141,6 +1097,19 @@ function EpisodeViewerInner({
           activeTab === "annotations" ||
           activeTab === "urdf") && (
           <Sidebar
+            preload={
+              org && dataset
+                ? {
+                    org,
+                    dataset,
+                    enabled:
+                      !episodeTransitioning &&
+                      !episodeError &&
+                      videosReady &&
+                      (activeTab === "episodes" || activeTab === "urdf"),
+                  }
+                : undefined
+            }
             reviewPanel={
               activeTab === "episodes" || activeTab === "urdf" ? (
                 <EpisodeReviewPanel

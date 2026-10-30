@@ -1,10 +1,10 @@
 import {
   asyncBufferFromUrl,
-  cachedAsyncBuffer,
   parquetRead,
   parquetReadObjects,
   type AsyncBuffer,
 } from "hyparquet";
+import { ParquetBufferCache } from "./parquetBufferCache";
 
 export interface DatasetMetadata {
   codebase_version: string;
@@ -50,19 +50,42 @@ export function formatStringWithVars(
 // Fetch and parse the Parquet file
 type ParquetFile = ArrayBuffer | AsyncBuffer;
 
-const parquetFileCache = new Map<string, AsyncBuffer>();
+const parquetFileCache = new ParquetBufferCache({
+  open: async (url) => {
+    const { byteLength } = await asyncBufferFromUrl({
+      url,
+      requestInit: { cache: "no-store" },
+    });
+    return {
+      byteLength,
+      // Do not retain a hidden whole-file fallback inside asyncBufferFromUrl.
+      async slice(start, end = byteLength) {
+        const res = await fetch(url, {
+          cache: "no-store",
+          headers: { Range: "bytes=" + start + "-" + (end - 1) },
+        });
+        if (!res.ok)
+          throw new Error("Failed to fetch parquet range: " + res.status);
+        const data = await res.arrayBuffer();
+        if (res.status === 200) {
+          if (data.byteLength !== byteLength)
+            throw new Error("Invalid parquet full-file response");
+          return data.slice(start, end);
+        }
+        if (res.status !== 206 || data.byteLength !== end - start)
+          throw new Error("Invalid parquet range response");
+        return data;
+      },
+    };
+  },
+});
+
+export function pruneParquetCache(): void {
+  parquetFileCache.prune();
+}
 
 export async function fetchParquetFile(url: string): Promise<ParquetFile> {
-  const cached = parquetFileCache.get(url);
-  if (cached) return cached;
-
-  const file = await asyncBufferFromUrl({
-    url,
-    requestInit: { cache: "no-store" },
-  });
-  const wrapped = cachedAsyncBuffer(file);
-  parquetFileCache.set(url, wrapped);
-  return wrapped;
+  return parquetFileCache.get(url);
 }
 
 // Read specific columns from the Parquet file

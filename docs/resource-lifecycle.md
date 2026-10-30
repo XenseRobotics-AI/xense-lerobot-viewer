@@ -101,11 +101,51 @@ The episode index list is prepared from info.json independently of full episode
 loading and appears while the selected episode's data is loading. Concurrent list
 and episode consumers share the same metadata request, including body consumption;
 failed requests are removed from the in-flight map. Index arrays are reused.
-After foreground media is ready, idle work warms the current page's already-fetched
-metadata in small yielding batches (at most 100 selected episodes). It never
-starts extra video or data-Parquet downloads. Hidden/offline/data-saving/2G states
-skip new background work. Episode changes cancel queued idle callbacks; already
-shared data is retained and browsing/marking never waits for the warm-up.
+After foreground media is ready and playback is paused, an IntersectionObserver
+rooted in the sidebar scroll container selects only episode links actually on
+screen. After 800 ms without scroll/navigation/input, requestIdleCallback starts
+one background episode read, nearest to the active episode first. Browsers without
+that API use the delayed callback. This warms parsed chart/pose data and metadata,
+not adjacent MP4s or every route rendered on the page. The preloader is a leaf
+subscriber so its visibility/playback updates do not redraw the viewer.
+
+Foreground reads have priority: a different episode starts immediately and the
+same episode joins an existing read. Hidden/offline/data-saving/2G states skip
+new work. Visibility changes and input cancel queued callbacks only; already
+shared reads finish normally. Obsolete scope completions cannot populate another
+dataset's cache. Failed preloads do not enter the visible episode's error state or
+create quality marks, and a later foreground read can retry. The preloader never
+owns a review save or its cancellation.
+
+Parsed recent data is bounded to 8 entries and an estimated 192 MiB, protecting the
+active episode if it alone exceeds that estimate. Background results have their
+own 24-entry / estimated 128 MiB budget and cannot evict foreground history.
+Offscreen entries within 2 episodes have 10-minute expiry, those within 12 have
+4 minutes, and more distant/other-dataset entries have 1 minute. Age pruning
+runs every 30 seconds; visible/current entries are protected from age eviction,
+and capacity pressure releases distant offscreen entries sooner. Cleanup is also
+scheduled after leaving the viewer. Periods and byte budgets are centralized in
+src/utils/episodeCachePolicy.ts; capacity eviction is immediate even with the
+longer retention. These limits bound retained caches, not
+transient decodes, mounted views, browser video buffers or total process memory.
+Budgets cap retained in-memory data per browser tab across datasets; they are
+not preallocated memory, dataset/file-size limits, disk quotas or cumulative
+network-read limits. Raising byte budgets does not raise the entry limits or
+background concurrency.
+
+The shared raw Parquet cache independently caps 16 handles, 512 ranges and 128 MiB
+across all files, with 10-minute idle expiry. Equivalent suffix/range requests
+and concurrent file opens share reads. Failed requests are removed. Eviction only
+releases cache references and never closes or cancels an active consumer. Endpoints
+returning a full file instead of 206 do not retain an extra unbounded hidden copy.
+
+Regression checks use the actual sidebar, IntersectionObserver, time/visibility
+providers and V2/V3 Parquet decoders in Chrome: only visible links are warmed,
+rapid scrolling defers work, media readiness and playback gate background reads,
+cache hits avoid duplicate fetches, foreground switches bypass background work,
+and hiding the tab lets the in-flight request finish without starting another.
+Unit tests cover distance expiry, cache capacity, failed-read retries, same-key
+promotion, scope changes and 1,000 episode / 500 file switching cycles.
 
 ## Review write locks and old-version interoperability
 

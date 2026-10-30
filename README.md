@@ -105,6 +105,40 @@ Hiding the browser tab pauses playback without automatically resuming it on
 return. Offscreen previews and unmounted videos release their media sources;
 metadata/parquet loading for the active episode is not throttled away.
 
+When playback is paused and the active media is ready, Episodes and 3D Replay
+warm parsed chart/pose data for episode links actually visible in the sidebar.
+After 800 ms without navigation/scroll/input, browser idle time starts one
+background episode at a time, nearest to the current episode first. Hidden tabs,
+offline connections, data saver and 2G stop new background work. Existing reads
+finish normally; selecting the same episode joins its read, and selecting another
+episode starts immediately. Preloading never creates inspection marks and does
+not download adjacent videos or prefetch every route on the page.
+
+Parsed foreground history is limited to 8 episodes / an estimated 192 MiB; the
+active episode stays usable even if it alone exceeds the byte budget. A separate
+background cache holds at most 24 episodes / an estimated 128 MiB. Once offscreen,
+entries within 2 episodes expire after 10 minutes, within 12 after 4 minutes,
+and farther away or in another dataset after 1 minute. Pruning runs every
+30 seconds; capacity pressure releases distant offscreen entries sooner. Visible
+and current entries remain protected from age eviction. Leaving the viewer
+also schedules cleanup. Parquet file handles and shared raw byte ranges are
+independently limited to 16 files / 512 ranges / 128 MiB, with 10-minute idle
+expiry. These are cache budgets, not a cap on total browser memory or active
+decoding/video buffers. Failed byte reads are retryable and never cached forever.
+Retention, cleanup periods and byte budgets are centralized in
+src/utils/episodeCachePolicy.ts. Count limits are unchanged when byte budgets
+are raised; caches allocate only when data is read, not up front.
+These limits are shared across datasets in one browser tab, independently of
+other tabs or machines. Counts and bytes are simultaneous limits: reaching
+either triggers capacity eviction without waiting for age expiry. Parsed-data
+bytes use a sampled object-size estimate (chart/pose rows, timestamp arrays and
+language content), not a browser heap measurement. Raw Parquet bytes use actual
+ArrayBuffer.byteLength, shared across files rather than allocated per file.
+Byte budgets apply to retained in-memory data, not dataset size, file-size
+access limits, disk usage or cumulative network traffic. A speculative episode
+larger than its whole budget is not retained. Video,
+GPU/3D resources, mounted views and in-flight decodes are outside these budgets.
+
 ## Features
 
 - **Local dataset browser**: the homepage lists every LeRobot dataset under your local root with a video preview and metadata badge (robot type, codebase version, episode count). Filter by name, robot type, or **dataset tags** (see below). Source cards name the robot types they hold, and each dataset card shows its shape (`20-dim + 7 streams`) — amber when that shape contradicts the dataset's declared `robot_type`, which is how a half-configured capture gets caught.
