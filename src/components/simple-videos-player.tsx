@@ -10,6 +10,8 @@ import { seekVideoWithFrameGate } from "@/utils/videoFramePresentation";
 import {
   episodeTimeFromMediaTime,
   mediaTimeFromEpisodeTime,
+  videoSegmentEnd,
+  videoSegmentStart,
 } from "@/utils/videoSegments";
 import { useDocumentVisible } from "@/hooks/use-document-visible";
 import { useT } from "@/context/locale-context";
@@ -223,7 +225,7 @@ export const SimpleVideosPlayer = ({
         if (!other) return;
         const otherInfo = videosInfo[otherIdx];
         if (!otherInfo) return;
-        seekVideoWithFrameGate(other, otherInfo.segmentStart ?? 0);
+        seekVideoWithFrameGate(other, videoSegmentStart(otherInfo));
       });
       // Update the slider as a status report — don't bump externalSeekVersion
       // since we already drove every video to its target.
@@ -244,8 +246,8 @@ export const SimpleVideosPlayer = ({
       // (b) reporting the primary video's currentTime back to the context
       const handleTimeUpdate = () => {
         if (info.isSegmented) {
-          const segmentEnd = info.segmentEnd ?? video.duration;
-          const segmentStart = info.segmentStart ?? 0;
+          const segmentEnd = videoSegmentEnd(info) ?? video.duration;
+          const segmentStart = videoSegmentStart(info);
           if (
             video.currentTime >=
             segmentEnd - THRESHOLDS.VIDEO_SEGMENT_BOUNDARY
@@ -275,8 +277,8 @@ export const SimpleVideosPlayer = ({
       // — covers the case where the user paused outside the segment range.
       const handlePlay = info.isSegmented
         ? () => {
-            const segmentStart = info.segmentStart ?? 0;
-            const segmentEnd = info.segmentEnd ?? video.duration;
+            const segmentStart = videoSegmentStart(info);
+            const segmentEnd = videoSegmentEnd(info) ?? video.duration;
             if (
               video.currentTime < segmentStart ||
               video.currentTime >= segmentEnd
@@ -417,16 +419,23 @@ export const SimpleVideosPlayer = ({
     videoRefs.current.forEach((video, idx) => {
       if (!video || hiddenSet.has(videosInfo[idx].filename)) return;
       if (isPlaying && visible) {
-        video.play().catch((e) => {
-          if (e.name !== "AbortError") {
-            console.error("Error playing video");
-          }
+        void video.play().catch((error: unknown) => {
+          if (
+            error &&
+            typeof error === "object" &&
+            "name" in error &&
+            error.name === "AbortError"
+          )
+            return;
+          // Keep the global control truthful when a browser rejects playback
+          // (codec, policy, or a stream that failed between ready and play).
+          setIsPlaying(false);
         });
       } else {
         video.pause();
       }
     });
-  }, [isPlaying, videosReady, hiddenSet, videosInfo, visible]);
+  }, [isPlaying, videosReady, hiddenSet, videosInfo, visible, setIsPlaying]);
 
   // Drive every video to currentTime on external seeks (slider drag, chart
   // click, loop reset). The version-based check replaces a 0.3s heuristic

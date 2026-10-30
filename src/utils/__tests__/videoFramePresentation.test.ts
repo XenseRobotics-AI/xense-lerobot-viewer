@@ -215,4 +215,12 @@ describe("video frame presentation", () => {
     paintTwoFrames();
     expect(states).toHaveLength(count);
   });
+
+  test("reports an invalid source as a controlled media error", () => {
+    const { video, states, presentation, load } = setup();
+    load("   ", "dataset-a:episode-invalid");
+    expect(video.loads).toBe(0);
+    expect(states.at(-1)?.phase).toBe("error");
+    presentation.dispose();
+  });
 });

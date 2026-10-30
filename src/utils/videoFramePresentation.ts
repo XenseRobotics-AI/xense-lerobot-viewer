@@ -83,9 +83,8 @@ export class VideoFramePresentation {
         return;
       }
       this.video.pause();
-      // Keep the visible element buffering its first playable segment while
-      // the poster covers it. This lets play() continue the same media load
-      // instead of starting a second request after the warm frame.
+      // Keep the visible element buffering its first playable segment so play()
+      // can continue the same media load without a second initialization.
       this.video.preload = "auto";
       if (this.video.src !== absoluteSource) {
         this.video.src = source;
