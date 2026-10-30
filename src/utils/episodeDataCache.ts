@@ -1,4 +1,5 @@
 import { touchLru } from "./lruCache";
+import { EPISODE_CACHE_POLICY } from "./episodeCachePolicy";
 
 export type EpisodeLoadResult<T> = { data?: T; error?: string };
 type Pending<T> = {
@@ -77,7 +78,12 @@ export class EpisodeDataCache<T> {
       for (const [key, entry] of cache) {
         if (key === this.currentKey || this.targets.has(key)) continue;
         const distance = this.distance(key);
-        const ttl = distance <= 2 ? 120_000 : distance <= 12 ? 45_000 : 10_000;
+        const ttl =
+          distance <= 2
+            ? EPISODE_CACHE_POLICY.nearTtlMs
+            : distance <= 12
+              ? EPISODE_CACHE_POLICY.midTtlMs
+              : EPISODE_CACHE_POLICY.farTtlMs;
         if (now - entry.touched >= ttl) {
           cache.delete(key);
           if (cache === this.prefetched) this.prefetchBytes -= entry.bytes;

@@ -1,4 +1,5 @@
 import type { AsyncBuffer } from "hyparquet";
+import { EPISODE_CACHE_POLICY } from "./episodeCachePolicy";
 
 /** Limits retained bytes across every open file; active readers own their results. */
 export class ParquetBufferCache {
@@ -53,7 +54,8 @@ export class ParquetBufferCache {
   }
 
   prune() {
-    const threshold = this.now() - (this.options.ttl ?? 120_000);
+    const threshold =
+      this.now() - (this.options.ttl ?? EPISODE_CACHE_POLICY.parquetIdleTtlMs);
     for (const [url, entry] of this.files)
       if (entry.touched <= threshold) this.removeFile(url, entry.id);
     for (const [key, entry] of this.ranges)

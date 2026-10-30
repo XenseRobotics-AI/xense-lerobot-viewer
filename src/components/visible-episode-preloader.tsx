@@ -3,6 +3,7 @@
 import { useEffect, useState, type RefObject } from "react";
 import { useTimeState } from "@/context/time-context";
 import { useDocumentVisible } from "@/hooks/use-document-visible";
+import { EPISODE_CACHE_POLICY } from "@/utils/episodeCachePolicy";
 import {
   canPrefetchEpisode,
   episodePrefetchBusy,
@@ -105,7 +106,10 @@ export default function VisibleEpisodePreloader({
   );
 
   useEffect(() => {
-    const timer = setInterval(pruneEpisodeDataCache, 15_000);
+    const timer = setInterval(
+      pruneEpisodeDataCache,
+      EPISODE_CACHE_POLICY.pruneIntervalMs,
+    );
     return () => clearInterval(timer);
   }, []);
 

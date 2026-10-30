@@ -117,14 +117,16 @@ not download adjacent videos or prefetch every route on the page.
 Parsed foreground history is limited to 8 episodes / an estimated 96 MiB; the
 active episode stays usable even if it alone exceeds the byte budget. A separate
 background cache holds at most 24 episodes / an estimated 64 MiB. Once offscreen,
-entries within 2 episodes expire after 120 seconds, within 12 after 45 seconds,
-and farther away or in another dataset after 10 seconds. Pruning runs every
-15 seconds; capacity pressure releases distant offscreen entries sooner. Visible
+entries within 2 episodes expire after 5 minutes, within 12 after 2 minutes,
+and farther away or in another dataset after 30 seconds. Pruning runs every
+30 seconds; capacity pressure releases distant offscreen entries sooner. Visible
 and current entries remain protected from age eviction. Leaving the viewer
 also schedules cleanup. Parquet file handles and shared raw byte ranges are
-independently limited to 16 files / 512 ranges / 64 MiB, with 120-second idle
+independently limited to 16 files / 512 ranges / 64 MiB, with 5-minute idle
 expiry. These are cache budgets, not a cap on total browser memory or active
 decoding/video buffers. Failed byte reads are retryable and never cached forever.
+Retention and cleanup periods are centralized in src/utils/episodeCachePolicy.ts;
+longer retention does not increase the count or byte budgets.
 
 ## Features
 

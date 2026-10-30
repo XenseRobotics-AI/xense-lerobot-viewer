@@ -29,6 +29,7 @@ import {
 import { buildPoseVelocityChartGroups } from "@/utils/poseVelocity";
 import { evenlySampleArray, evenlySampleIndices } from "@/utils/sampling";
 import { rememberInLru, touchLru } from "@/utils/lruCache";
+import { EPISODE_CACHE_POLICY } from "@/utils/episodeCachePolicy";
 import {
   EpisodeDataCache,
   estimateEpisodeBytes,
@@ -291,9 +292,10 @@ export function setEpisodePrefetchTargets(
     // React installs the new target lease before releasing its predecessor.
     queueMicrotask(() => {
       if (release())
-        inactiveCacheTimers = [11_000, 121_000].map((delay) =>
-          setTimeout(pruneEpisodeDataCache, delay),
-        );
+        inactiveCacheTimers = [
+          EPISODE_CACHE_POLICY.farTtlMs + 1_000,
+          EPISODE_CACHE_POLICY.parquetIdleTtlMs + 1_000,
+        ].map((delay) => setTimeout(pruneEpisodeDataCache, delay));
     });
   };
 }
