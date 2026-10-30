@@ -121,26 +121,26 @@ describe("episode data cache", () => {
     expect(await cache.get("2", async () => 99)).toEqual({ data: 8 });
   });
 
-  test("offscreen distance tiers expire after 30 / 120 / 300 seconds", async () => {
+  test("offscreen distance tiers expire after 60 / 240 / 600 seconds", async () => {
     let now = 0;
     const cache = make({ now: () => now });
     cache.setTargets(["1", "8", "80"], "0");
     for (const id of ["1", "8", "80"]) await cache.prefetch(id, async () => 5);
     now = 30_000;
     cache.setTargets([], "0");
-    now += 29_999;
+    now += 59_999;
     cache.prune();
     expect(cache.stats.prefetchEntries).toBe(3);
     now += 1;
     cache.prune();
     expect(cache.stats.prefetchEntries).toBe(2);
-    now += 89_999;
+    now += 179_999;
     cache.prune();
     expect(cache.stats.prefetchEntries).toBe(2);
     now += 1;
     cache.prune();
     expect(cache.stats.prefetchEntries).toBe(1);
-    now += 179_999;
+    now += 359_999;
     cache.prune();
     expect(cache.stats.prefetchEntries).toBe(1);
     now += 1;
@@ -150,9 +150,9 @@ describe("episode data cache", () => {
 
   test("revisiting within the extended grace period avoids fetching again", async () => {
     for (const [id, elapsed] of [
-      ["1", 240_000],
-      ["8", 90_000],
-      ["80", 20_000],
+      ["1", 480_000],
+      ["8", 180_000],
+      ["80", 45_000],
     ] as const) {
       let now = 0;
       const cache = make({ now: () => now });
@@ -204,7 +204,7 @@ describe("episode data cache", () => {
       expect(cache.stats.prefetchBytes).toBeLessThanOrEqual(30);
     }
     cache.setTargets([])();
-    now += 31_000;
+    now += 61_000;
     cache.prune();
     expect(cache.stats.recentEntries + cache.stats.prefetchEntries).toBe(0);
   });

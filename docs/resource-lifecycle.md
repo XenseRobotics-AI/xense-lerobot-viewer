@@ -120,8 +120,8 @@ owns a review save or its cancellation.
 Parsed recent data is bounded to 8 entries and an estimated 96 MiB, protecting the
 active episode if it alone exceeds that estimate. Background results have their
 own 24-entry / estimated 64 MiB budget and cannot evict foreground history.
-Offscreen entries within 2 episodes have 5-minute expiry, those within 12 have
-2 minutes, and more distant/other-dataset entries have 30 seconds. Age pruning
+Offscreen entries within 2 episodes have 10-minute expiry, those within 12 have
+4 minutes, and more distant/other-dataset entries have 1 minute. Age pruning
 runs every 30 seconds; visible/current entries are protected from age eviction,
 and capacity pressure releases distant offscreen entries sooner. Cleanup is also
 scheduled after leaving the viewer. Periods are centralized in
@@ -130,7 +130,7 @@ longer retention. These limits bound retained caches, not
 transient decodes, mounted views, browser video buffers or total process memory.
 
 The shared raw Parquet cache independently caps 16 handles, 512 ranges and 64 MiB
-across all files, with 5-minute idle expiry. Equivalent suffix/range requests
+across all files, with 10-minute idle expiry. Equivalent suffix/range requests
 and concurrent file opens share reads. Failed requests are removed. Eviction only
 releases cache references and never closes or cancels an active consumer. Endpoints
 returning a full file instead of 206 do not retain an extra unbounded hidden copy.

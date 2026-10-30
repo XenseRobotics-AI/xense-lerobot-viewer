@@ -122,11 +122,11 @@ describe("bounded parquet buffer cache", () => {
     expect([...new Uint8Array(await file.slice(-4))]).toEqual([28, 29, 30, 31]);
     expect((await file.slice(2, 6)).byteLength).toBe(4);
     expect(reads).toBe(1);
-    now = 180_000;
+    now = 360_000;
     cache.prune();
     expect(cache.stats.bytes).toBe(32);
     expect(cache.stats.files).toBe(1);
-    now = 300_000;
+    now = 600_000;
     cache.prune();
     expect(cache.stats.bytes).toBe(0);
     expect(cache.stats.files).toBe(0);
