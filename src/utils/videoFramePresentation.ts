@@ -78,7 +78,10 @@ export class VideoFramePresentation {
       this.source = source;
       this.identity = identity;
       this.video.pause();
-      this.video.preload = "metadata";
+      // Keep the visible element buffering its first playable segment while
+      // the poster covers it. This lets play() continue the same media load
+      // instead of starting a second request after the warm frame.
+      this.video.preload = "auto";
       if (
         this.video.src !==
         new URL(source, this.video.ownerDocument.baseURI).href

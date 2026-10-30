@@ -104,7 +104,7 @@ export function FirstFrameVideo({
         onLoadedMetadata={onLoadedMetadata}
         muted
         playsInline
-        preload="metadata"
+        preload="auto"
       >
         {t("player.noVideoTag")}
       </video>

@@ -176,8 +176,9 @@ export const SimpleVideosPlayer = ({
     });
   }, [episodeId, loading, videosInfo]);
 
-  // Handle videos ready — with a timeout fallback so the UI never hangs
-  // if a video fails to reach canplaythrough (e.g. network stall).
+  // Handle videos ready after each stream has a decoded frame. Waiting for
+  // canplaythrough made the first click appear to refresh the page because
+  // playback was held until the browser estimated the entire file was ready.
   useEffect(() => {
     let cancelled = false;
     if (loading) {
@@ -356,10 +357,10 @@ export const SimpleVideosPlayer = ({
         }
         queueMicrotask(handleSegmentReady);
       } else if (!info.isSegmented) {
-        if (video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
+        video.addEventListener("loadeddata", checkReady);
+        video.addEventListener("canplay", checkReady);
+        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
           queueMicrotask(checkReady);
-        } else {
-          video.addEventListener("canplaythrough", checkReady, { once: true });
         }
       }
 
@@ -372,7 +373,8 @@ export const SimpleVideosPlayer = ({
           video.removeEventListener("seeked", handleSegmentReady);
         }
         if (handleEnded) video.removeEventListener("ended", handleEnded);
-        video.removeEventListener("canplaythrough", checkReady);
+        video.removeEventListener("loadeddata", checkReady);
+        video.removeEventListener("canplay", checkReady);
       });
     });
 
