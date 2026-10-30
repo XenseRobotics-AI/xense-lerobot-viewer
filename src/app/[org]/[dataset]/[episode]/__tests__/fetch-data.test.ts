@@ -3,8 +3,63 @@ import {
   buildEpisodeChartTimestamps,
   computeColumnMinMax,
   isChartableNumericFeature,
+  processEpisodeDataForCharts,
 } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import type { ChartRow } from "@/app/[org]/[dataset]/[episode]/fetch-data";
+import type { DatasetMetadata } from "@/utils/parquetUtils";
+import { evenlySampleIndices } from "@/utils/sampling";
+
+test("normal charts flatten only displayed rows and preserve the source timestamps and endpoints", () => {
+  let reads = 0;
+  const rows = Array.from({ length: 6000 }, (_, i) => ({
+    timestamp: 100 + i / 30,
+    get action() {
+      reads++;
+      return [i, i * 2];
+    },
+  }));
+  const info = {
+    fps: 30,
+    features: {
+      action: { dtype: "float64", shape: [2], names: ["joint0", "joint1"] },
+    },
+  } as unknown as DatasetMetadata;
+  const result = processEpisodeDataForCharts(rows, info);
+  const indices = evenlySampleIndices(rows.length, 4000);
+  expect(result.flatChartData.map((r) => r["action | joint0"])).toEqual(
+    indices,
+  );
+  expect(result.flatChartData.at(-1)?.timestamp).toBeCloseTo(5999 / 30, 8);
+  expect(reads).toBeLessThan(5000);
+  expect(result.velocityChartDataGroups).toEqual([]);
+});
+test("pose velocity retains original adjacent frames before display sampling", () => {
+  const rows = Array.from({ length: 6000 }, (_, i) => ({
+    timestamp: i / 30,
+    action: [(i * i) / 1000, 0, 0],
+  }));
+  const info = {
+    fps: 30,
+    features: {
+      action: {
+        dtype: "float64",
+        shape: [3],
+        names: ["left_tcp.x", "left_tcp.y", "left_tcp.z"],
+      },
+    },
+  } as unknown as DatasetMetadata;
+  const result = processEpisodeDataForCharts(rows, info);
+  const indices = evenlySampleIndices(rows.length, 4000);
+  const original = indices[2000];
+  const velocity = result.velocityChartDataGroups[0][2000][
+    "left_tcp.vx (m/s)"
+  ] as Record<string, number>;
+  expect(velocity.action).toBeCloseTo(
+    ((original * original - (original - 1) ** 2) / 1000) * 30,
+    6,
+  );
+  expect(result.flatChartData).toHaveLength(4000);
+});
 
 // ---------------------------------------------------------------------------
 // Feature dtype detection

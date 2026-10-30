@@ -10,6 +10,7 @@ import {
   prefetchEpisodeDataSafe,
   pruneEpisodeDataCache,
   setEpisodePrefetchTargets,
+  warmEpisodeDecoder,
 } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 
 export interface EpisodePreloadOptions {
@@ -137,6 +138,7 @@ export default function VisibleEpisodePreloader({
     let timer: ReturnType<typeof setTimeout> | undefined;
     let idle: number | undefined;
     let running = false;
+    let lastActivity = performance.now();
     const cancelQueued = () => {
       clearTimeout(timer);
       if (idle !== undefined) window.cancelIdleCallback(idle);
@@ -144,16 +146,21 @@ export default function VisibleEpisodePreloader({
     };
     const schedule = () => {
       cancelQueued();
-      if (!disposed && !running && allowed())
-        timer = setTimeout(() => {
-          if (typeof window.requestIdleCallback === "function")
-            idle = window.requestIdleCallback((deadline) => {
-              idle = undefined;
-              if (deadline.timeRemaining() >= 8) void run();
-              else schedule();
-            });
-          else void run();
-        }, 800);
+      if (!disposed && !running && allowed()) {
+        warmEpisodeDecoder();
+        timer = setTimeout(
+          () => {
+            if (typeof window.requestIdleCallback === "function")
+              idle = window.requestIdleCallback((deadline) => {
+                idle = undefined;
+                if (deadline.timeRemaining() >= 8) void run();
+                else schedule();
+              });
+            else void run();
+          },
+          Math.max(50, 350 - (performance.now() - lastActivity)),
+        );
+      }
     };
     const run = async () => {
       if (disposed || !allowed()) return;
@@ -174,6 +181,7 @@ export default function VisibleEpisodePreloader({
     };
     // Activity postpones queued work only. It never aborts shared reads or writes.
     const activity = () => {
+      lastActivity = performance.now();
       schedule();
     };
     const list = listRef.current;

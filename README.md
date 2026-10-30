@@ -107,8 +107,9 @@ metadata/parquet loading for the active episode is not throttled away.
 
 When playback is paused and the active media is ready, Episodes and 3D Replay
 warm parsed chart/pose data for episode links actually visible in the sidebar.
-After 800 ms without navigation/scroll/input, browser idle time starts one
-background episode at a time, nearest to the current episode first. Hidden tabs,
+After 350 ms without navigation/scroll/input, browser idle time starts one
+background episode at a time, nearest to the current episode first, with a 50 ms
+gap between completed idle jobs. Hidden tabs,
 offline connections, data saver and 2G stop new background work. Existing reads
 finish normally; selecting the same episode joins its read, and selecting another
 episode starts immediately. Preloading never creates inspection marks and does
@@ -121,9 +122,11 @@ entries within 2 episodes expire after 10 minutes, within 12 after 4 minutes,
 and farther away or in another dataset after 1 minute. Pruning runs every
 30 seconds; capacity pressure releases distant offscreen entries sooner. Visible
 and current entries remain protected from age eviction. Leaving the viewer
-also schedules cleanup. Parquet file handles and shared raw byte ranges are
-independently limited to 16 files / 512 ranges / 128 MiB, with 10-minute idle
-expiry. These are cache budgets, not a cap on total browser memory or active
+also schedules cleanup. The main thread and one background worker each limit raw
+Parquet caches to 16 files / 512 ranges / 128 MiB, with 10-minute idle expiry
+(256 MiB combined raw-cache ceilings per tab). Together with parsed caches, the
+named budgets sum to 576 MiB; these are cache budgets, not a hard cap on browser
+memory or active
 decoding/video buffers. Failed byte reads are retryable and never cached forever.
 Retention, cleanup periods and byte budgets are centralized in
 src/utils/episodeCachePolicy.ts. Count limits are unchanged when byte budgets
@@ -133,11 +136,29 @@ other tabs or machines. Counts and bytes are simultaneous limits: reaching
 either triggers capacity eviction without waiting for age expiry. Parsed-data
 bytes use a sampled object-size estimate (chart/pose rows, timestamp arrays and
 language content), not a browser heap measurement. Raw Parquet bytes use actual
-ArrayBuffer.byteLength, shared across files rather than allocated per file.
+ArrayBuffer.byteLength, shared across files within each runtime rather than
+allocated per file.
 Byte budgets apply to retained in-memory data, not dataset size, file-size
 access limits, disk usage or cumulative network traffic. A speculative episode
 larger than its whole budget is not retained. Video,
 GPU/3D resources, mounted views and in-flight decodes are outside these budgets.
+
+Cold foreground reads start directly, avoiding worker queueing and large result
+clones. Background decoding runs in one dedicated Web Worker, keeping speculative
+Parquet/chart processing off the UI thread. An unsupported or failed worker skips
+preloading; foreground loading remains available. A foreground selection that
+adopts a failing preload retries once directly; concurrent selectors share the retry. Workers release after 10 idle
+minutes; a separate 120-second decode deadline permits retry without treating tab
+visibility as cancellation. Worker results reuse the UI's shared episode index,
+and oversized speculative results are rejected before cloning.
+
+Ordinary joint charts flatten only the existing 4,000 display samples. Pose and
+gripper velocities still use original adjacent source frames before display
+sampling; original frame timestamps and sampling endpoints are preserved. A
+synthetic V3 fixture (20.6 MiB, 30,000 frames, 43 state and 43 action dimensions)
+measured three-run median cold decoding of about 349 ms before and 245 ms after
+this optimization in headless Chrome. This isolates parsing/chart preparation;
+NFS latency, video loading and other dataset shapes can differ.
 
 ## Features
 
