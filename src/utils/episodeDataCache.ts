@@ -112,7 +112,11 @@ export class EpisodeDataCache<T> {
   }
 
   private rememberRecent(key: string, data: T) {
-    const bytes = this.options.estimate(data);
+    const estimated = this.options.estimate(data);
+    // A malformed estimator must not turn the total into NaN and disable
+    // every eviction comparison. Treat unknown sizes as zero for the recent
+    // cache; speculative entries still reject invalid estimates below.
+    const bytes = Number.isFinite(estimated) && estimated >= 0 ? estimated : 0;
     this.recent.delete(key);
     this.recent.set(key, { data, bytes, touched: this.now() });
     let total = [...this.recent.values()].reduce(

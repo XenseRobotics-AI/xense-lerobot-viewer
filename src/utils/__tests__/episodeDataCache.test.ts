@@ -263,4 +263,16 @@ describe("episode data cache", () => {
       estimateEpisodeBytes(data) + 32,
     );
   });
+
+  test("invalid foreground size estimates do not disable cache bounds", async () => {
+    const cache = make({
+      recentEntries: 1,
+      recentBytes: 1,
+      estimate: () => Number.NaN,
+    });
+    await cache.get("first", async () => 1);
+    await cache.get("second", async () => 2);
+    expect(cache.stats.recentEntries).toBe(1);
+    expect(cache.stats.recentBytes).toBe(0);
+  });
 });
