@@ -1,24 +1,12 @@
 "use client";
 
-import {
-  useCallback,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useT } from "@/context/locale-context";
 import type { VideoInfo } from "@/types";
 import {
   VideoFramePresentation,
   type VideoFrameState,
 } from "@/utils/videoFramePresentation";
-import {
-  getPrefetchedVideoPoster,
-  subscribePrefetchedVideoPoster,
-  videoFramePosterKey,
-} from "@/utils/videoFramePrefetch";
 import { FaRedo } from "react-icons/fa";
 
 const INITIAL_STATE: VideoFrameState = {
@@ -43,19 +31,6 @@ export function FirstFrameVideo({
   compact?: boolean;
 }) {
   const t = useT();
-  const posterKey = useMemo(
-    () => videoFramePosterKey(frameKey, video, targetSeconds),
-    [frameKey, targetSeconds, video],
-  );
-  const subscribePoster = useCallback(
-    (notify: () => void) => subscribePrefetchedVideoPoster(posterKey, notify),
-    [posterKey],
-  );
-  const readPoster = useCallback(
-    () => getPrefetchedVideoPoster(posterKey),
-    [posterKey],
-  );
-  const poster = useSyncExternalStore(subscribePoster, readPoster, () => null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const presentationRef = useRef<VideoFramePresentation | null>(null);
   const [state, setState] = useState(INITIAL_STATE);
@@ -108,19 +83,8 @@ export function FirstFrameVideo({
       >
         {t("player.noVideoTag")}
       </video>
-      {poster && state.phase !== "ready" && (
-        // eslint-disable-next-line @next/next/no-img-element -- poster is an in-memory data URL
-        <img
-          src={poster}
-          alt={video.filename}
-          className="absolute inset-0 h-full w-full object-contain"
-          aria-hidden="true"
-        />
-      )}
       {state.phase !== "ready" && (
-        <div
-          className={`absolute inset-0 z-10 flex items-center justify-center ${poster ? "bg-transparent" : "bg-[var(--surface-1)]"}`}
-        >
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--surface-1)]">
           {state.phase === "error" ? (
             <div className="flex items-center gap-2 rounded bg-slate-950/85 px-2.5 py-1.5 text-xs text-slate-200 shadow">
               <span>{t("player.videoFrameError")}</span>
