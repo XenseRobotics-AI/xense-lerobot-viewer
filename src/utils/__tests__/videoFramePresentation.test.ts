@@ -187,6 +187,19 @@ describe("video frame presentation", () => {
     presentation.dispose();
   });
 
+  test("does not flash loading when playback emits a same-time seeking event", () => {
+    const { video, states, presentation, load, readyAt } = setup();
+    load("/camera.mp4", "dataset-a:episode-3");
+    readyAt();
+    video.presentFrame();
+    expect(states.at(-1)?.phase).toBe("ready");
+
+    video.seeking = true;
+    video.dispatchEvent(new Event("seeking"));
+    expect(states.at(-1)?.phase).toBe("ready");
+    presentation.dispose();
+  });
+
   test("suspension and disposal suppress late media events without changing source", () => {
     const { video, states, presentation, load } = setup();
     load("/camera.mp4", "dataset-a:episode-3");

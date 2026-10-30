@@ -230,7 +230,15 @@ export class VideoFramePresentation {
   private onMediaChange = (): void => {
     if (this.disposed || this.suspended) return;
     if (this.video.seeking) {
-      this.begin(this.targetSeconds);
+      // Browsers may emit a transient seeking event when play() starts. If
+      // the media clock is still at the requested frame, keep that decoded
+      // frame visible; only a real target mismatch needs a new frame gate.
+      if (
+        Math.abs(this.video.currentTime - this.targetSeconds) >
+        FRAME_TOLERANCE_SECONDS
+      ) {
+        this.begin(this.targetSeconds);
+      }
       return;
     }
     if (this.video.readyState >= HTMLMediaElement.HAVE_METADATA) {
