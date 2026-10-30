@@ -1,24 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import type { VideoInfo } from "@/types";
-import {
-  preferredPrewarmCameras,
-  videoFramePosterKey,
-} from "../videoFramePrefetch";
+import { getVideosToPrewarm, videoFramePosterKey } from "../videoFramePrefetch";
 
 describe("video frame prefetch policy", () => {
-  test("limits candidates to wrist cameras and excludes tactile streams", () => {
+  test("prewarms every camera, including tactile streams", () => {
     const videos: VideoInfo[] = [
       { filename: "observation.images.head", url: "/head.mp4" },
       { filename: "observation.images.left_wrist", url: "/left.mp4" },
       { filename: "observation.images.right_wrist", url: "/right.mp4" },
       { filename: "observation.images.tactile_left", url: "/touch.mp4" },
     ];
-    expect(
-      preferredPrewarmCameras(videos).map((video) => video.filename),
-    ).toEqual([
-      "observation.images.left_wrist",
-      "observation.images.right_wrist",
-    ]);
+    expect(getVideosToPrewarm(videos)).toEqual(videos);
   });
 
   test("poster identity changes with dataset, episode, source and target time", () => {

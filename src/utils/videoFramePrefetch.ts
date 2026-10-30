@@ -5,7 +5,6 @@ const MAX_POSTER_BYTES = 256 * 1024;
 const POSTER_TTL_MS = 10 * 60_000;
 const POSTER_DECODE_TIMEOUT_MS = 15_000;
 const POSTER_MAX_WIDTH = 640;
-const MAX_PREWARM_CAMERAS = 2;
 const MAX_POSTER_CACHE_BYTES = 24 * 1024 * 1024;
 type Poster = { value: string; bytes: number; expiresAt: number };
 
@@ -71,12 +70,8 @@ function rememberPoster(key: string, value: string): void {
   subscribers.get(key)?.forEach((notify) => notify());
 }
 
-export function preferredPrewarmCameras(videos: VideoInfo[]): VideoInfo[] {
-  const eligible = videos.filter(
-    (video) => !/tactile|touch|gel/i.test(video.filename),
-  );
-  const wrists = eligible.filter((video) => /wrist/i.test(video.filename));
-  return (wrists.length ? wrists : eligible).slice(0, MAX_PREWARM_CAMERAS);
+export function getVideosToPrewarm(videos: VideoInfo[]): VideoInfo[] {
+  return videos;
 }
 
 async function decodePoster(
@@ -147,7 +142,7 @@ async function decodePoster(
   });
 }
 
-/** Decode small first-frame posters for the primary cameras of one episode in parallel. */
+/** Decode small first-frame posters for every video stream of one episode in parallel. */
 export function prefetchEpisodeVideoPosters(
   datasetKey: string,
   episodeId: number,
@@ -171,7 +166,7 @@ export function prefetchEpisodeVideoPosters(
   }
 
   const identity = `${datasetKey}:${episodeId}`;
-  const candidates = preferredPrewarmCameras(videos);
+  const candidates = getVideosToPrewarm(videos);
   if (
     candidates.every((video) =>
       getPrefetchedVideoPoster(
