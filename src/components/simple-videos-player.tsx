@@ -15,6 +15,7 @@ import {
 } from "@/utils/videoSegments";
 import { useDocumentVisible } from "@/hooks/use-document-visible";
 import { useT } from "@/context/locale-context";
+import { normalizeHiddenVideoNames } from "@/utils/videoVisibility";
 
 const THRESHOLDS = {
   VIDEO_SYNC_TOLERANCE: 0.2,
@@ -83,8 +84,13 @@ export const SimpleVideosPlayer = ({
         // release the stream after it really left this player's ref slot.
         queueMicrotask(() => {
           if (videoRefs.current[idx] === previous) return;
-          previous.removeAttribute("src");
-          previous.load();
+          try {
+            previous.removeAttribute("src");
+            previous.load();
+          } catch {
+            // A browser may reject a load reset while the node is being
+            // detached. The node is already unreachable from this player.
+          }
         });
       }
       videoRefs.current[idx] = el;
@@ -102,7 +108,27 @@ export const SimpleVideosPlayer = ({
   const [videosReady, setVideosReady] = React.useState(false);
   const wasPlayingWhenHiddenRef = useRef(false);
 
-  const hiddenSet = React.useMemo(() => new Set(hiddenVideos), [hiddenVideos]);
+  const videoNames = React.useMemo(
+    () => videosInfo.map((video) => video.filename),
+    [videosInfo],
+  );
+  const hiddenSet = React.useMemo(
+    () => new Set(normalizeHiddenVideoNames(videoNames, hiddenVideos)),
+    [videoNames, hiddenVideos],
+  );
+
+  useEffect(() => {
+    setHiddenVideos((previous) => {
+      const normalized = normalizeHiddenVideoNames(videoNames, previous);
+      return normalized.length === previous.length &&
+        normalized.every((name, index) => name === previous[index])
+        ? previous
+        : normalized;
+    });
+    setEnlargedVideo((previous) =>
+      previous && videoNames.includes(previous) ? previous : null,
+    );
+  }, [videoNames]);
 
   const firstVisibleIdx = videosInfo.findIndex(
     (video) => !hiddenSet.has(video.filename),
@@ -401,7 +427,8 @@ export const SimpleVideosPlayer = ({
         const cleanup = videoEventCleanup.get(video);
         if (cleanup) {
           cleanup();
-          videoEventCleanup.delete(video);
+          if (videoEventCleanup.get(video) === cleanup)
+            videoEventCleanup.delete(video);
         }
       });
     };
@@ -502,7 +529,7 @@ export const SimpleVideosPlayer = ({
       {/* Videos */}
       <div className="flex flex-wrap gap-x-2 gap-y-6">
         {videosInfo.map((info, idx) => {
-          if (hiddenVideos.includes(info.filename)) return null;
+          if (hiddenSet.has(info.filename)) return null;
 
           const isEnlarged = enlargedVideo === info.filename;
 
@@ -547,9 +574,8 @@ export const SimpleVideosPlayer = ({
                       }
                     }}
                     disabled={
-                      videosInfo.filter(
-                        (v) => !hiddenVideos.includes(v.filename),
-                      ).length === 1
+                      videosInfo.filter((v) => !hiddenSet.has(v.filename))
+                        .length === 1
                     }
                   >
                     <FaTimes size={10} />
