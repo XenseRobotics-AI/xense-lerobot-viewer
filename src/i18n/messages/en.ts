@@ -260,6 +260,19 @@ export const en = {
   "trash.keep": "Keep",
   "trash.empty": "Empty trash",
 
+  // ── homepage: interrupted conversions ───────────────────────────────────
+  // Shown for a directory holding `meta/.checkpoint.json` and no `info.json`.
+  // Not a dataset, so it renders above the grid rather than in it.
+  "interrupted.title_one": "{count} interrupted conversion",
+  "interrupted.title_other": "{count} interrupted conversions",
+  "interrupted.hint":
+    "Stopped part-way: a checkpoint was written but no {file}, so this is not a dataset yet and appears nowhere else. Re-running the converter resumes from the checkpoint; until then the bytes stay on disk.",
+  "interrupted.badge": "Interrupted",
+  "interrupted.episodes_one": "{count} episode converted",
+  "interrupted.episodes_other": "{count} episodes converted",
+  "interrupted.unknownProgress": "checkpoint unreadable",
+  "interrupted.stopped": "stopped {day}",
+
   // ── homepage: tags editor ───────────────────────────────────────────────
   "tags.title": "Edit tags",
   "tags.task": "Task",
@@ -857,6 +870,15 @@ export const en = {
   "urdf.unmapped": "-- unmapped --",
   "urdf.trail": "Trail",
   "urdf.showTrail": "Show trail",
+  "urdf.episodeOrigin": "anchor (head at start)",
+  "urdf.worldAxes": "world",
+  "urdf.worldFrame": "Frame",
+  "urdf.worldFrameHeadStart": "head at start",
+  "urdf.worldFrameRecorded": "recorded",
+  "urdf.worldFrameUnknown": "undeclared",
+  "urdf.worldAnchor": "anchor ({x}, {y}) m · yaw {yaw}°",
+  "urdf.worldAnchorTitle":
+    "This origin's position and heading in the recorded frame",
   "urdf.hideTrail": "Hide trail",
   "urdf.hintSeek5": "back/forward 5 seconds",
   "urdf.resizeVideo": "Drag to resize video window",
@@ -870,7 +892,11 @@ export const en = {
   "urdf.tacCapLink4Note":
     "TCP frame: +X forward, +Y left, +Z up (red/green/blue reference axes). Complete head.xyz+r1-r6 data adds a yellow trail, schematic HMD, and playback frame. The HMD is centered on the recorded head pose with its visor facing +X; no uncalibrated offset is added. Head video alone does not create a trajectory.",
   "urdf.tacCapNoPose":
-    "No complete left_tcp/right_tcp xyz+r1-r6 trajectories were found for TacCap replay.",
+    "No complete left_tcp/right_tcp xyz+r1-r6 trajectories were found for gripper replay.",
+  "urdf.tcpConvention": "TCP convention",
+  "urdf.tcpConventionDefault": "(not declared, default)",
+  "urdf.tcpConventionUnknown":
+    "Unknown tcp_frame_convention {value} in info.json — rendering as same-axes-v0, so the left gripper may appear flipped.",
   "urdf.legendTracks": "Tracks",
   "urdf.valuesTitle": "Values",
   "urdf.valuesClear": "Clear",
@@ -1112,6 +1138,10 @@ export const en = {
   "workbench.writeTokenAvailable": "HF write token available",
   "workbench.publicReadOnly": "Public read-only mode",
   "workbench.syncError": "Unable to synchronize shared Workbench state.",
+  "workbench.mergeConflict":
+    "Both sides have conflicting changes. No configuration has been overwritten. Choose which side to keep for conflicts; other changes will be merged. If the combined configuration is invalid, the selected side's entire configuration is used.",
+  "workbench.mergeKeepLocal": "Keep local conflicts",
+  "workbench.mergeKeepRemote": "Keep remote conflicts",
   "workbench.dataset": "Dataset",
   "workbench.updated": "Updated",
   "workbench.local": "Local",

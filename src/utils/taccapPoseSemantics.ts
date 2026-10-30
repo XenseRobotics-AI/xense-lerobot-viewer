@@ -207,6 +207,33 @@ export function resolveTacCapPoseProfile(
   return trackerProfile(parsed, "selected-tracker");
 }
 
+/**
+ * `taccap_extrinsics.json` v4 (Collector 0.4.6-rc.2+) stores each distinct
+ * extrinsics set once under `profiles` and has episodes reference it; earlier
+ * versions inline it per episode. Returns v3-shaped metadata either way.
+ */
+export function expandTacCapExtrinsics(
+  raw: unknown,
+): TacCapExtrinsicsMetadata | null {
+  const file = raw as {
+    version?: unknown;
+    profiles?: Record<string, unknown>;
+    episodes?: unknown;
+  } | null;
+  if (!file || !Array.isArray(file.episodes)) return null;
+  if (file.version !== 4) return file as TacCapExtrinsicsMetadata;
+  const episodes = file.episodes.map((entry) => {
+    const { profile, ...inline } = (entry ?? {}) as {
+      profile?: unknown;
+      [key: string]: unknown;
+    };
+    const shared =
+      typeof profile === "string" ? file.profiles?.[profile] : undefined;
+    return { ...((shared as object) ?? {}), ...inline };
+  });
+  return { ...file, episodes } as TacCapExtrinsicsMetadata;
+}
+
 const extrinsicsMetadataCache = new Map<
   string,
   Promise<TacCapExtrinsicsMetadata | null>
@@ -228,10 +255,8 @@ export function loadTacCapExtrinsicsMetadata(
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
-      const value = (await response.json()) as TacCapExtrinsicsMetadata;
-      if (!value || !Array.isArray(value.episodes)) {
-        throw new Error("invalid taccap_extrinsics.json");
-      }
+      const value = expandTacCapExtrinsics((await response.json()) as unknown);
+      if (!value) throw new Error("invalid taccap_extrinsics.json");
       return value;
     })
     .catch((error) => {

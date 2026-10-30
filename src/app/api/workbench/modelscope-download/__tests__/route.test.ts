@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -8,6 +9,7 @@ import {
   POST as CHECK,
 } from "@/app/api/workbench/modelscope-download/check/route";
 import { POST as DOWNLOAD } from "@/app/api/workbench/modelscope-download/download/route";
+import { parseModelScopeDownloadRequest } from "@/lib/modelscope-download-runtime";
 import {
   beginDatasetWrite,
   finishDatasetWrite,
@@ -18,6 +20,7 @@ let root: string;
 const previousRoot = process.env.LOCAL_DATASET_ROOT;
 const previousToken = process.env.MODELSCOPE_API_TOKEN;
 const originalFetch = globalThis.fetch;
+const originalSetTimeout = globalThis.setTimeout;
 let requestedUrls: string[] = [];
 
 function request(url: string, body: unknown, origin?: string): NextRequest {
@@ -46,6 +49,20 @@ const fileBodies = new Map([
   ["nested/example/meta/info.json", '{"total_episodes":1}\n'],
 ]);
 
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+test("defaults ModelScope downloads to eight parallel files", async () => {
+  const parsed = await parseModelScopeDownloadRequest({
+    source: valid.source,
+    destinationRoot: valid.destinationRoot,
+    scope: valid.scope,
+    token: valid.token,
+  });
+  expect(parsed.concurrency).toBe(8);
+});
+
 function tree(rootPath: string) {
   if (rootPath === "nested/example") {
     return [
@@ -57,7 +74,7 @@ function tree(rootPath: string) {
         Path: "nested/example/README.md",
         Revision: "1111111111111111111111111111111111111111",
         Size: fileBodies.get("nested/example/README.md")?.length,
-        Sha256: "readme-sha",
+        Sha256: sha256(fileBodies.get("nested/example/README.md") ?? ""),
       },
     ];
   }
@@ -69,7 +86,9 @@ function tree(rootPath: string) {
         Path: "nested/example/data/chunk-000.parquet",
         Revision: "2222222222222222222222222222222222222222",
         Size: fileBodies.get("nested/example/data/chunk-000.parquet")?.length,
-        Sha256: "parquet-sha",
+        Sha256: sha256(
+          fileBodies.get("nested/example/data/chunk-000.parquet") ?? "",
+        ),
       },
     ];
   }
@@ -86,7 +105,7 @@ function tree(rootPath: string) {
         Path: "nested/example/meta/info.json",
         Revision: "3333333333333333333333333333333333333333",
         Size: fileBodies.get("nested/example/meta/info.json")?.length,
-        Sha256: "info-sha",
+        Sha256: sha256(fileBodies.get("nested/example/meta/info.json") ?? ""),
       },
     ];
   }
@@ -100,7 +119,10 @@ function tree(rootPath: string) {
         Size: fileBodies.get(
           "nested/example/meta/episodes/episode_000000.jsonl",
         )?.length,
-        Sha256: "episode-sha",
+        Sha256: sha256(
+          fileBodies.get("nested/example/meta/episodes/episode_000000.jsonl") ??
+            "",
+        ),
       },
     ];
   }
@@ -146,6 +168,7 @@ beforeEach(async () => {
 afterEach(async () => {
   resetDatasetWriteLockForTests();
   globalThis.fetch = originalFetch;
+  globalThis.setTimeout = originalSetTimeout;
   if (previousRoot === undefined) delete process.env.LOCAL_DATASET_ROOT;
   else process.env.LOCAL_DATASET_ROOT = previousRoot;
   if (previousToken === undefined) delete process.env.MODELSCOPE_API_TOKEN;
@@ -340,6 +363,121 @@ describe("ModelScope download routes", () => {
       repoPath: "nested/example",
       fullSha: check.revisionSha,
       metaSha: check.revisionSha,
+    });
+  });
+
+  test("rejects a same-size file whose SHA-256 does not match", async () => {
+    const checkResponse = await CHECK(
+      request("http://localhost/api/workbench/modelscope-download/check", {
+        ...valid,
+        concurrency: 1,
+        destinationRoot: root,
+      }),
+    );
+    const check = await checkResponse.json();
+    const normalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/repo?")) {
+        const parsed = new URL(url);
+        if (
+          parsed.searchParams.get("FilePath") === "nested/example/README.md"
+        ) {
+          return new Response("readmx", {
+            headers: { "content-length": "6" },
+          });
+        }
+      }
+      return normalFetch(input, init);
+    }) as typeof fetch;
+
+    const response = await DOWNLOAD(
+      request("http://localhost/api/workbench/modelscope-download/download", {
+        ...valid,
+        concurrency: 1,
+        destinationRoot: root,
+        revisionSha: check.revisionSha,
+      }),
+    );
+    const events = (await response.text())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      code: "MODELSCOPE_DOWNLOAD_FAILED",
+      error: "SHA-256 verification failed for nested/example/README.md.",
+    });
+    await expect(
+      fs.stat(path.join(root, "TacVerse", "nested", "example")),
+    ).rejects.toThrow();
+  });
+
+  test("reports a body transfer timeout instead of a user cancellation", async () => {
+    let triggerRequestTimeout: (() => void) | null = null;
+    globalThis.setTimeout = ((handler, timeout, ...args) => {
+      if (timeout === 120_000 && typeof handler === "function") {
+        triggerRequestTimeout = () => handler(...args);
+        return originalSetTimeout(handler, timeout, ...args);
+      }
+      return originalSetTimeout(handler, timeout, ...args);
+    }) as typeof setTimeout;
+
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.includes("/repo/tree?")) {
+        const parsed = new URL(url);
+        const rootPath = parsed.searchParams.get("Root") ?? "";
+        const files = tree(rootPath);
+        return Response.json({
+          Code: 200,
+          Message: "success",
+          Data: { Files: files, TotalCount: files.length },
+        });
+      }
+      if (url.includes("/repo?")) {
+        triggerRequestTimeout?.();
+        const signal = init?.signal;
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            if (signal?.aborted) controller.error(new Error("aborted"));
+            else
+              signal?.addEventListener(
+                "abort",
+                () => controller.error(new Error("aborted")),
+                { once: true },
+              );
+          },
+        });
+        return new Response(body);
+      }
+      throw new Error(`Unexpected ModelScope request: ${url}`);
+    }) as typeof fetch;
+
+    const checkResponse = await CHECK(
+      request("http://localhost/api/workbench/modelscope-download/check", {
+        ...valid,
+        destinationRoot: root,
+      }),
+    );
+    const check = await checkResponse.json();
+    const response = await DOWNLOAD(
+      request("http://localhost/api/workbench/modelscope-download/download", {
+        ...valid,
+        concurrency: 1,
+        destinationRoot: root,
+        revisionSha: check.revisionSha,
+      }),
+    );
+    const events = (await response.text())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      code: "MODELSCOPE_DOWNLOAD_FAILED",
+      error: "ModelScope request timed out.",
     });
   });
 

@@ -112,6 +112,9 @@ describe("zh translation coverage", () => {
     "workbench.sourceTacflow",
     "workbench.sourceXtac",
     "workbench.xtacCategory",
+    // Coordinate-frame names the operator uses verbatim (world / anchor), so
+    // the 3D replay axis label reads the same in both languages.
+    "urdf.worldAxes",
     // Pure formula — symbols and units only, nothing to translate.
     "doctor.speedFormula",
     // Value + unit, and units render in English in both languages (see the

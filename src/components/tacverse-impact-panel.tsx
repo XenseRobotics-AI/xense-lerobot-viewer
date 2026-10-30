@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import {
   Bar,
@@ -12,8 +12,10 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { FiExternalLink, FiInfo, FiLock, FiRefreshCw } from "react-icons/fi";
+import { FiExternalLink, FiLock, FiMonitor, FiRefreshCw } from "react-icons/fi";
 import { useLocale } from "@/context/locale-context";
+import TacVerseImpactDisplay from "@/components/tacverse-impact-display";
+import { requestWorkbenchDisplayFullscreen } from "@/components/workbench-display-browser";
 import { formatBytes } from "@/utils/byteSize";
 import type {
   ImpactDataSource,
@@ -46,22 +48,21 @@ const COPY = {
     opendataRankingHint: "The standalone TacVerse/opendata repository.",
     refresh: "Refresh",
     refreshing: "Refreshing…",
+    display: "Display",
+    openDisplay: "Open Impact display",
+    fullscreenImpact: "Fullscreen impact board",
     downloads: "Downloads",
     totalDownloads: "Total downloads",
-    todayDownloads: "Current HF day",
-    dayOverDayInProgress: "HF has published this still-open UTC day",
-    dayOverDayWaiting: "HF has not published this UTC day yet",
+    latestDayDownloads: "Latest HF day",
+    latestDayDownloadsHint:
+      "Downloads reported for the latest HF Publisher Analytics day available in this snapshot.",
     publisherTimingTitle: "Publisher reporting window",
-    publisherTimingCurrent:
-      "Current HF day: {date} · China Standard Time {start} 08:00 → {end} 08:00.",
     publisherTimingPublished:
       "Latest day published by HF: {date} · China Standard Time {start} 08:00 → {end} 08:00.",
     publisherTimingEmpty:
       "HF has not published any daily rows for this source.",
     publisherTimingWaiting:
-      "This reporting window closes at {end} 08:00 China Standard Time. HF does not guarantee a publication time, so a reliable update countdown is unavailable; Refresh checks upstream immediately.",
-    publisherTimingAvailable:
-      "HF has published the current, incomplete window. Its value can continue changing until the window closes at {end} 08:00 China Standard Time.",
+      "HF has not published a newer Publisher Analytics day for this source yet; Refresh checks upstream immediately.",
     publisherTimingNaturalDay:
       "Publisher daily rows are UTC buckets, not China calendar days. Exact 00:00–24:00 China-day reporting requires the Enterprise request-level log export.",
     downloadsDefinition: "How HF counts Downloads",
@@ -212,21 +213,20 @@ const COPY = {
     opendataRankingHint: "独立的 TacVerse/opendata 仓库。",
     refresh: "刷新",
     refreshing: "刷新中…",
+    display: "大屏",
+    openDisplay: "打开 Impact 大屏",
+    fullscreenImpact: "全屏影响力看板",
     downloads: "Downloads",
     totalDownloads: "总下载量",
-    todayDownloads: "当前 HF 统计日",
-    dayOverDayInProgress: "HF 已发布这个尚未结束的 UTC 统计日",
-    dayOverDayWaiting: "HF 尚未发布当前 UTC 统计日",
+    latestDayDownloads: "最新 HF 统计日",
+    latestDayDownloadsHint:
+      "当前快照中 HF Publisher Analytics 最新统计日的下载量。",
     publisherTimingTitle: "Publisher 统计时间说明",
-    publisherTimingCurrent:
-      "当前 HF 统计日：{date} · 北京时间 {start} 08:00 → {end} 08:00。",
     publisherTimingPublished:
       "HF 最新已发布：{date} · 北京时间 {start} 08:00 → {end} 08:00。",
     publisherTimingEmpty: "HF 尚未为当前来源发布任何逐日数据。",
     publisherTimingWaiting:
-      "本统计窗口将在北京时间 {end} 08:00 结束。HF 没有承诺固定发布时间，因此无法提供可靠的更新倒计时；点击“刷新”会立即重新检查上游。",
-    publisherTimingAvailable:
-      "HF 已发布当前尚未结束的统计窗口；数值仍可能变化，窗口将在北京时间 {end} 08:00 结束。",
+      "HF 尚未为当前来源发布更新的 Publisher Analytics 统计日；点击“刷新”会立即重新检查上游。",
     publisherTimingNaturalDay:
       "Publisher 逐日数据是 UTC 分桶，不是北京时间自然日。若要精确统计北京时间 00:00–24:00，必须配置 Enterprise 请求级日志导出。",
     downloadsDefinition: "HF 如何计算 Downloads",
@@ -414,21 +414,9 @@ function MetricCard({
         {value}
       </p>
       {note && (
-        <span className="group/note absolute right-3 top-3 z-20">
-          <button
-            type="button"
-            aria-label={note}
-            className="flex h-5 w-5 items-center justify-center rounded-full border border-white/10 text-[10px] text-slate-600 transition hover:border-cyan-400/30 hover:text-cyan-300 focus:border-cyan-400/40 focus:text-cyan-300 focus:outline-none"
-          >
-            <FiInfo />
-          </button>
-          <span
-            role="tooltip"
-            className="pointer-events-none absolute right-0 top-7 hidden w-64 rounded-md border border-white/10 bg-[#11172a] px-3 py-2 text-[11px] font-normal normal-case leading-5 tracking-normal text-slate-300 shadow-xl group-hover/note:block group-focus-within/note:block"
-          >
-            {note}
-          </span>
-        </span>
+        <p className="mt-3 line-clamp-2 text-xs leading-5 text-slate-500">
+          {note}
+        </p>
       )}
     </div>
   );
@@ -459,6 +447,7 @@ function StatusPill({
 export default function TacVerseImpactPanel() {
   const { locale } = useLocale();
   const c = COPY[locale];
+  const copyRef = useRef(c);
   const [data, setData] = useState<TacVerseImpactData | null>(null);
   const [candidateKey, setCandidateKey] = useState("");
   const [locked, setLocked] = useState(true);
@@ -468,6 +457,16 @@ export default function TacVerseImpactPanel() {
   const [refreshing, setRefreshing] = useState(false);
   const [windowSize, setWindowSize] = useState<WindowSize>("all");
   const [dataSource, setDataSource] = useState<ImpactDataSource>("collection");
+  const [displayOpen, setDisplayOpen] = useState(false);
+  const displayButtonRef = useRef<HTMLButtonElement>(null);
+  const displayRestoreRef = useRef<{
+    scrollY: number;
+    focus: HTMLElement | null;
+  }>({ scrollY: 0, focus: null });
+
+  useEffect(() => {
+    copyRef.current = c;
+  }, [c]);
 
   const load = useCallback(
     async (
@@ -504,7 +503,7 @@ export default function TacVerseImpactPanel() {
           setHasExistingCredential(
             "hasCredential" in payload && payload.hasCredential === true,
           );
-          if (!silentDenied) throw new Error(c.accessDenied);
+          if (!silentDenied) throw new Error(copyRef.current.accessDenied);
           return;
         }
         if (
@@ -512,7 +511,9 @@ export default function TacVerseImpactPanel() {
           !("schemaVersion" in payload) ||
           payload.schemaVersion !== 6
         ) {
-          throw new Error("error" in payload ? payload.error : c.error);
+          throw new Error(
+            "error" in payload ? payload.error : copyRef.current.error,
+          );
         }
         setCandidateKey("");
         setLocked(false);
@@ -527,13 +528,15 @@ export default function TacVerseImpactPanel() {
         }
         setData(payload);
       } catch (reason: unknown) {
-        setError(reason instanceof Error ? reason.message : c.error);
+        setError(
+          reason instanceof Error ? reason.message : copyRef.current.error,
+        );
       } finally {
         setLoading(false);
         setRefreshing(false);
       }
     },
-    [c.accessDenied, c.error],
+    [],
   );
 
   useEffect(() => {
@@ -559,6 +562,33 @@ export default function TacVerseImpactPanel() {
       setHasExistingCredential(false);
     }
   };
+
+  const closeDisplay = useCallback(() => {
+    setDisplayOpen(false);
+    const restore = displayRestoreRef.current;
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: restore.scrollY, behavior: "instant" });
+      const focusTarget = restore.focus?.isConnected
+        ? restore.focus
+        : displayButtonRef.current;
+      focusTarget?.focus({ preventScroll: true });
+    });
+  }, []);
+
+  const openDisplay = useCallback(() => {
+    displayRestoreRef.current = {
+      scrollY: window.scrollY,
+      focus:
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null,
+    };
+    setDisplayOpen(true);
+    if (!document.fullscreenElement) {
+      void requestWorkbenchDisplayFullscreen(document.documentElement);
+    }
+  }, []);
+
   const chartData = useMemo(() => {
     const daily = data?.sourceViews[dataSource].daily ?? [];
     return windowSize === "all" ? daily : daily.slice(-windowSize);
@@ -666,14 +696,12 @@ export default function TacVerseImpactPanel() {
         formatDate(sourceView.coverage.advancedLog.start, locale),
       )
     : c.advancedMissing;
-  const todayUtc = new Date().toISOString().slice(0, 10);
-  const todayUtcEnd = addUtcDays(todayUtc, 1);
   const latestPublishedDay = sourceView.coverage.total?.end ?? null;
   const latestPublishedEnd = latestPublishedDay
     ? addUtcDays(latestPublishedDay, 1)
     : null;
-  const todayDownloads = sourceView.daily.find(
-    (row) => row.date === todayUtc,
+  const latestPublishedDownloads = sourceView.daily.find(
+    (row) => row.date === latestPublishedDay,
   )?.totalDownloads;
   const hasSourceWarning = Boolean(
     data.sourceStatus.message &&
@@ -684,11 +712,6 @@ export default function TacVerseImpactPanel() {
       data.sourceStatus.collection === "unauthorized"
     ),
   );
-  const currentWindowText = interpolate(c.publisherTimingCurrent, {
-    date: todayUtc,
-    start: todayUtc,
-    end: todayUtcEnd,
-  });
   const latestPublishedText =
     latestPublishedDay && latestPublishedEnd
       ? interpolate(c.publisherTimingPublished, {
@@ -697,16 +720,13 @@ export default function TacVerseImpactPanel() {
           end: latestPublishedEnd,
         })
       : c.publisherTimingEmpty;
-  const publisherAvailabilityText = interpolate(
-    todayDownloads === undefined
-      ? c.publisherTimingWaiting
-      : c.publisherTimingAvailable,
-    { end: todayUtcEnd },
-  );
-  const todayDownloadsNote =
-    todayDownloads === undefined
-      ? c.dayOverDayWaiting
-      : `${todayUtc.slice(5)} · ${c.dayOverDayInProgress}`;
+  const latestDownloadsNote = latestPublishedDay
+    ? `Downloads: ${
+        latestPublishedDownloads === undefined
+          ? "—"
+          : formatAddedInteger(latestPublishedDownloads)
+      }`
+    : c.latestDayDownloadsHint;
 
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-5 pb-8">
@@ -744,6 +764,18 @@ export default function TacVerseImpactPanel() {
         </div>
         <div className="flex gap-2">
           <button
+            ref={displayButtonRef}
+            type="button"
+            onClick={openDisplay}
+            aria-label={c.openDisplay}
+            className="inline-flex items-center gap-2 rounded-md border border-cyan-300/40 bg-cyan-300/15 px-3 py-2 text-xs font-medium text-cyan-100 shadow-[0_8px_22px_rgba(34,211,238,0.12)] hover:border-cyan-200/60 hover:bg-cyan-300/20"
+          >
+            <FiMonitor aria-hidden="true" /> {c.display}
+            <span className="hidden text-cyan-100/65 sm:inline">
+              {c.fullscreenImpact}
+            </span>
+          </button>
+          <button
             type="button"
             disabled={refreshing}
             onClick={() => void load("", true, !privateMode)}
@@ -774,16 +806,17 @@ export default function TacVerseImpactPanel() {
       {privateMode && (
         <section
           className={`rounded-md border px-4 py-3 text-sm ${
-            todayDownloads === undefined
+            latestPublishedDownloads === undefined
               ? "border-amber-400/25 bg-amber-400/[0.07] text-amber-100"
               : "border-cyan-400/20 bg-cyan-400/[0.06] text-cyan-100"
           }`}
         >
           <p className="font-medium">{c.publisherTimingTitle}</p>
           <div className="mt-1 space-y-1 text-xs leading-5 opacity-75">
-            <p>{currentWindowText}</p>
             <p>{latestPublishedText}</p>
-            <p>{publisherAvailabilityText}</p>
+            {latestPublishedDownloads === undefined && (
+              <p>{c.publisherTimingWaiting}</p>
+            )}
             <p>{c.publisherTimingNaturalDay}</p>
           </div>
         </section>
@@ -830,13 +863,9 @@ export default function TacVerseImpactPanel() {
         />
         {privateMode && (
           <MetricCard
-            label={c.todayDownloads}
-            value={
-              todayDownloads === undefined
-                ? "—"
-                : formatAddedInteger(todayDownloads)
-            }
-            note={todayDownloadsNote}
+            label={c.latestDayDownloads}
+            value={latestPublishedDay ?? "—"}
+            note={latestDownloadsNote}
           />
         )}
         {privateMode && (
@@ -1509,6 +1538,14 @@ export default function TacVerseImpactPanel() {
           </dl>
         </div>
       </section>
+      {displayOpen && (
+        <TacVerseImpactDisplay
+          data={data}
+          dataSource={dataSource}
+          windowSize={windowSize}
+          onExit={closeDisplay}
+        />
+      )}
     </div>
   );
 }

@@ -135,10 +135,11 @@ Once the download finishes, refresh the homepage — the new dataset will appear
 Workbench → HF download tools can download one checked dataset revision or run a
 checked batch queue of repository paths. The queue downloads up to 2 datasets in
 parallel by default, adjustable from 1 to 3, while files inside each dataset
-also transfer in parallel. File concurrency defaults to 4 workers and is
+also transfer in parallel. File concurrency defaults to 8 workers and is
 adjustable from 1 to 8 in the panel; lowering either value is useful on unstable
-links or slow disks. Downloads still stage, verify, and promote atomically, so a
-cancelled or failed run does not replace the existing dataset.
+links or slow disks. The same worker setting applies to Hugging Face and
+ModelScope downloads. Downloads still stage, verify, and promote atomically, so
+a cancelled or failed run does not replace the existing dataset.
 
 ## Commands
 
@@ -332,6 +333,21 @@ organization. Open it from any local dataset episode by clicking the
 ```text
 http://localhost:3000/?org=TacVerse&tab=workbench
 ```
+
+Shared Workbench configuration and reward rules use a three-way merge against
+the last successfully synchronized remote snapshot. Independent field edits,
+new records, and one-sided deletions are merged automatically. Records are
+matched by ID; assignment and role histories by date; staffing records by
+workstation and date. Conflicting field edits or delete-versus-edit changes
+pause synchronization without overwriting either side. The sync panel lists
+conflicting paths and lets you keep local or remote values for all conflicts,
+while retaining independent changes. If the combined document violates
+configuration constraints, choosing a side uses that entire document instead.
+On first sync, saved local differences require a choice where no common
+snapshot exists; unsaved defaults adopt remote configuration. Read-only sync
+can merge remote changes locally while keeping local changes pending upload.
+Snapshots are stored per organization under
+`<LOCAL_DATASET_ROOT>/.xense-viewer/workbench/shared-sync/baselines/`.
 
 The tab has three subviews:
 

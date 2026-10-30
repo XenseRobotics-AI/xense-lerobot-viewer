@@ -22,13 +22,18 @@ import type { EpisodeData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import UrdfPlaybackBar from "@/components/urdf-playback-bar";
 import UrdfValueReadout from "@/components/urdf-value-readout";
 import UrdfVideoOverlay from "@/components/urdf-video-overlay";
-import { useT } from "@/context/locale-context";
+import { useLocale } from "@/context/locale-context";
 import {
   type BundledGripperProfile,
   bundledGripperProfile,
 } from "@/utils/bundledGrippers";
 import { CHART_CONFIG } from "@/utils/constants";
 import { fetchDatasetSources } from "@/utils/datasetSourcesClient";
+import {
+  fetchCollectionDevices,
+  readEpisodeWorldFrame,
+  type EpisodeWorldFrame,
+} from "@/utils/episodeWorldFrame";
 import {
   extractTacCapGripperTracks,
   extractTacCapHeadTrack,
@@ -49,6 +54,8 @@ import {
 import {
   tacCapDatasetPointToScene,
   tacCapRecordedTcpSceneMatrix,
+  tcpConventionToModelMatrix,
+  type TcpFrameConvention,
 } from "@/utils/taccapGripperTransforms";
 import {
   type EpisodeGripperCalibration,
@@ -363,11 +370,6 @@ const TACCAP_HEADSET = {
 // Front opening of the halo ring, so the strap clears the visor instead of
 // passing through it.
 const TACCAP_HALO_GAP_HALF = 0.62;
-const TACCAP_LOCAL_POSE_AXES = [
-  { label: "X", direction: [1, 0, 0] as const, color: "#ef4444" },
-  { label: "Y", direction: [0, 1, 0] as const, color: "#22c55e" },
-  { label: "Z", direction: [0, 0, 1] as const, color: "#3b82f6" },
-] as const;
 const TACCAP_WORLD_AXES = [
   {
     label: "+X",
@@ -522,9 +524,11 @@ function TacCapAxisArrow({
 function TacCapWorldAxes({
   bounds,
   groundY,
+  label,
 }: {
   bounds: SceneBounds;
   groundY: number;
+  label: string;
 }) {
   const length = Math.min(0.16, Math.max(0.08, bounds.extent * 0.18));
   // Put the reference in a stable grid corner. +X, +Y and +Z all point into
@@ -548,6 +552,93 @@ function TacCapWorldAxes({
       {TACCAP_WORLD_AXES.map((axis) => (
         <TacCapAxisArrow key={axis.label} length={length} {...axis} />
       ))}
+      <Html
+        center
+        position={[0, -length * 0.22, 0]}
+        style={{ pointerEvents: "none" }}
+        zIndexRange={[10, 0]}
+      >
+        <span className="whitespace-nowrap rounded border border-white/15 bg-slate-950/85 px-1 py-0.5 font-mono text-[9px] font-semibold leading-none text-slate-300 shadow">
+          {label}
+        </span>
+      </Html>
+    </group>
+  );
+}
+
+/**
+ * The episode origin: dataset (0, 0, 0). For head-start exports this is the
+ * head at recording start (+X its heading, Z up), so the initial hand poses can
+ * be read directly against it. Drawn at its true position, unlike the
+ * orientation-only `TacCapWorldAxes` in the grid corner, with a drop line to the
+ * grid so its height reads at a glance.
+ */
+function TacCapEpisodeOrigin({
+  groundY,
+  label,
+  length,
+}: {
+  groundY: number;
+  label: string;
+  length: number;
+}) {
+  const origin = useMemo(() => tacCapDatasetPointToScene([0, 0, 0]), []);
+  const drop = useMemo(() => {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, groundY - origin[1], 0),
+    ]);
+    const line = new THREE.Line(
+      geometry,
+      new THREE.LineDashedMaterial({
+        color: "#f8fafc",
+        dashSize: length * 0.08,
+        gapSize: length * 0.06,
+        transparent: true,
+        opacity: 0.55,
+      }),
+    );
+    line.computeLineDistances();
+    return line;
+  }, [groundY, length, origin]);
+  useEffect(
+    () => () => {
+      drop.geometry.dispose();
+      (drop.material as THREE.Material).dispose();
+    },
+    [drop],
+  );
+
+  return (
+    <group position={origin}>
+      <mesh renderOrder={22}>
+        <sphereGeometry args={[length * 0.07, 16, 12]} />
+        <meshBasicMaterial
+          color="#f8fafc"
+          depthTest={false}
+          depthWrite={false}
+          toneMapped={false}
+        />
+      </mesh>
+      {TACCAP_WORLD_AXES.map((axis) => (
+        <TacCapAxisArrow
+          key={axis.label}
+          alwaysVisible
+          length={length}
+          {...axis}
+        />
+      ))}
+      <primitive object={drop} />
+      <Html
+        center
+        position={[0, length * 0.32, 0]}
+        style={{ pointerEvents: "none" }}
+        zIndexRange={[10, 0]}
+      >
+        <span className="whitespace-nowrap rounded border border-white/20 bg-slate-950/85 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-slate-100 shadow">
+          {label}
+        </span>
+      </Html>
     </group>
   );
 }
@@ -556,9 +647,16 @@ function tacCapSceneBounds(
   tracks: TacCapGripperTrack[],
   headTrack: TacCapHeadTrack | null,
   padding: number,
+  includeOrigin = false,
 ): SceneBounds {
   const min = new THREE.Vector3(Infinity, Infinity, Infinity);
   const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+  if (includeOrigin) {
+    // Head-start exports: the origin is the episode start, keep it framed.
+    const origin = new THREE.Vector3(...tacCapDatasetPointToScene([0, 0, 0]));
+    min.min(origin);
+    max.max(origin);
+  }
   const poses = [
     ...tracks.map((track) => track.pose),
     ...(headTrack ? [headTrack.pose] : []),
@@ -658,6 +756,9 @@ function TacCapGripperModel({
   frame,
   profile,
   side,
+  smoothTimeRef,
+  tcpFrameConvention,
+  track,
   onReady,
 }: {
   /** Calibrated travel of this side's jaw, radians; null when unrecorded. */
@@ -665,11 +766,29 @@ function TacCapGripperModel({
   frame: TacCapGripperFrame | null;
   profile: BundledGripperProfile;
   side: TacCapSide;
+  /** See `PlaybackDriver`: between-row time while playing, else null. */
+  smoothTimeRef: React.MutableRefObject<number | null>;
+  tcpFrameConvention: TcpFrameConvention;
+  track: TacCapGripperTrack | null;
   onReady: (side: TacCapSide) => void;
 }) {
   const { scene } = useThree();
   const robotRef = useRef<URDFRobot | null>(null);
+  // Recorded TCP → model root. The profile's constant assumes the
+  // `same-axes-v0` frame; a `mirrored-v1` left hand is turned back into it
+  // first, or the model renders rolled 180° about its tool axis.
+  const recordedTcpToRoot = useMemo(
+    () =>
+      new THREE.Matrix4()
+        .set(...tcpConventionToModelMatrix(side, tcpFrameConvention))
+        .multiply(new THREE.Matrix4().set(...profile.rootFromTcp(side))),
+    [profile, side, tcpFrameConvention],
+  );
+  // Read through a ref by the load callback, which must see the value current
+  // when it fires; null until the URDF has passed its frame-link guard.
   const recordedTcpToRootRef = useRef<THREE.Matrix4 | null>(null);
+  const loadedTcpToRootRef = useRef(recordedTcpToRoot);
+  loadedTcpToRootRef.current = recordedTcpToRoot;
   const frameRef = useRef<TacCapGripperFrame | null>(frame);
   if (frame) frameRef.current = frame;
   // Read through a ref for the same reason `frame` is: the load callback fires
@@ -728,12 +847,10 @@ function TacCapGripperModel({
           );
           return;
         }
-        // Incoming frames use the canonical TCP convention; the profile says
-        // where the model root sits relative to it. Constant, not read from the
-        // model — the link above is only a guard against the wrong URDF.
-        recordedTcpToRootRef.current = new THREE.Matrix4().set(
-          ...profile.rootFromTcp(side),
-        );
+        // The profile says where the model root sits relative to the TCP.
+        // Constant, not read from the model — the link above is only a guard
+        // against the wrong URDF.
+        recordedTcpToRootRef.current = loadedTcpToRootRef.current;
         robot.traverse((child) => {
           child.castShadow = true;
           child.receiveShadow = true;
@@ -772,8 +889,8 @@ function TacCapGripperModel({
 
   useLayoutEffect(() => {
     const robot = robotRef.current;
-    const recordedTcpToRoot = recordedTcpToRootRef.current;
-    if (!robot || !recordedTcpToRoot) return;
+    if (!robot || !recordedTcpToRootRef.current) return;
+    recordedTcpToRootRef.current = recordedTcpToRoot;
 
     robot.visible = frame !== null;
     if (!frame) return;
@@ -785,7 +902,26 @@ function TacCapGripperModel({
       profile.driveJoint,
       calibratedTravel,
     );
-  }, [calibratedTravel, frame, profile.driveJoint]);
+  }, [calibratedTravel, frame, profile.driveJoint, recordedTcpToRoot]);
+
+  // While playing, re-pose every display frame from the continuous time. The
+  // row-rate layout effect above still runs; any pose it sets is overwritten
+  // here before the scene is drawn, since R3F calls this right before render.
+  useFrame(() => {
+    const time = smoothTimeRef.current;
+    const robot = robotRef.current;
+    const tcpToRoot = recordedTcpToRootRef.current;
+    if (time === null || !robot || !tcpToRoot || !track) return;
+    const sampled = sampleTacCapGripperFrame(track, time);
+    if (!sampled) return;
+    applyTacCapGripperFrame(
+      robot,
+      tcpToRoot,
+      sampled,
+      profile.driveJoint,
+      travelRef.current,
+    );
+  });
 
   return null;
 }
@@ -1272,10 +1408,26 @@ function TacCapHeadsetModel({ originRadius }: { originRadius: number }) {
 function TacCapHeadMarker({
   frame,
   size,
+  smoothTimeRef,
+  track,
 }: {
   frame: TacCapHeadFrame | null;
   size: number;
+  smoothTimeRef: React.MutableRefObject<number | null>;
+  track: TacCapHeadTrack | null;
 }) {
+  const groupRef = useRef<THREE.Group | null>(null);
+  useFrame(() => {
+    const time = smoothTimeRef.current;
+    const group = groupRef.current;
+    if (time === null || !group || !track) return;
+    const sampled = sampleTacCapHeadFrame(track, time);
+    if (!sampled) return;
+    group.matrix.set(
+      ...tacCapRecordedTcpSceneMatrix(sampled.position, sampled.rotation),
+    );
+    group.matrixWorldNeedsUpdate = true;
+  });
   const transform = useMemo(
     () =>
       frame
@@ -1287,49 +1439,57 @@ function TacCapHeadMarker({
   );
   if (!transform) return null;
 
-  const axisLength = Math.max(size, 0.04);
+  // No local pose axes here: the episode anchor already draws a full axis set
+  // at the head's start pose, and two overlapping sets were unreadable.
   return (
-    <group matrix={transform} matrixAutoUpdate={false}>
+    <group ref={groupRef} matrix={transform} matrixAutoUpdate={false}>
       <TacCapHeadsetModel originRadius={size} />
-      {TACCAP_LOCAL_POSE_AXES.map((axis) => (
-        <TacCapAxisArrow
-          key={axis.label}
-          alwaysVisible
-          length={axisLength}
-          showLabel={false}
-          {...axis}
-        />
-      ))}
     </group>
   );
 }
 
 function TacCapGripperScene({
   calibration,
+  episodeOrigin,
   frames,
   headFrame,
   headTrack,
   onReadyChange,
   profile,
+  smoothTimeRef,
+  tcpFrameConvention,
   timeSeconds,
   tracks,
   trailEnabled,
+  worldAxesLabel,
 }: {
+  smoothTimeRef: React.MutableRefObject<number | null>;
   /** This episode's calibration windows, empty when the dataset records none. */
   calibration: EpisodeGripperCalibration;
+  /** Label for dataset (0, 0, 0); null hides the marker. */
+  episodeOrigin: { label: string; frame: boolean } | null;
+  /** Label on the orientation axes in the grid corner. */
+  worldAxesLabel: string;
   frames: TacCapGripperFrame[];
   headFrame: TacCapHeadFrame | null;
   headTrack: TacCapHeadTrack | null;
   onReadyChange: (ready: boolean) => void;
   profile: BundledGripperProfile;
+  tcpFrameConvention: TcpFrameConvention;
   timeSeconds: number;
   tracks: TacCapGripperTrack[];
   trailEnabled: boolean;
 }) {
   const [readySides, setReadySides] = useState<Set<TacCapSide>>(new Set());
   const bounds = useMemo(
-    () => tacCapSceneBounds(tracks, headTrack, profile.scenePadding),
-    [headTrack, profile.scenePadding, tracks],
+    () =>
+      tacCapSceneBounds(
+        tracks,
+        headTrack,
+        profile.scenePadding,
+        episodeOrigin?.frame ?? false,
+      ),
+    [episodeOrigin?.frame, headTrack, profile.scenePadding, tracks],
   );
   const frameBySide = useMemo(
     () => new Map(frames.map((frame) => [frame.side, frame])),
@@ -1364,6 +1524,9 @@ function TacCapGripperScene({
           frame={frameBySide.get(side) ?? null}
           profile={profile}
           side={side}
+          smoothTimeRef={smoothTimeRef}
+          tcpFrameConvention={tcpFrameConvention}
+          track={tracks.find((track) => track.side === side) ?? null}
           onReady={handleReady}
         />
       ))}
@@ -1389,6 +1552,8 @@ function TacCapGripperScene({
       )}
       <TacCapHeadMarker
         frame={headFrame}
+        smoothTimeRef={smoothTimeRef}
+        track={headTrack}
         size={Math.max(0.006, Math.min(0.014, bounds.extent * 0.012))}
       />
       <Grid
@@ -1402,7 +1567,14 @@ function TacCapGripperScene({
         sectionColor="#475569"
         fadeDistance={gridSize * 1.5}
       />
-      <TacCapWorldAxes bounds={bounds} groundY={gridY} />
+      <TacCapWorldAxes bounds={bounds} groundY={gridY} label={worldAxesLabel} />
+      {episodeOrigin && (
+        <TacCapEpisodeOrigin
+          groundY={gridY}
+          label={episodeOrigin.label}
+          length={Math.min(0.12, Math.max(0.06, bounds.extent * 0.12))}
+        />
+      )}
       <mesh
         rotation={[-Math.PI / 2, 0, 0]}
         position={[bounds.center.x, gridY + 0.001, bounds.center.z]}
@@ -1892,6 +2064,8 @@ function PlaybackDriver({
   totalFrames,
   frameRef,
   setFrame,
+  smoothTimeRef,
+  timeAtRow,
 }: {
   playing: boolean;
   /** Chart rows to advance per second — see `rowsPerSecond` in URDFViewer. */
@@ -1900,6 +2074,16 @@ function PlaybackDriver({
   totalFrames: number;
   frameRef: React.MutableRefObject<number>;
   setFrame: React.Dispatch<React.SetStateAction<number>>;
+  /**
+   * Episode time between two rows, refreshed every display frame while
+   * playing (null when paused). `frame` only steps at the row rate — 30 Hz
+   * for a 30 fps dataset — and the models used to snap to each row, which on
+   * a 60–144 Hz screen reads as stutter however light the scene is. The
+   * models sample their pose from this in R3F's loop instead, so motion is
+   * continuous without re-rendering React at the display rate.
+   */
+  smoothTimeRef: React.MutableRefObject<number | null>;
+  timeAtRow: (row: number) => number;
 }) {
   const elapsed = useRef(0);
   const last = useRef(0);
@@ -1919,13 +2103,30 @@ function PlaybackDriver({
           frameRef.current = (frameRef.current + fd) % totalFrames;
           setFrame(frameRef.current);
         }
+        const row = frameRef.current;
+        const t0 = timeAtRow(row);
+        const t1 = row + 1 < totalFrames ? timeAtRow(row + 1) : t0;
+        const alpha = Math.min(Math.max(elapsed.current * rowsPerSecond, 0), 1);
+        smoothTimeRef.current = t0 + (t1 - t0) * alpha;
       }
     };
     last.current = performance.now();
     elapsed.current = 0;
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [playing, rowsPerSecond, replayRevision, totalFrames, frameRef, setFrame]);
+    return () => {
+      cancelAnimationFrame(raf);
+      smoothTimeRef.current = null;
+    };
+  }, [
+    playing,
+    rowsPerSecond,
+    replayRevision,
+    totalFrames,
+    frameRef,
+    setFrame,
+    smoothTimeRef,
+    timeAtRow,
+  ]);
   return null;
 }
 
@@ -1943,7 +2144,7 @@ export default function URDFViewer({
   playToggleRef?: React.RefObject<(() => void) | undefined>;
   seekByRef?: React.RefObject<((seconds: number) => void) | undefined>;
 }) {
-  const t = useT();
+  const { t, tRich } = useLocale();
   const { datasetInfo } = data;
   const fps = datasetInfo.fps || 30;
   const gripperProfile = useMemo(
@@ -1981,6 +2182,31 @@ export default function URDFViewer({
   const gripperCalibration = useMemo(
     () => readEpisodeGripperCalibration(datasetSources, selectedEpisode),
     [datasetSources, selectedEpisode],
+  );
+
+  // Which frame `observation.state` is in, from the Collector export block. Only
+  // head-start exports put a meaningful episode origin at dataset (0, 0, 0).
+  const [collectionDevices, setCollectionDevices] = useState<unknown>(null);
+  useEffect(() => {
+    if (!isBundledGripper) return;
+    let cancelled = false;
+    fetchCollectionDevices(datasetInfo.repoId).then((devices) => {
+      if (!cancelled) setCollectionDevices(devices);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [datasetInfo.repoId, isBundledGripper]);
+  const worldFrame: EpisodeWorldFrame = useMemo(
+    () => readEpisodeWorldFrame(collectionDevices, selectedEpisode),
+    [collectionDevices, selectedEpisode],
+  );
+  const episodeOrigin = useMemo(
+    () =>
+      worldFrame.kind === "head-start"
+        ? { label: t("urdf.episodeOrigin"), frame: true }
+        : null,
+    [t, worldFrame.kind],
   );
 
   // TacCap poses are read as canonical TCP. The viewer used to offer a
@@ -2098,6 +2324,7 @@ export default function URDFViewer({
   const [replayRevision, setReplayRevision] = useState(0);
   const [tacCapModelsReady, setTacCapModelsReady] = useState(false);
   const frameRef = useRef(0);
+  const smoothTimeRef = useRef<number | null>(null);
 
   useEffect(() => {
     setFrame(0);
@@ -2119,9 +2346,13 @@ export default function URDFViewer({
     [],
   );
 
-  const replayTimeSeconds =
-    chartData[Math.min(frame, Math.max(totalFrames - 1, 0))]?.timestamp ??
-    frame / rowsPerSecond;
+  const timeAtRow = useCallback(
+    (row: number) => chartData[row]?.timestamp ?? row / rowsPerSecond,
+    [chartData, rowsPerSecond],
+  );
+  const replayTimeSeconds = timeAtRow(
+    Math.min(frame, Math.max(totalFrames - 1, 0)),
+  );
   const tacCapFrames = useMemo(
     () =>
       tacCapTracks.flatMap((track) => {
@@ -2381,11 +2612,15 @@ export default function URDFViewer({
           {gripperProfile ? (
             <TacCapGripperScene
               calibration={gripperCalibration}
+              episodeOrigin={episodeOrigin}
+              worldAxesLabel={t("urdf.worldAxes")}
               frames={tacCapFrames}
               headFrame={tacCapHeadFrame}
               headTrack={tacCapHeadTrack}
               onReadyChange={setTacCapModelsReady}
               profile={gripperProfile}
+              smoothTimeRef={smoothTimeRef}
+              tcpFrameConvention={datasetInfo.tcp_frame_convention}
               timeSeconds={replayTimeSeconds}
               tracks={tacCapTracks}
               trailEnabled={trailEnabled}
@@ -2435,6 +2670,8 @@ export default function URDFViewer({
             totalFrames={totalFrames}
             frameRef={frameRef}
             setFrame={setFrame}
+            smoothTimeRef={smoothTimeRef}
+            timeAtRow={timeAtRow}
           />
         </Canvas>
         <UrdfVideoOverlay
@@ -2444,6 +2681,62 @@ export default function URDFViewer({
           replayRevision={replayRevision}
           videos={data.videosInfo}
         />
+        {/*
+         * The declared TCP convention decides how the left gripper model is
+         * posed, so it is always on screen: neutral when declared, muted when
+         * the key is absent and the legacy default applies, amber when the
+         * value names no convention we know.
+         */}
+        {isBundledGripper &&
+          (datasetInfo.tcp_frame_convention_unrecognized !== null ? (
+            <div
+              className="pointer-events-none absolute bottom-3 right-3 z-10 max-w-[min(26rem,60%)] rounded border border-amber-400/40 bg-slate-950/85 px-2 py-1 text-[11px] leading-snug text-amber-300 shadow backdrop-blur-sm"
+              role="status"
+            >
+              {tRich("urdf.tcpConventionUnknown", {
+                value: (
+                  <span className="font-mono">
+                    {datasetInfo.tcp_frame_convention_unrecognized}
+                  </span>
+                ),
+              })}
+            </div>
+          ) : (
+            <div className="pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-1.5 rounded border border-white/10 bg-slate-950/75 px-2 py-1 text-[10px] shadow backdrop-blur-sm">
+              <span className="text-slate-500">{t("urdf.worldFrame")}</span>
+              <span className="font-mono text-slate-200">
+                {t(
+                  worldFrame.kind === "head-start"
+                    ? "urdf.worldFrameHeadStart"
+                    : worldFrame.kind === "recorded"
+                      ? "urdf.worldFrameRecorded"
+                      : "urdf.worldFrameUnknown",
+                )}
+              </span>
+              {worldFrame.anchor && (
+                <span
+                  className="text-slate-500"
+                  title={t("urdf.worldAnchorTitle")}
+                >
+                  {t("urdf.worldAnchor", {
+                    x: worldFrame.anchor.position[0].toFixed(2),
+                    y: worldFrame.anchor.position[1].toFixed(2),
+                    yaw: worldFrame.anchor.yawDeg.toFixed(1),
+                  })}
+                </span>
+              )}
+              <span className="text-slate-600">·</span>
+              <span className="text-slate-500">{t("urdf.tcpConvention")}</span>
+              <span className="font-mono text-slate-200">
+                {datasetInfo.tcp_frame_convention}
+              </span>
+              {!datasetInfo.tcp_frame_convention_declared && (
+                <span className="text-slate-500">
+                  {t("urdf.tcpConventionDefault")}
+                </span>
+              )}
+            </div>
+          ))}
         {trajectoryUnavailable && (
           <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg)]/75 px-6 text-center text-sm text-amber-300">
             {t(

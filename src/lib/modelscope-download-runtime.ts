@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import type { FileHandle } from "node:fs/promises";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { resolveLocalDatasetRoot } from "@/lib/local-datasets-discovery";
@@ -28,7 +29,7 @@ const BACKUP_DIR = "modelscope-download-backups";
 const STATE_DIR = "modelscope-download-state";
 const PROGRESS_REPORT_INTERVAL_MS = 500;
 
-export const DEFAULT_MODELSCOPE_DOWNLOAD_CONCURRENCY = 4;
+export const DEFAULT_MODELSCOPE_DOWNLOAD_CONCURRENCY = 8;
 export const MAX_MODELSCOPE_DOWNLOAD_CONCURRENCY = 8;
 
 type ModelScopeTreeFile = {
@@ -155,6 +156,7 @@ function assertNotAborted(signal?: AbortSignal): void {
 function timeoutSignal(signal: AbortSignal | undefined): {
   signal: AbortSignal;
   cleanup: () => void;
+  didTimeout: () => boolean;
 } {
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(), REQUEST_TIMEOUT_MS);
@@ -164,14 +166,21 @@ function timeoutSignal(signal: AbortSignal | undefined): {
   return {
     signal: combined,
     cleanup: () => clearTimeout(timer),
+    didTimeout: () => timeout.signal.aborted,
   };
 }
+
+type TimedResponse = {
+  response: Response;
+  cleanup: () => void;
+  didTimeout: () => boolean;
+};
 
 async function fetchModelScope(
   url: string,
   token: string | null,
   signal?: AbortSignal,
-): Promise<Response> {
+): Promise<TimedResponse> {
   const timed = timeoutSignal(signal);
   try {
     const response = await fetch(url, {
@@ -183,14 +192,18 @@ async function fetchModelScope(
       const detail = (await response.text().catch(() => "")).trim();
       throw modelScopeRequestError(response.status, detail);
     }
-    return response;
+    return {
+      response,
+      cleanup: timed.cleanup,
+      didTimeout: timed.didTimeout,
+    };
   } catch (error: unknown) {
-    if (signal?.aborted || timed.signal.aborted) {
+    timed.cleanup();
+    if (signal?.aborted) {
       throw new ModelScopeDownloadCancelled();
     }
+    if (timed.didTimeout()) throw new Error("ModelScope request timed out.");
     throw error;
-  } finally {
-    timed.cleanup();
   }
 }
 
@@ -199,7 +212,30 @@ async function fetchJson(
   token: string | null,
   signal?: AbortSignal,
 ): Promise<unknown> {
-  return await (await fetchModelScope(url, token, signal)).json();
+  const fetched = await fetchModelScope(url, token, signal);
+  try {
+    return await fetched.response.json();
+  } catch (error: unknown) {
+    if (signal?.aborted) throw new ModelScopeDownloadCancelled();
+    if (fetched.didTimeout()) throw new Error("ModelScope request timed out.");
+    throw error;
+  } finally {
+    fetched.cleanup();
+  }
+}
+
+async function writeBuffer(handle: FileHandle, buffer: Buffer): Promise<void> {
+  let offset = 0;
+  while (offset < buffer.length) {
+    const { bytesWritten } = await handle.write(
+      buffer,
+      offset,
+      buffer.length - offset,
+      null,
+    );
+    if (bytesWritten <= 0) throw new Error("Unable to write dataset file.");
+    offset += bytesWritten;
+  }
 }
 
 function encodedRepo(target: ModelScopeDatasetTarget): string {
@@ -876,50 +912,65 @@ export async function downloadModelScopeDataset(
     const destination = path.join(snapshot, ...file.localPath.split("/"));
     try {
       await fs.mkdir(path.dirname(destination), { recursive: true });
-      const response = await fetchModelScope(
+      const fetched = await fetchModelScope(
         fileUrl(request.target, file.remotePath, file.revision),
         request.token,
         combinedSignal,
       );
-      const contentLength = integerSize(response.headers.get("content-length"));
-      const total = file.size ?? contentLength;
-      const expectedSha256 =
-        file.sha256 && /^[a-f0-9]{64}$/iu.test(file.sha256)
-          ? file.sha256.toLowerCase()
-          : null;
-      const hash = expectedSha256 ? createHash("sha256") : null;
-      const handle = await fs.open(destination, "w");
       let written = 0;
+      let total: number | null = null;
       try {
-        if (!response.body) {
-          const buffer = Buffer.from(await response.arrayBuffer());
-          hash?.update(buffer);
-          await handle.write(buffer);
-          written = buffer.byteLength;
-          downloadedByFile.set(file.remotePath, written);
-          emitProgress(file.remotePath, written, total, true);
-        } else {
-          const reader = response.body.getReader();
-          for (;;) {
-            assertNotAborted(combinedSignal);
-            const { done, value } = await reader.read();
-            if (done) break;
-            const buffer = Buffer.from(value);
+        const response = fetched.response;
+        const contentLength = integerSize(
+          response.headers.get("content-length"),
+        );
+        total = file.size ?? contentLength;
+        const expectedSha256 =
+          file.sha256 && /^[a-f0-9]{64}$/iu.test(file.sha256)
+            ? file.sha256.toLowerCase()
+            : null;
+        const hash = expectedSha256 ? createHash("sha256") : null;
+        const handle = await fs.open(destination, "w");
+        try {
+          if (!response.body) {
+            const buffer = Buffer.from(await response.arrayBuffer());
             hash?.update(buffer);
-            await handle.write(buffer);
-            written += buffer.byteLength;
+            await writeBuffer(handle, buffer);
+            written = buffer.byteLength;
             downloadedByFile.set(file.remotePath, written);
-            emitProgress(file.remotePath, written, total);
+            emitProgress(file.remotePath, written, total, true);
+          } else {
+            const reader = response.body.getReader();
+            for (;;) {
+              assertNotAborted(combinedSignal);
+              const { done, value } = await reader.read();
+              if (done) break;
+              const buffer = Buffer.from(value);
+              hash?.update(buffer);
+              await writeBuffer(handle, buffer);
+              written += buffer.byteLength;
+              downloadedByFile.set(file.remotePath, written);
+              emitProgress(file.remotePath, written, total);
+            }
           }
+        } finally {
+          await handle.close();
         }
+        if (file.size !== null && written !== file.size) {
+          throw new Error(`Size verification failed for ${file.remotePath}.`);
+        }
+        if (expectedSha256 && hash?.digest("hex") !== expectedSha256) {
+          throw new Error(
+            `SHA-256 verification failed for ${file.remotePath}.`,
+          );
+        }
+      } catch (error: unknown) {
+        if (fetched.didTimeout())
+          throw new Error("ModelScope request timed out.");
+        if (combinedSignal.aborted) throw new ModelScopeDownloadCancelled();
+        throw error;
       } finally {
-        await handle.close();
-      }
-      if (file.size !== null && written !== file.size) {
-        throw new Error(`Size verification failed for ${file.remotePath}.`);
-      }
-      if (expectedSha256 && hash?.digest("hex") !== expectedSha256) {
-        throw new Error(`SHA-256 verification failed for ${file.remotePath}.`);
+        fetched.cleanup();
       }
       processedBytes += written;
       completedFiles += 1;

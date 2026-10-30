@@ -256,6 +256,17 @@ export const zh: Record<MessageKey, string> = {
   "trash.keep": "保留",
   "trash.empty": "清空回收站",
 
+  // ── homepage: interrupted conversions ───────────────────────────────────
+  "interrupted.title_one": "{count} 个中断的转换",
+  "interrupted.title_other": "{count} 个中断的转换",
+  "interrupted.hint":
+    "转换中途停止：断点文件已写入，但还没有 {file}，所以它还不是数据集，别处都看不到它。重新运行转换脚本会从断点继续；在那之前这些字节一直占着磁盘。",
+  "interrupted.badge": "已中断",
+  "interrupted.episodes_one": "已转换 {count} episodes",
+  "interrupted.episodes_other": "已转换 {count} episodes",
+  "interrupted.unknownProgress": "断点文件无法读取",
+  "interrupted.stopped": "停止于 {day}",
+
   // ── homepage: tags editor ───────────────────────────────────────────────
   "tags.title": "编辑标签",
   "tags.task": "任务",
@@ -826,6 +837,14 @@ export const zh: Record<MessageKey, string> = {
   "urdf.unmapped": "-- 未映射 --",
   "urdf.trail": "轨迹",
   "urdf.showTrail": "显示轨迹线",
+  "urdf.episodeOrigin": "anchor（开录时头部）",
+  "urdf.worldAxes": "world",
+  "urdf.worldFrame": "坐标系",
+  "urdf.worldFrameHeadStart": "开录头部原点",
+  "urdf.worldFrameRecorded": "录制坐标系",
+  "urdf.worldFrameUnknown": "未声明",
+  "urdf.worldAnchor": "锚点 ({x}, {y}) m · yaw {yaw}°",
+  "urdf.worldAnchorTitle": "该原点在录制坐标系中的位置与朝向",
   "urdf.hideTrail": "隐藏轨迹线",
   "urdf.hintSeek5": "后退/快进 5 秒",
   "urdf.resizeVideo": "拖动以缩放视频窗口",
@@ -839,7 +858,11 @@ export const zh: Record<MessageKey, string> = {
   "urdf.tacCapLink4Note":
     "TCP 坐标系：+X 向前、+Y 向左、+Z 向上（对应红/绿/蓝参考轴）。存在完整 head.xyz+r1-r6 时，黄色轨迹、头显示意模型和播放点坐标系会同步显示；头显以记录的 head 位姿为中心且面罩朝 +X，不附加未经标定的偏移。仅有头部视频不会生成轨迹。",
   "urdf.tacCapNoPose":
-    "未找到可用于 TacCap 回放的完整 left_tcp/right_tcp xyz+r1-r6 轨迹。",
+    "未找到可用于夹爪回放的完整 left_tcp/right_tcp xyz+r1-r6 轨迹。",
+  "urdf.tcpConvention": "TCP 约定",
+  "urdf.tcpConventionDefault": "（未声明，按默认）",
+  "urdf.tcpConventionUnknown":
+    "info.json 中的 tcp_frame_convention 取值 {value} 无法识别，已按 same-axes-v0 渲染，左手夹爪可能显示为翻转。",
   "urdf.legendTracks": "轨迹",
   "urdf.valuesTitle": "数值",
   "urdf.valuesClear": "清空",
@@ -1066,6 +1089,10 @@ export const zh: Record<MessageKey, string> = {
   "workbench.writeTokenAvailable": "HF 写入令牌可用",
   "workbench.publicReadOnly": "公共只读模式",
   "workbench.syncError": "无法同步共享 Workbench 状态。",
+  "workbench.mergeConflict":
+    "两边修改存在冲突，尚未覆盖任何配置。请选择冲突项采用哪一方；其余修改会自动合并。若合并后配置无效，则采用所选一方的整份配置。",
+  "workbench.mergeKeepLocal": "冲突项保留本地",
+  "workbench.mergeKeepRemote": "冲突项保留远程",
   "workbench.dataset": "数据集",
   "workbench.updated": "更新时间",
   "workbench.local": "本地状态",

@@ -21,13 +21,14 @@ export default async function Home() {
   // known locations server-side (an unknown value falls back to the root).
   const cookieStore = await cookies();
   const requestedPath = cookieStore.get(BROWSE_PATH_COOKIE)?.value;
-  const { root, browsePath, locations, datasets, errors } =
+  const { root, browsePath, locations, datasets, interrupted, errors } =
     await discoverLocalDatasets(requestedPath);
   const clientDiscovery = serializeLocalDatasetsResponseForClient({
     root,
     browsePath,
     locations,
     datasets,
+    interrupted,
     errors,
   });
 
@@ -45,6 +46,7 @@ export default async function Home() {
       browsePath={browsePath}
       locations={clientDiscovery.locations}
       datasets={clientDiscovery.datasets}
+      interrupted={clientDiscovery.interrupted}
       errors={clientDiscovery.errors}
       delta={delta}
     />

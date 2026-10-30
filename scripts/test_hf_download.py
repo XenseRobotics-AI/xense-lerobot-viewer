@@ -5,6 +5,7 @@ import types
 import tempfile
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 import hf_download
@@ -12,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from hf_download import (
+    _progress_tqdm_class,
     build_check_result,
     download_concurrency,
     parse_source,
@@ -48,11 +50,55 @@ class HfDownloadTest(unittest.TestCase):
                 parse_source(value)
 
     def test_validates_download_concurrency(self):
-        self.assertEqual(download_concurrency(None), 4)
+        self.assertEqual(download_concurrency(None), 8)
         self.assertEqual(download_concurrency("3"), 3)
         for value in (0, 9, 1.5, "fast", True):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 download_concurrency(value)
+
+    def test_snapshot_progress_counts_network_bytes_not_xet_reconstruction(self):
+        byte_updates = []
+        file_updates = []
+        progress_class = _progress_tqdm_class(
+            lambda delta, _name: byte_updates.append(delta), file_updates.append
+        )
+        self.assertIsNotNone(progress_class)
+
+        transfer = progress_class(
+            total=100,
+            desc="Downloading bytes",
+            name="huggingface_hub.snapshot_download.transfer",
+        )
+        transfer.update(25)
+        transfer.close()
+
+        reconstruct = progress_class(
+            total=100,
+            desc="Reconstructing file",
+            name="huggingface_hub.snapshot_download",
+        )
+        reconstruct.update(75)
+        reconstruct.close()
+
+        file_counter = progress_class(
+            total=2,
+            desc="Fetching 2 files",
+            name="huggingface_hub.snapshot_download.files",
+        )
+        file_counter.update(1)
+        file_counter.close()
+
+        xet_file = progress_class(
+            total=100,
+            desc="dataset.parquet",
+            name="huggingface_hub.xet_get",
+        )
+        xet_file.update(75)
+        xet_file.update_transfer(30)
+        xet_file.close()
+
+        self.assertEqual(byte_updates, [25, 30])
+        self.assertEqual(file_updates, [1])
 
     def test_selects_the_four_scope_variants_and_strips_folder_prefix(self):
         files = [
@@ -190,7 +236,7 @@ class HfDownloadTest(unittest.TestCase):
             def fail_download(**_kwargs):
                 raise RuntimeError("network failed")
 
-            module.hf_hub_download = fail_download
+            module.snapshot_download = fail_download
             with patch.dict(sys.modules, {"huggingface_hub": module}):
                 with patch("hf_download._api_and_info", return_value=(None, info)):
                     with self.assertRaises(RuntimeError):
@@ -210,20 +256,23 @@ class HfDownloadTest(unittest.TestCase):
     def test_folder_download_uses_checked_revision_and_strips_prefix(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            cache = root / "cache"
-            cache.write_bytes(b"abc")
             info = SimpleNamespace(
                 sha="abcdef1234567",
                 siblings=[remote("child/meta/info.json", 3)],
             )
             revisions = []
+            patterns = []
             module = types.ModuleType("huggingface_hub")
 
             def fake_download(**kwargs):
                 revisions.append(kwargs["revision"])
-                return str(cache)
+                patterns.extend(kwargs["allow_patterns"])
+                local_dir = Path(kwargs["local_dir"])
+                downloaded = local_dir / "child" / "meta" / "info.json"
+                downloaded.parent.mkdir(parents=True, exist_ok=True)
+                downloaded.write_bytes(b"abc")
 
-            module.hf_hub_download = fake_download
+            module.snapshot_download = fake_download
             request = {
                 "source": "TacVerse/opendata/child",
                 "destinationRoot": str(root),
@@ -236,13 +285,12 @@ class HfDownloadTest(unittest.TestCase):
             target = root / "TacVerse" / "opendata" / "child"
             self.assertEqual((target / "meta" / "info.json").read_bytes(), b"abc")
             self.assertEqual(revisions, [info.sha])
+            self.assertEqual(patterns, ["child/meta/info.json"])
             self.assertTrue(result["metaOnly"])
 
     def test_downloads_files_with_requested_concurrency(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            cache_dir = root / "cache"
-            cache_dir.mkdir()
             info = SimpleNamespace(
                 sha="abcdef1234567",
                 siblings=[remote(f"data/{index}.bin", 1) for index in range(4)],
@@ -254,18 +302,24 @@ class HfDownloadTest(unittest.TestCase):
 
             def fake_download(**kwargs):
                 nonlocal active, max_active
-                with lock:
-                    active += 1
-                    max_active = max(max_active, active)
-                time.sleep(0.05)
-                filename = kwargs["filename"]
-                cache = cache_dir / filename.replace("/", "_")
-                cache.write_bytes(b"x")
-                with lock:
-                    active -= 1
-                return str(cache)
+                self.assertEqual(kwargs["max_workers"], 3)
 
-            module.hf_hub_download = fake_download
+                def download(filename):
+                    nonlocal active, max_active
+                    with lock:
+                        active += 1
+                        max_active = max(max_active, active)
+                    time.sleep(0.05)
+                    local = Path(kwargs["local_dir"]) / filename
+                    local.parent.mkdir(parents=True, exist_ok=True)
+                    local.write_bytes(b"x")
+                    with lock:
+                        active -= 1
+
+                with ThreadPoolExecutor(max_workers=kwargs["max_workers"]) as pool:
+                    list(pool.map(download, kwargs["allow_patterns"]))
+
+            module.snapshot_download = fake_download
             request = {
                 "source": "TacVerse/example",
                 "destinationRoot": str(root),
@@ -281,6 +335,62 @@ class HfDownloadTest(unittest.TestCase):
             self.assertEqual(result["concurrency"], 3)
             self.assertGreaterEqual(max_active, 2)
             self.assertEqual(len(list((target / "data").glob("*.bin"))), 4)
+
+    def test_progress_uses_completed_files_when_sizes_are_unknown(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            info = SimpleNamespace(
+                sha="abcdef1234567",
+                siblings=[remote("data/unknown.bin", None)],
+            )
+            events = []
+            module = types.ModuleType("huggingface_hub")
+
+            def fake_download(**kwargs):
+                progress = kwargs["tqdm_class"](
+                    total=1,
+                    desc="Fetching 1 files",
+                    name="huggingface_hub.snapshot_download.files",
+                )
+                time.sleep(0.51)
+                progress.update(1)
+                local = Path(kwargs["local_dir"]) / "data" / "unknown.bin"
+                local.parent.mkdir(parents=True, exist_ok=True)
+                local.write_bytes(b"x")
+
+            def progress_class(on_bytes, on_files):
+                class FakeProgress:
+                    def __init__(self, **_kwargs):
+                        pass
+
+                    def update(self, amount):
+                        on_files(amount)
+
+                return FakeProgress
+
+            module.snapshot_download = fake_download
+            request = {
+                "source": "TacVerse/example",
+                "destinationRoot": str(root),
+                "scope": "all",
+                "revisionSha": info.sha,
+            }
+            with patch.dict(sys.modules, {"huggingface_hub": module}):
+                with patch("hf_download._api_and_info", return_value=(None, info)):
+                    with patch(
+                        "hf_download._progress_tqdm_class",
+                        side_effect=progress_class,
+                    ):
+                        with patch("hf_download.emit", side_effect=events.append):
+                            hf_download.download(request, None)
+
+            progress = [event["progress"] for event in events if event.get("type") == "progress"]
+            self.assertTrue(
+                any(
+                    item["percent"] == 100 and item.get("bytes") == 0
+                    for item in progress
+                )
+            )
 
     def test_rejects_existing_target_symlink_that_escapes_root(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -300,13 +410,17 @@ class HfDownloadTest(unittest.TestCase):
             target = root / "TacVerse" / "example"
             target.mkdir(parents=True)
             (target / "keep.txt").write_text("keep")
-            cache = root / "cache"
-            cache.write_bytes(b"abc")
             info = SimpleNamespace(
                 sha="abcdef1234567", siblings=[remote("meta/info.json", 3)]
             )
             module = types.ModuleType("huggingface_hub")
-            module.hf_hub_download = lambda **_kwargs: str(cache)
+
+            def fake_download(**kwargs):
+                local = Path(kwargs["local_dir"]) / "meta" / "info.json"
+                local.parent.mkdir(parents=True, exist_ok=True)
+                local.write_bytes(b"abc")
+
+            module.snapshot_download = fake_download
             request = {
                 "source": "TacVerse/example",
                 "destinationRoot": str(root),
