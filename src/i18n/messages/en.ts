@@ -403,6 +403,17 @@ export const en = {
 
   // ── Subtask panel (Episodes tab) ────────────────────────────────────────
   "subtask.title": "Subtasks",
+  "autoAnn.title": "Auto annotation",
+  "autoAnn.loading": "Loading TacFlow annotation…",
+  "autoAnn.none": "No TacFlow automatic annotation for this dataset.",
+  "autoAnn.noEpisode": "The annotation report has no entry for this episode.",
+  "autoAnn.unusable": "unusable",
+  "autoAnn.disclaimer":
+    "A vision model's reading of the head camera — claims to check against the video. Click a step or a finding to jump there.",
+  "autoAnn.findings": "Data issues & operator mistakes",
+  "autoAnn.steps": "Steps",
+  "autoAnn.dataIssue": "data issue",
+  "autoAnn.mistake": "operator mistake",
   "subtask.unsaved": "unsaved",
   "subtask.frameOf": "frame {current} / {last}",
   "subtask.highLevel": "High-level instruction",
