@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { createTaskStreamResponse } from "@/lib/task-stream-response";
+import { SharedAbortableTaskPool } from "@/lib/shared-abortable-task";
 import { runTypeScriptDoctor } from "@/lib/doctor/runner";
 import { resolveDatasetRoot } from "@/lib/local-dataset-paths";
 import {
@@ -43,7 +45,7 @@ interface CachedResult {
 }
 
 const cache = new Map<string, CachedResult>();
-const inFlight = new Map<string, Promise<DoctorRunResponse>>();
+const inFlight = new SharedAbortableTaskPool<DoctorRunResponse>();
 
 function parseOptions(body: DoctorRequestBody):
   | {
@@ -218,14 +220,6 @@ async function validateDatasetRoot(encodedPath: string): Promise<{
   }
 }
 
-function abortError(): DOMException {
-  return new DOMException("Doctor run aborted", "AbortError");
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
-}
-
 function remember(key: string, result: DoctorRunResponse): void {
   cache.delete(key);
   cache.set(key, { expiresAt: Date.now() + CACHE_TTL_MS, result });
@@ -284,72 +278,24 @@ function streamDoctorRun(
     speedThresholds: DoctorSpeedThresholds;
     checks: DoctorCheckId[] | null;
   },
-  controller: AbortController,
-  cleanup: () => void,
+  signal: AbortSignal,
 ): Response {
-  return new Response(
-    new ReadableStream<Uint8Array>({
-      start(streamController) {
-        let closed = false;
-        const send = (event: DoctorStreamEvent) => {
-          if (closed) return;
-          try {
-            streamController.enqueue(jsonLine(event));
-          } catch {
-            closed = true;
-            controller.abort(abortError());
-          }
-        };
-        const close = () => {
-          if (closed) return;
-          closed = true;
-          streamController.close();
-        };
-
-        void runTypeScriptDoctor(datasetRoot, {
-          maxEpisodes: options.maxEpisodes,
-          episodeRange: options.episodeRange,
-          dimensionJumpThresholds: options.dimensionJumpThresholds,
-          speedThresholds: options.speedThresholds,
-          checks: options.checks,
-          signal: controller.signal,
-          onProgress: (progress: DoctorProgress) =>
-            send({ type: "progress", progress }),
-        })
-          .then((result) => {
-            remember(key, result);
-            send({ type: "result", result });
-          })
-          .catch((error) => {
-            if (!isAbortError(error)) {
-              send({
-                type: "error",
-                error:
-                  controller.signal.reason instanceof DOMException &&
-                  controller.signal.reason.name === "TimeoutError"
-                    ? "Doctor timed out after 5 minutes."
-                    : error instanceof Error
-                      ? error.message
-                      : String(error),
-              });
-            }
-          })
-          .finally(() => {
-            cleanup();
-            close();
-          });
-      },
-      cancel() {
-        controller.abort(abortError());
-        cleanup();
-      },
-    }),
+  return createTaskStreamResponse(
+    signal,
+    async (emit, jobSignal) => {
+      const result = await runTypeScriptDoctor(datasetRoot, {
+        ...options,
+        signal: jobSignal,
+        onProgress: (progress: DoctorProgress) =>
+          emit({ type: "progress", progress }),
+      });
+      jobSignal.throwIfAborted();
+      remember(key, result);
+      emit({ type: "result", result });
+    },
     {
-      headers: {
-        "cache-control": "no-store",
-        "content-type": "application/x-ndjson; charset=utf-8",
-        "x-content-type-options": "nosniff",
-      },
+      timeoutMs: DOCTOR_TIMEOUT_MS,
+      timeoutMessage: "Doctor timed out after 5 minutes.",
     },
   );
 }
@@ -358,8 +304,11 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ encodedPath: string }> },
 ): Promise<Response> {
+  if (request.signal.aborted) return new Response(null, { status: 499 });
   const { encodedPath } = await context.params;
+  if (request.signal.aborted) return new Response(null, { status: 499 });
   const dataset = await validateDatasetRoot(encodedPath);
+  if (request.signal.aborted) return new Response(null, { status: 499 });
   if (!dataset)
     return Response.json({ error: "Dataset not found." }, { status: 404 });
 
@@ -374,11 +323,13 @@ export async function POST(
     }
     body = raw as DoctorRequestBody;
   } catch {
+    if (request.signal.aborted) return new Response(null, { status: 499 });
     return Response.json(
       { error: "Request body must be JSON." },
       { status: 400 },
     );
   }
+  if (request.signal.aborted) return new Response(null, { status: 499 });
   const options = parseOptions(body);
   if ("error" in options)
     return Response.json({ error: options.error }, { status: 400 });
@@ -403,58 +354,40 @@ export async function POST(
   }
   if (cached) cache.delete(key);
 
-  const controller = new AbortController();
-  const onRequestAbort = () => controller.abort(abortError());
-  request.signal.addEventListener("abort", onRequestAbort, { once: true });
-  const timeout = setTimeout(
-    () =>
-      controller.abort(new DOMException("Doctor timed out", "TimeoutError")),
-    DOCTOR_TIMEOUT_MS,
-  );
-  timeout.unref();
-
   if (wantsStream) {
-    return streamDoctorRun(dataset.root, key, options, controller, () => {
-      clearTimeout(timeout);
-      request.signal.removeEventListener("abort", onRequestAbort);
-    });
+    return streamDoctorRun(dataset.root, key, options, request.signal);
   }
 
   try {
-    let pending = inFlight.get(key);
-    if (!pending) {
-      pending = runTypeScriptDoctor(dataset.root, {
-        maxEpisodes: options.maxEpisodes,
-        episodeRange: options.episodeRange,
-        dimensionJumpThresholds: options.dimensionJumpThresholds,
-        speedThresholds: options.speedThresholds,
-        checks: options.checks,
-        signal: controller.signal,
-      });
-      inFlight.set(key, pending);
-      pending.finally(() => inFlight.delete(key)).catch(() => undefined);
-    }
-    const result = await pending;
-    remember(key, result);
+    const result = await inFlight.run(
+      key,
+      request.signal,
+      async (signal) => {
+        const result = await runTypeScriptDoctor(dataset.root, {
+          ...options,
+          signal,
+        });
+        signal.throwIfAborted();
+        remember(key, result);
+        return result;
+      },
+      {
+        timeoutMs: DOCTOR_TIMEOUT_MS,
+        timeoutMessage: "Doctor timed out after 5 minutes.",
+      },
+    );
     return Response.json(result, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     if (request.signal.aborted) return new Response(null, { status: 499 });
-    if (
-      controller.signal.reason instanceof DOMException &&
-      controller.signal.reason.name === "TimeoutError"
-    ) {
+    if (error instanceof Error && error.name === "TimeoutError") {
       return Response.json(
         { error: "Doctor timed out after 5 minutes." },
         { status: 504 },
       );
     }
-    if (isAbortError(error)) return new Response(null, { status: 499 });
     return Response.json(
       { error: error instanceof Error ? error.message : String(error) },
       { status: 500 },
     );
-  } finally {
-    clearTimeout(timeout);
-    request.signal.removeEventListener("abort", onRequestAbort);
   }
 }
