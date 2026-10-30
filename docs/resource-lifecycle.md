@@ -16,9 +16,13 @@ media source removal, or a lost diagnostic/review result.
 
 ## Resource ownership
 
-- File responses (200 and 206): one response owns one filesystem stream. Convert
-  the live Node stream to a Web stream before propagating a request abort; never
-  wrap an already-destroyed Node stream. Before opening a file, recheck cancellation
+- File responses (200 and 206): one response owns one filesystem stream. Attach
+  lifecycle handlers before propagating a request abort. An explicit bridge owns
+  data/backpressure and a single terminal Web action; do not use Node 18's
+  Readable.toWeb adapter here. Cancelling between EOF and descriptor close must
+  mark the bridge terminal before destroying the source, without closing the
+  already-cancelled Web controller again. Keep the error handler until descriptor
+  close, discard late callbacks, then detach all handlers. Before opening a file, recheck cancellation
   after asynchronous path lookup. Pre-cancelled requests return an empty 499;
   cancellation after headers terminates the body. Consumer cancellation must also
   close the file. The queue is bounded in bytes. HEAD owns no file stream; byte
@@ -62,8 +66,10 @@ uncaughtException or unhandledRejection suppression. CI pins this check to Node
 18.19.1, the runtime that exposed the original failure.
 
 Coverage includes pre-aborted requests, cancellation across async setup and signal
-subscription, mid-transfer abort, reader cancellation, real I/O failures, listener
-cleanup, rapid aborts, empty ranges, late diagnostic callbacks, timeouts, shared
+subscription, mid-transfer abort, reader/body/request cancellation between EOF and
+descriptor close in both listener orderings, bounded read-ahead, unexpected source
+closure, empty files, real I/O failures, descriptor/listener cleanup, rapid aborts,
+empty ranges, late diagnostic callbacks, timeouts, shared
 subscribers, detached write completion/backpressure and NDJSON reader cleanup.
 
 Manual visibility verification uses the production review provider, shared
