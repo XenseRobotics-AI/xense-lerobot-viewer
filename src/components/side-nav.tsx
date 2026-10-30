@@ -13,8 +13,12 @@ import { useT } from "@/context/locale-context";
 import { routePathFromRepoId } from "@/utils/datasetRoute";
 
 import type { DatasetDisplayInfo } from "@/app/[org]/[dataset]/[episode]/fetch-data";
+import VisibleEpisodePreloader, {
+  type EpisodePreloadOptions,
+} from "./visible-episode-preloader";
 
 interface SidebarProps {
+  preload?: EpisodePreloadOptions;
   reviewPanel?: React.ReactNode;
   reviewFilter: ReviewFilter;
   onReviewFilterChange: (value: ReviewFilter) => void;
@@ -32,6 +36,7 @@ interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
+  preload,
   datasetInfo,
   reviewPanel,
   reviewFilter,
@@ -86,6 +91,14 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <div className="flex z-10 min-h-0 shrink-0">
+      {preload && (
+        <VisibleEpisodePreloader
+          {...preload}
+          listRef={listRef}
+          listKey={displayEpisodeKey + ":" + mobileVisible}
+          episodeId={episodeId}
+        />
+      )}
       <nav
         className={`shrink-0 min-h-0 flex-col overflow-hidden bg-[var(--surface-0)] border-r border-white/5 p-4 break-words w-60 ${
           mobileVisible ? "flex" : "hidden"
@@ -222,6 +235,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                       href={routePathFromRepoId(datasetInfo.repoId, episode)}
                       prefetch={false}
                       data-episode-link="true"
+                      data-episode-id={episode}
                       aria-current={active ? "page" : undefined}
                       onClick={
                         onEpisodeSelect

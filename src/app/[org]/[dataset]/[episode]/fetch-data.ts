@@ -3,6 +3,7 @@ import {
   fetchParquetFile,
   formatStringWithVars,
   readParquetAsObjects,
+  pruneParquetCache,
 } from "@/utils/parquetUtils";
 import { pick } from "@/utils/pick";
 import {
@@ -28,6 +29,10 @@ import {
 import { buildPoseVelocityChartGroups } from "@/utils/poseVelocity";
 import { evenlySampleArray, evenlySampleIndices } from "@/utils/sampling";
 import { rememberInLru, touchLru } from "@/utils/lruCache";
+import {
+  EpisodeDataCache,
+  estimateEpisodeBytes,
+} from "@/utils/episodeDataCache";
 import {
   extractSpatialTrajectory,
   findSpatialAxisGroups,
@@ -204,7 +209,7 @@ function parsePositiveIntEnv(
 //
 //   - **There is no invalidation.** Unlike the Node-side handle cache in
 //     `src/lib/parquet-server.ts`, which re-keys on `mtime + size`, this one
-//     evicts by LRU only. A dataset rewritten underneath the tab — running
+//     evicts by capacity and idle distance/age. A dataset rewritten underneath the tab — running
 //     `scripts/export_subtasks.py`, or an HF sync — keeps serving the parsed
 //     copy until it is evicted. This module runs in the browser, so a page
 //     reload is always the escape hatch; that is the trade being made.
@@ -217,11 +222,21 @@ const MAX_EPISODE_DATA_CACHE_ENTRIES = parsePositiveIntEnv(
   process.env.MAX_EPISODE_DATA_CACHE_ENTRIES,
   8,
 );
-const episodeDataCache = new Map<string, EpisodeData>();
-const episodeDataInFlight = new Map<
-  string,
-  Promise<{ data?: EpisodeData; error?: string }>
->();
+const episodeDataCache = new EpisodeDataCache<EpisodeData>({
+  recentEntries: MAX_EPISODE_DATA_CACHE_ENTRIES,
+  recentBytes: 96 * 1024 * 1024,
+  prefetchEntries: 24,
+  prefetchBytes: 64 * 1024 * 1024,
+  estimate: estimateEpisodeBytes,
+  distance: (key, current) => {
+    const a = key.split("\u0000");
+    const b = current.split("\u0000");
+    return a[0] === b[0] && a[1] === b[1]
+      ? Math.abs(Number(a[2]) - Number(b[2]))
+      : Infinity;
+  },
+});
+let inactiveCacheTimers: ReturnType<typeof setTimeout>[] = [];
 
 // v3 episode metadata is tiny compared with the data/video shards, but each
 // lookup used to decode the same metadata parquet files again. Cache parsed
@@ -260,8 +275,57 @@ function episodeDataCacheKey(
   return `${org}\u0000${dataset}\u0000${episodeId}`;
 }
 
-function rememberEpisodeData(key: string, data: EpisodeData): void {
-  rememberInLru(episodeDataCache, key, data, MAX_EPISODE_DATA_CACHE_ENTRIES);
+export function setEpisodePrefetchTargets(
+  org: string,
+  dataset: string,
+  ids: number[],
+  current: number,
+): () => void {
+  inactiveCacheTimers.forEach(clearTimeout);
+  inactiveCacheTimers = [];
+  const release = episodeDataCache.setTargets(
+    ids.map((id) => episodeDataCacheKey(org, dataset, id)),
+    episodeDataCacheKey(org, dataset, current),
+  );
+  return () => {
+    // React installs the new target lease before releasing its predecessor.
+    queueMicrotask(() => {
+      if (release())
+        inactiveCacheTimers = [11_000, 121_000].map((delay) =>
+          setTimeout(pruneEpisodeDataCache, delay),
+        );
+    });
+  };
+}
+
+export function pruneEpisodeDataCache(): void {
+  episodeDataCache.prune();
+  pruneParquetCache();
+}
+
+export function canPrefetchEpisode(
+  org: string,
+  dataset: string,
+  id: number,
+): boolean {
+  return (
+    !episodeDataCache.backgroundBusy &&
+    episodeDataCache.canPrefetch(episodeDataCacheKey(org, dataset, id))
+  );
+}
+
+export function episodePrefetchBusy(): boolean {
+  return episodeDataCache.backgroundBusy;
+}
+
+export function prefetchEpisodeDataSafe(
+  org: string,
+  dataset: string,
+  id: number,
+) {
+  return episodeDataCache.prefetch(episodeDataCacheKey(org, dataset, id), () =>
+    getEpisodeData(org, dataset, id),
+  );
 }
 
 const MAX_EPISODE_POINTS = parsePositiveIntEnv(
@@ -2966,30 +3030,8 @@ export async function getEpisodeDataSafe(
   dataset: string,
   episodeId: number,
 ): Promise<{ data?: EpisodeData; error?: string }> {
-  const key = episodeDataCacheKey(org, dataset, episodeId);
-  const cached = touchLru(episodeDataCache, key);
-  if (cached) return { data: cached };
-
-  const inFlight = episodeDataInFlight.get(key);
-  if (inFlight) return inFlight;
-
-  const request = (async () => {
-    try {
-      const data = await getEpisodeData(org, dataset, episodeId);
-      rememberEpisodeData(key, data);
-      return { data };
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      return { error: message || "Unknown error" };
-    }
-  })();
-
-  episodeDataInFlight.set(key, request);
-  try {
-    return await request;
-  } finally {
-    if (episodeDataInFlight.get(key) === request) {
-      episodeDataInFlight.delete(key);
-    }
-  }
+  return episodeDataCache.get(
+    episodeDataCacheKey(org, dataset, episodeId),
+    () => getEpisodeData(org, dataset, episodeId),
+  );
 }
