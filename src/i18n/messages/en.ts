@@ -386,6 +386,9 @@ export const en = {
   "player.minimize": "Minimize",
   "player.hide": "Hide video",
   "player.noVideoTag": "Your browser does not support the video tag.",
+  "player.decodingVideoFrame": "Decoding frame",
+  "player.videoFrameError": "Frame unavailable",
+  "player.retryVideo": "Retry video",
 
   // ── loading ─────────────────────────────────────────────────────────────
   "loading.title": "Loading",

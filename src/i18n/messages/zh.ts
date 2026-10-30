@@ -374,6 +374,9 @@ export const zh: Record<MessageKey, string> = {
   "player.minimize": "还原",
   "player.hide": "隐藏该视频",
   "player.noVideoTag": "你的浏览器不支持 video 标签。",
+  "player.decodingVideoFrame": "正在解码画面",
+  "player.videoFrameError": "画面加载失败",
+  "player.retryVideo": "重试加载画面",
 
   // ── loading ─────────────────────────────────────────────────────────────
   "loading.title": "加载中",
