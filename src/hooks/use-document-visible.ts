@@ -2,6 +2,8 @@
 
 import { useSyncExternalStore } from "react";
 
+// Visibility only controls playback/rendering/poll scheduling. Switching a
+// browser tab must not cancel requests, unload media, or discard task results.
 // All thumbnails and players share one document listener.
 const subscribers = new Set<() => void>();
 const changed = () => subscribers.forEach((notify) => notify());

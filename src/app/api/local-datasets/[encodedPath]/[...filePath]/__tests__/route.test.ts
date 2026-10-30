@@ -91,4 +91,57 @@ describe("local dataset file streaming", () => {
     controller.abort();
     await expect(response.arrayBuffer()).rejects.toThrow();
   });
+  test("pre-aborted full, range and HEAD requests return no body", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    for (const handler of [GET, HEAD]) {
+      for (const range of [undefined, "bytes=0-3"]) {
+        const response = await handler(
+          request(range, controller.signal),
+          context(),
+        );
+        expect(response.status).toBe(499);
+        expect(response.body).toBeNull();
+      }
+    }
+  });
+  test("cancellation while resolving parameters does not open a file", async () => {
+    for (const handler of [GET, HEAD]) {
+      for (const range of [undefined, "bytes=0-3"]) {
+        const controller = new AbortController();
+        let resolve!: (
+          value: Awaited<ReturnType<typeof context>["params"]>,
+        ) => void;
+        const params = new Promise<
+          Awaited<ReturnType<typeof context>["params"]>
+        >((done) => {
+          resolve = done;
+        });
+        const pending = handler(request(range, controller.signal), { params });
+        controller.abort();
+        resolve(await context().params);
+        const response = await pending;
+        expect(response.status).toBe(499);
+        expect(response.body).toBeNull();
+      }
+    }
+  });
+  test("empty files have a valid full response and reject all byte ranges", async () => {
+    await fs.writeFile(path.join(root, "video.mp4"), "");
+    const response = await GET(request(), context());
+    expect(response.status).toBe(200);
+    expect((await response.arrayBuffer()).byteLength).toBe(0);
+    for (const range of ["bytes=-1", "bytes=0-", "bytes=0-0"]) {
+      const partial = await GET(request(range), context());
+      expect(partial.status).toBe(416);
+      expect(partial.headers.get("content-range")).toBe("bytes */0");
+    }
+  });
+  test("a reader can cancel either response without aborting its request", async () => {
+    for (const range of [undefined, "bytes=0-3"]) {
+      const response = await GET(request(range), context());
+      await response.body!.cancel("Page changed");
+      expect(response.body!.locked).toBe(false);
+    }
+  });
 });
