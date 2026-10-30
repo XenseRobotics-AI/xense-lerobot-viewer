@@ -12,6 +12,7 @@ import {
   setEpisodePrefetchTargets,
   warmEpisodeDecoder,
 } from "@/app/[org]/[dataset]/[episode]/fetch-data";
+import { prefetchEpisodeVideoPosters } from "@/utils/videoFramePrefetch";
 
 export interface EpisodePreloadOptions {
   org: string;
@@ -173,7 +174,19 @@ export default function VisibleEpisodePreloader({
       }
       running = true;
       try {
-        await prefetchEpisodeDataSafe(org, dataset, id);
+        const result = await prefetchEpisodeDataSafe(org, dataset, id);
+        if (result.data && !disposed && allowed()) {
+          await prefetchEpisodeVideoPosters(
+            result.data.datasetInfo.repoId,
+            id,
+            result.data.videosInfo,
+            () =>
+              !disposed &&
+              allowed() &&
+              !isPlaying &&
+              performance.now() - lastActivity >= 350,
+          );
+        }
       } finally {
         running = false;
         schedule();

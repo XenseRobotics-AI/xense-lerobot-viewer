@@ -30,6 +30,7 @@ function ReplayVideoTile({
   playing,
   replayRevision,
   datasetKey,
+  episodeId,
   video,
 }: {
   active: boolean;
@@ -38,6 +39,7 @@ function ReplayVideoTile({
   playing: boolean;
   replayRevision: number;
   datasetKey: string;
+  episodeId: number;
   video: VideoInfo;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -111,7 +113,7 @@ function ReplayVideoTile({
   return (
     <figure className="relative overflow-hidden rounded-md border border-white/15 bg-black/90 shadow-xl">
       <FirstFrameVideo
-        frameKey={`${datasetKey}:${video.filename}`}
+        frameKey={`${datasetKey}:${episodeId}`}
         onLoadedMetadata={handleLoadedMetadata}
         onVideoElement={attachVideo}
         video={video}
@@ -128,6 +130,7 @@ function ReplayVideoTile({
 function SideVideoGroup({
   active,
   datasetKey,
+  episodeId,
   episodeTimeSeconds,
   playing,
   replayRevision,
@@ -135,6 +138,7 @@ function SideVideoGroup({
 }: {
   active: boolean;
   datasetKey: string;
+  episodeId: number;
   episodeTimeSeconds: number;
   playing: boolean;
   replayRevision: number;
@@ -150,6 +154,7 @@ function SideVideoGroup({
         key={primary.filename}
         active={active}
         datasetKey={datasetKey}
+        episodeId={episodeId}
         episodeTimeSeconds={episodeTimeSeconds}
         playing={playing}
         replayRevision={replayRevision}
@@ -162,6 +167,7 @@ function SideVideoGroup({
               key={video.filename}
               active={active}
               datasetKey={datasetKey}
+              episodeId={episodeId}
               compact
               episodeTimeSeconds={episodeTimeSeconds}
               playing={playing}
@@ -400,6 +406,7 @@ function ResizableVideoGroup({
 export default function UrdfVideoOverlay({
   active,
   datasetKey,
+  episodeId,
   episodeTimeSeconds,
   playing,
   replayRevision,
@@ -407,6 +414,7 @@ export default function UrdfVideoOverlay({
 }: {
   active: boolean;
   datasetKey: string;
+  episodeId: number;
   episodeTimeSeconds: number;
   playing: boolean;
   replayRevision: number;
@@ -424,6 +432,7 @@ export default function UrdfVideoOverlay({
   const shared = {
     active,
     datasetKey,
+    episodeId,
     episodeTimeSeconds,
     playing,
     replayRevision,

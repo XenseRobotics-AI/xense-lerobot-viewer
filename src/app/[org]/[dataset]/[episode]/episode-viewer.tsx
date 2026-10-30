@@ -1239,6 +1239,7 @@ function EpisodeViewerInner({
               {/* Videos */}
               {videosInfo.length > 0 && (
                 <SimpleVideosPlayer
+                  datasetKey={datasetInfo.repoId}
                   videosInfo={videosInfo}
                   episodeId={episodeId}
                   loading={playerLoading}
@@ -1325,6 +1326,7 @@ function EpisodeViewerInner({
                 {videosInfo.length > 0 && (
                   <div className="sticky top-0 z-20 bg-[var(--bg)] pb-3 lg:static lg:col-start-1 lg:row-start-1 lg:max-h-[55vh] lg:overflow-y-auto lg:bg-transparent lg:pb-0">
                     <SimpleVideosPlayer
+                      datasetKey={datasetInfo.repoId}
                       videosInfo={videosInfo}
                       episodeId={episodeId}
                       loading={playerLoading}

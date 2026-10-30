@@ -22,6 +22,7 @@ const THRESHOLDS = {
 const VIDEO_READY_TIMEOUT_MS = 10_000;
 
 type VideoPlayerProps = {
+  datasetKey: string;
   videosInfo: VideoInfo[];
   /**
    * The episode currently being requested. This is separate from
@@ -45,6 +46,7 @@ type VideoPlayerProps = {
 const videoEventCleanup = new WeakMap<HTMLVideoElement, () => void>();
 
 export const SimpleVideosPlayer = ({
+  datasetKey,
   videosInfo,
   episodeId,
   loading = false,
@@ -533,7 +535,7 @@ export const SimpleVideosPlayer = ({
               </p>
               <div className="relative w-full">
                 <FirstFrameVideo
-                  frameKey={`${episodeId ?? "episode"}:${info.filename}`}
+                  frameKey={`${datasetKey}:${episodeId ?? "episode"}`}
                   onVideoElement={videoRefCallbacksRef.current[idx]}
                   video={info}
                   targetSeconds={mediaTimeFromEpisodeTime(info, currentTime)}
