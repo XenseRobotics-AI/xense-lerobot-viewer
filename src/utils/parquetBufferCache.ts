@@ -150,7 +150,8 @@ export class ParquetBufferCache {
     const result = Promise.resolve()
       .then(() => source.slice(from, to))
       .then((data) => {
-        const limit = this.options.maxBytes ?? 64 * 1024 * 1024;
+        const limit =
+          this.options.maxBytes ?? EPISODE_CACHE_POLICY.parquetBytes;
         if (data.byteLength <= limit && this.files.get(url)?.id === id) {
           while (
             this.ranges.size &&

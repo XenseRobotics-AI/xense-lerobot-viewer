@@ -225,9 +225,9 @@ const MAX_EPISODE_DATA_CACHE_ENTRIES = parsePositiveIntEnv(
 );
 const episodeDataCache = new EpisodeDataCache<EpisodeData>({
   recentEntries: MAX_EPISODE_DATA_CACHE_ENTRIES,
-  recentBytes: 96 * 1024 * 1024,
+  recentBytes: EPISODE_CACHE_POLICY.recentBytes,
   prefetchEntries: 24,
-  prefetchBytes: 64 * 1024 * 1024,
+  prefetchBytes: EPISODE_CACHE_POLICY.prefetchBytes,
   estimate: estimateEpisodeBytes,
   distance: (key, current) => {
     const a = key.split("\u0000");

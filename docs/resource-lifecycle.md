@@ -117,19 +117,23 @@ dataset's cache. Failed preloads do not enter the visible episode's error state 
 create quality marks, and a later foreground read can retry. The preloader never
 owns a review save or its cancellation.
 
-Parsed recent data is bounded to 8 entries and an estimated 96 MiB, protecting the
+Parsed recent data is bounded to 8 entries and an estimated 192 MiB, protecting the
 active episode if it alone exceeds that estimate. Background results have their
-own 24-entry / estimated 64 MiB budget and cannot evict foreground history.
+own 24-entry / estimated 128 MiB budget and cannot evict foreground history.
 Offscreen entries within 2 episodes have 10-minute expiry, those within 12 have
 4 minutes, and more distant/other-dataset entries have 1 minute. Age pruning
 runs every 30 seconds; visible/current entries are protected from age eviction,
 and capacity pressure releases distant offscreen entries sooner. Cleanup is also
-scheduled after leaving the viewer. Periods are centralized in
+scheduled after leaving the viewer. Periods and byte budgets are centralized in
 src/utils/episodeCachePolicy.ts; capacity eviction is immediate even with the
 longer retention. These limits bound retained caches, not
 transient decodes, mounted views, browser video buffers or total process memory.
+Budgets cap retained in-memory data per browser tab across datasets; they are
+not preallocated memory, dataset/file-size limits, disk quotas or cumulative
+network-read limits. Raising byte budgets does not raise the entry limits or
+background concurrency.
 
-The shared raw Parquet cache independently caps 16 handles, 512 ranges and 64 MiB
+The shared raw Parquet cache independently caps 16 handles, 512 ranges and 128 MiB
 across all files, with 10-minute idle expiry. Equivalent suffix/range requests
 and concurrent file opens share reads. Failed requests are removed. Eviction only
 releases cache references and never closes or cancels an active consumer. Endpoints

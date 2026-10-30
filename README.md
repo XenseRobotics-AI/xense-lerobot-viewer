@@ -114,26 +114,29 @@ finish normally; selecting the same episode joins its read, and selecting anothe
 episode starts immediately. Preloading never creates inspection marks and does
 not download adjacent videos or prefetch every route on the page.
 
-Parsed foreground history is limited to 8 episodes / an estimated 96 MiB; the
+Parsed foreground history is limited to 8 episodes / an estimated 192 MiB; the
 active episode stays usable even if it alone exceeds the byte budget. A separate
-background cache holds at most 24 episodes / an estimated 64 MiB. Once offscreen,
+background cache holds at most 24 episodes / an estimated 128 MiB. Once offscreen,
 entries within 2 episodes expire after 10 minutes, within 12 after 4 minutes,
 and farther away or in another dataset after 1 minute. Pruning runs every
 30 seconds; capacity pressure releases distant offscreen entries sooner. Visible
 and current entries remain protected from age eviction. Leaving the viewer
 also schedules cleanup. Parquet file handles and shared raw byte ranges are
-independently limited to 16 files / 512 ranges / 64 MiB, with 10-minute idle
+independently limited to 16 files / 512 ranges / 128 MiB, with 10-minute idle
 expiry. These are cache budgets, not a cap on total browser memory or active
 decoding/video buffers. Failed byte reads are retryable and never cached forever.
-Retention and cleanup periods are centralized in src/utils/episodeCachePolicy.ts;
-longer retention does not increase the count or byte budgets.
+Retention, cleanup periods and byte budgets are centralized in
+src/utils/episodeCachePolicy.ts. Count limits are unchanged when byte budgets
+are raised; caches allocate only when data is read, not up front.
 These limits are shared across datasets in one browser tab, independently of
 other tabs or machines. Counts and bytes are simultaneous limits: reaching
 either triggers capacity eviction without waiting for age expiry. Parsed-data
 bytes use a sampled object-size estimate (chart/pose rows, timestamp arrays and
 language content), not a browser heap measurement. Raw Parquet bytes use actual
 ArrayBuffer.byteLength, shared across files rather than allocated per file.
-A speculative episode larger than its whole budget is not retained. Video,
+Byte budgets apply to retained in-memory data, not dataset size, file-size
+access limits, disk usage or cumulative network traffic. A speculative episode
+larger than its whole budget is not retained. Video,
 GPU/3D resources, mounted views and in-flight decodes are outside these budgets.
 
 ## Features
