@@ -174,6 +174,19 @@ describe("video frame presentation", () => {
     presentation.dispose();
   });
 
+  test("does not hide the current decoded frame for a playback clock update", () => {
+    const { video, states, presentation, load, readyAt } = setup();
+    load("/camera.mp4", "dataset-a:episode-3");
+    readyAt();
+    video.presentFrame();
+    expect(states.at(-1)?.phase).toBe("ready");
+
+    video.paused = false;
+    presentation.update("/camera.mp4", "dataset-a:episode-3", 0.2, false);
+    expect(states.at(-1)?.phase).toBe("ready");
+    presentation.dispose();
+  });
+
   test("suspension and disposal suppress late media events without changing source", () => {
     const { video, states, presentation, load } = setup();
     load("/camera.mp4", "dataset-a:episode-3");

@@ -77,15 +77,17 @@ export class VideoFramePresentation {
       this.begin(nextTarget);
       this.source = source;
       this.identity = identity;
+      const absoluteSource = this.resolveSource(source);
+      if (!absoluteSource) {
+        this.emit("error");
+        return;
+      }
       this.video.pause();
       // Keep the visible element buffering its first playable segment while
       // the poster covers it. This lets play() continue the same media load
       // instead of starting a second request after the warm frame.
       this.video.preload = "auto";
-      if (
-        this.video.src !==
-        new URL(source, this.video.ownerDocument.baseURI).href
-      ) {
+      if (this.video.src !== absoluteSource) {
         this.video.src = source;
         this.video.load();
       }
@@ -163,6 +165,7 @@ export class VideoFramePresentation {
   }
 
   private tryPresent(generation: number, mediaTime?: number): void {
+    const absoluteSource = this.source ? this.resolveSource(this.source) : null;
     if (
       this.disposed ||
       generation !== this.generation ||
@@ -170,9 +173,8 @@ export class VideoFramePresentation {
       this.suspended ||
       this.video.seeking ||
       this.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
-      !this.source ||
-      this.video.src !==
-        new URL(this.source, this.video.ownerDocument.baseURI).href ||
+      !absoluteSource ||
+      this.video.src !== absoluteSource ||
       Math.abs(this.video.currentTime - this.targetSeconds) >
         FRAME_TOLERANCE_SECONDS ||
       (mediaTime !== undefined &&
@@ -251,16 +253,26 @@ export class VideoFramePresentation {
   }
 
   private onError = (): void => {
+    const absoluteSource = this.source ? this.resolveSource(this.source) : null;
     if (
       this.disposed ||
       this.suspended ||
       this.video.error === null ||
       !this.source ||
-      this.video.src !==
-        new URL(this.source, this.video.ownerDocument.baseURI).href
+      !absoluteSource ||
+      this.video.src !== absoluteSource
     )
       return;
     this.cancelCallbacks();
     this.emit("error");
   };
+
+  private resolveSource(source: string): string | null {
+    if (!source.trim()) return null;
+    try {
+      return new URL(source, this.video.ownerDocument.baseURI).href;
+    } catch {
+      return null;
+    }
+  }
 }

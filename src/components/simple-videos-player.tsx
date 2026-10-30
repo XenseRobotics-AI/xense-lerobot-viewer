@@ -98,6 +98,7 @@ export const SimpleVideosPlayer = ({
   const [enlargedVideo, setEnlargedVideo] = React.useState<string | null>(null);
   const [showHiddenMenu, setShowHiddenMenu] = React.useState(false);
   const [videosReady, setVideosReady] = React.useState(false);
+  const wasPlayingWhenHiddenRef = useRef(false);
 
   const hiddenSet = React.useMemo(() => new Set(hiddenVideos), [hiddenVideos]);
 
@@ -135,10 +136,14 @@ export const SimpleVideosPlayer = ({
   }, [onVideosReady]);
 
   useEffect(() => {
-    if (visible) return;
-    setIsPlaying(false);
-    videoRefs.current.forEach((video) => video?.pause());
-  }, [visible, setIsPlaying]);
+    if (!visible) {
+      wasPlayingWhenHiddenRef.current = isPlaying;
+      videoRefs.current.forEach((video) => video?.pause());
+      return;
+    }
+    if (wasPlayingWhenHiddenRef.current) setIsPlaying(true);
+    wasPlayingWhenHiddenRef.current = false;
+  }, [visible, isPlaying, setIsPlaying]);
 
   // Initialize video refs array
   useEffect(() => {
@@ -195,7 +200,6 @@ export const SimpleVideosPlayer = ({
       resolved = true;
       setVideosReady(true);
       onVideosReadyRef.current?.();
-      setIsPlaying(!document.hidden);
     };
 
     const checkReady = () => {
@@ -332,6 +336,12 @@ export const SimpleVideosPlayer = ({
               seekVideoWithFrameGate(video, 0);
             }
           };
+      const handlePlayable = !info.isSegmented
+        ? () => {
+            if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA)
+              markVideoReady();
+          }
+        : null;
 
       video.addEventListener("timeupdate", handleTimeUpdate);
       if (handlePlay) video.addEventListener("play", handlePlay);
@@ -357,10 +367,10 @@ export const SimpleVideosPlayer = ({
         }
         queueMicrotask(handleSegmentReady);
       } else if (!info.isSegmented) {
-        video.addEventListener("loadeddata", checkReady);
-        video.addEventListener("canplay", checkReady);
+        video.addEventListener("loadeddata", handlePlayable!);
+        video.addEventListener("canplay", handlePlayable!);
         if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-          queueMicrotask(checkReady);
+          queueMicrotask(handlePlayable!);
         }
       }
 
@@ -373,8 +383,10 @@ export const SimpleVideosPlayer = ({
           video.removeEventListener("seeked", handleSegmentReady);
         }
         if (handleEnded) video.removeEventListener("ended", handleEnded);
-        video.removeEventListener("loadeddata", checkReady);
-        video.removeEventListener("canplay", checkReady);
+        if (handlePlayable) {
+          video.removeEventListener("loadeddata", handlePlayable);
+          video.removeEventListener("canplay", handlePlayable);
+        }
       });
     });
 
