@@ -147,7 +147,7 @@ async function decodePoster(
   });
 }
 
-/** Decode small first-frame posters for at most two primary cameras at a time. */
+/** Decode small first-frame posters for the primary cameras of one episode in parallel. */
 export function prefetchEpisodeVideoPosters(
   datasetKey: string,
   episodeId: number,
@@ -187,19 +187,21 @@ export function prefetchEpisodeVideoPosters(
 
   const task = (async () => {
     try {
-      for (const video of candidates) {
-        if (!shouldContinue()) break;
-        const time = video.isSegmented ? (video.segmentStart ?? 0) : 0;
-        const key = videoFramePosterKey(identity, video, time);
-        if (getPrefetchedVideoPoster(key)) continue;
-        let poster: string | null = null;
-        try {
-          poster = await decodePoster(video, key, shouldContinue);
-        } catch {
-          // A poster is an optional warm cache; the visible player owns errors.
-        }
-        if (poster) rememberPoster(key, poster);
-      }
+      await Promise.all(
+        candidates.map(async (video) => {
+          if (!shouldContinue()) return;
+          const time = video.isSegmented ? (video.segmentStart ?? 0) : 0;
+          const key = videoFramePosterKey(identity, video, time);
+          if (getPrefetchedVideoPoster(key)) return;
+          let poster: string | null = null;
+          try {
+            poster = await decodePoster(video, key, shouldContinue);
+          } catch {
+            // A poster is an optional warm cache; the visible player owns errors.
+          }
+          if (poster) rememberPoster(key, poster);
+        }),
+      );
     } finally {
       prewarmTask = null;
     }
