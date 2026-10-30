@@ -2725,6 +2725,7 @@ export default function URDFViewer({
         </Canvas>
         <UrdfVideoOverlay
           active={active && visible}
+          datasetKey={datasetInfo.repoId}
           episodeTimeSeconds={replayTimeSeconds}
           playing={playing}
           replayRevision={replayRevision}

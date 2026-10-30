@@ -5,6 +5,8 @@ import { useTimeControls, useTimeState } from "../context/time-context";
 import { FaExpand, FaCompress, FaTimes, FaEye } from "react-icons/fa";
 import type { VideoInfo } from "@/types";
 import { VideoOverlayCanvas } from "./video-overlay-canvas";
+import { FirstFrameVideo } from "./first-frame-video";
+import { seekVideoWithFrameGate } from "@/utils/videoFramePresentation";
 import {
   episodeTimeFromMediaTime,
   mediaTimeFromEpisodeTime,
@@ -141,11 +143,8 @@ export const SimpleVideosPlayer = ({
     videoRefs.current = videoRefs.current.slice(0, videosInfo.length);
   }, [videosInfo.length]);
 
-  // Stop the previous episode as soon as selection changes. The parent keeps
-  // the previous data around while the next parquet slice is being decoded;
-  // without this effect that old media can keep playing underneath the
-  // loading overlay. Do not change the source here — retaining the element
-  // for a shared v3 MP4 is what lets the browser reuse its buffer.
+  // Stop previous playback while the next parquet slice is resolving; the
+  // frame presenter changes sources only after the new episode commits.
   React.useLayoutEffect(() => {
     if (!loading) return;
     // The parent intentionally keeps the previous EpisodeData visible while
@@ -171,7 +170,7 @@ export const SimpleVideosPlayer = ({
         return;
       }
       video.pause();
-      video.currentTime = mediaTimeFromEpisodeTime(info, 0);
+      seekVideoWithFrameGate(video, mediaTimeFromEpisodeTime(info, 0));
     });
   }, [episodeId, loading, videosInfo]);
 
@@ -217,7 +216,7 @@ export const SimpleVideosPlayer = ({
         if (!other) return;
         const otherInfo = videosInfo[otherIdx];
         if (!otherInfo) return;
-        other.currentTime = otherInfo.segmentStart ?? 0;
+        seekVideoWithFrameGate(other, otherInfo.segmentStart ?? 0);
       });
       // Update the slider as a status report — don't bump externalSeekVersion
       // since we already drove every video to its target.
@@ -250,7 +249,7 @@ export const SimpleVideosPlayer = ({
             if (index === firstVisibleIdxRef.current) {
               loopAllVideos();
             } else {
-              video.currentTime = segmentStart;
+              seekVideoWithFrameGate(video, segmentStart);
             }
             return;
           }
@@ -275,7 +274,7 @@ export const SimpleVideosPlayer = ({
               video.currentTime < segmentStart ||
               video.currentTime >= segmentEnd
             ) {
-              video.currentTime = segmentStart;
+              seekVideoWithFrameGate(video, segmentStart);
             }
           }
         : null;
@@ -304,7 +303,7 @@ export const SimpleVideosPlayer = ({
                 video.readyState >= HTMLMediaElement.HAVE_METADATA &&
                 !video.seeking
               ) {
-                video.currentTime = targetTime;
+                seekVideoWithFrameGate(video, targetTime);
               }
               return;
             }
@@ -327,7 +326,7 @@ export const SimpleVideosPlayer = ({
             if (index === firstVisibleIdxRef.current) {
               loopAllVideos();
             } else {
-              video.currentTime = 0;
+              seekVideoWithFrameGate(video, 0);
             }
           };
 
@@ -351,7 +350,7 @@ export const SimpleVideosPlayer = ({
           Math.abs(video.currentTime - targetTime) >
             THRESHOLDS.VIDEO_SEGMENT_BOUNDARY
         ) {
-          video.currentTime = targetTime;
+          seekVideoWithFrameGate(video, targetTime);
         }
         queueMicrotask(handleSegmentReady);
       } else if (!info.isSegmented) {
@@ -434,17 +433,12 @@ export const SimpleVideosPlayer = ({
         Math.abs(video.currentTime - targetTime) >
         THRESHOLDS.VIDEO_SYNC_TOLERANCE
       ) {
-        video.currentTime = targetTime;
+        seekVideoWithFrameGate(video, targetTime);
       }
     });
   }, [externalSeekVersion, currentTime, videosInfo, videosReady, hiddenSet]);
 
   // The page shell becomes interactive as soon as the episode data commits.
-  // Keep only the media tiles covered until their requested segment has
-  // actually decoded, so a retained <video> can never flash the previous
-  // episode's frame while the rest of the page already shows the new one.
-  const mediaPending = loading || !videosReady;
-
   return (
     <>
       {/* Hidden videos menu */}
@@ -489,13 +483,7 @@ export const SimpleVideosPlayer = ({
 
           return (
             <div
-              // Camera names stay the same across episodes. Use the actual
-              // media URL as the identity: v3 episodes commonly share one
-              // MP4 and only change segmentStart/segmentEnd, so that element
-              // can be retained and seeked without another media load. When
-              // the URL changes (for example a v2 episode or a new v3 file),
-              // React replaces the tile and cannot retain the old resource.
-              key={`${info.filename}:${info.url}`}
+              key={info.filename}
               className={`${
                 isEnlarged
                   ? "z-40 fixed inset-0 bg-black bg-opacity-90 flex flex-col items-center justify-center"
@@ -544,26 +532,13 @@ export const SimpleVideosPlayer = ({
                 </span>
               </p>
               <div className="relative w-full">
-                <video
-                  ref={videoRefCallbacksRef.current[idx]}
-                  className={`w-full object-contain ${
-                    isEnlarged ? "max-h-[90vh] max-w-[90vw]" : ""
-                  }`}
-                  muted
-                  preload="metadata"
-                  src={info.url}
-                  aria-busy={mediaPending}
-                >
-                  {t("player.noVideoTag")}
-                </video>
-                {mediaPending && (
-                  <div
-                    className="absolute inset-0 z-20 flex items-center justify-center bg-[var(--surface-0)]"
-                    aria-hidden="true"
-                  >
-                    <span className="size-6 animate-spin rounded-full border-2 border-slate-700 border-t-cyan-300" />
-                  </div>
-                )}
+                <FirstFrameVideo
+                  frameKey={`${episodeId ?? "episode"}:${info.filename}`}
+                  onVideoElement={videoRefCallbacksRef.current[idx]}
+                  video={info}
+                  targetSeconds={mediaTimeFromEpisodeTime(info, currentTime)}
+                  suspended={loading}
+                />
                 {/* VQA bbox/keypoint overlay. Reads atoms + drawMode from
                     AnnotationsContext; pointer-events fall through when
                     not in draw mode so video controls remain usable. */}
