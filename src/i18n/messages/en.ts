@@ -326,6 +326,9 @@ export const en = {
   "review.reviewer": "Inspector",
   "review.selectReviewer": "Select an inspector",
   "review.saving": "Saving…",
+  "review.backgroundSaves":
+    "{count} marks saving in the background; you can switch episodes",
+  "review.retrySave": "Retry save",
   "review.undo": "Undo my inspection",
   "review.mark": "Mark as inspected",
   "review.manualHint":

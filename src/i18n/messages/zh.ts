@@ -317,6 +317,8 @@ export const zh: Record<MessageKey, string> = {
   "review.reviewer": "质检员",
   "review.selectReviewer": "请选择质检员",
   "review.saving": "正在保存…",
+  "review.backgroundSaves": "{count} 个标记后台保存中，可继续切换 episode",
+  "review.retrySave": "重试保存",
   "review.undo": "撤销我的检查标记",
   "review.mark": "标记为已检查",
   "review.manualHint": "检查完成后手动标记；浏览或播放不会自动标记。",

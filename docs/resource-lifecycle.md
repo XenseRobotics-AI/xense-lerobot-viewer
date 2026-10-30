@@ -44,6 +44,14 @@ media source removal, or a lost diagnostic/review result.
   cancel unread output and release the lock without masking the original error.
 - Review/annotation mutations keep their existing atomic persistence semantics;
   visibility changes must not cancel a write or imply that it was rolled back.
+- Review saves run in a per-provider serial queue to keep server snapshots in
+  order. Pending/error state is keyed by episode and person, independently of the
+  visible episode. Capture dataset/work directory, person and entry point when
+  marking; navigating cannot retarget the write. Only that record's mark button
+  is locked. Navigation, playback, other episodes and reviewer selection remain
+  available. Save status has a separate React context so it does not rerender the
+  whole viewer/sidebar; confirmed record updates use a transition. A failed save
+  is shown on its record and does not stop later queued saves.
 
 ## Regression checks
 
@@ -65,3 +73,12 @@ assert the original tab is hidden, the video source remains attached, neither
 request is aborted, and the review finishes while hidden. Returning to the tab
 must retain the loaded review and media source. This check does not need to
 restart or modify an existing viewer development server.
+
+Review navigation verification uses the production provider and mark panel with
+delayed PUT responses: mark an episode, immediately switch episodes/person/entry
+point and mark again. Confirm navigation completes before the first save; data-only
+viewer consumers do not rerender for save-status changes; queued payloads retain
+their original targets. Inject one save failure, confirm later saves continue and
+only the failed episode shows an error, then retry it. Replace the dataset while
+another save is pending and confirm the write completes against the original
+endpoint without overwriting the newly visible dataset's state.

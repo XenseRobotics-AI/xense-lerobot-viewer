@@ -3,7 +3,7 @@
 import Link from "next/link";
 import React, { useMemo, useState } from "react";
 import { useFlaggedEpisodes } from "@/context/flagged-episodes-context";
-import { useEpisodeReviews } from "@/context/episode-reviews-context";
+import { useEpisodeReviewData } from "@/context/episode-reviews-context";
 import {
   reviewerCounts,
   reviewStatus,
@@ -47,7 +47,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const t = useT();
   const [mobileVisible, setMobileVisible] = useState(false);
-  const { file: reviewFile, loaded: reviewsLoaded } = useEpisodeReviews();
+  const { file: reviewFile, loaded: reviewsLoaded } = useEpisodeReviewData();
   const reviewedCount = Object.values(reviewFile.episodes).filter(
     (records) => records.length > 0,
   ).length;

@@ -34,7 +34,7 @@ import { AnnotationsTimeline } from "@/components/annotations-timeline";
 import { SubtaskPanel } from "@/components/subtask-panel";
 import {
   EpisodeReviewsProvider,
-  useEpisodeReviews,
+  useEpisodeReviewData,
 } from "@/context/episode-reviews-context";
 import EpisodeReviewPanel from "@/components/episode-review-panel";
 import Sidebar from "@/components/side-nav";
@@ -351,7 +351,6 @@ export default function EpisodeViewer({
   return (
     <TimeProvider duration={data!.duration} resetKey={data!.episodeId}>
       <EpisodeReviewsProvider
-        key={data!.datasetInfo.repoId + reviewBrowsePath}
         repoId={data!.datasetInfo.repoId}
         browsePath={reviewBrowsePath}
       >
@@ -867,7 +866,7 @@ function EpisodeViewerInner({
     if (activeTab === "urdf") setUrdfMounted(true);
   }, [activeTab]);
 
-  const { file: reviewFile, reviewer } = useEpisodeReviews();
+  const { file: reviewFile, reviewer } = useEpisodeReviewData();
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
   const reviewFilteredEpisodes = useMemo(
     () =>

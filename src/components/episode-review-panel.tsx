@@ -3,6 +3,7 @@
 import { REVIEW_TIME_ZONE } from "@/utils/reviewTime";
 import { useId } from "react";
 import { useEpisodeReviews } from "@/context/episode-reviews-context";
+import { reviewSaveKey } from "@/utils/reviewSaveQueue";
 import { useLocale } from "@/context/locale-context";
 import {
   REVIEWER_ROLES,
@@ -28,11 +29,16 @@ export default function EpisodeReviewPanel({
     reviewer,
     setReviewer,
     loaded,
-    saving,
-    error,
+    pendingSaves,
+    saveErrors,
+    error: loadError,
     refresh,
     mark,
   } = useEpisodeReviews();
+  const key = reviewSaveKey(episodeId, reviewer);
+  const saving = !!pendingSaves[key];
+  const error = loadError ?? saveErrors[key];
+  const pendingCount = Object.keys(pendingSaves).length;
   const inputId = useId();
   const reviews = file.episodes[String(episodeId)] ?? [];
   const mine = reviews.some((review) => review.reviewer === reviewer.trim());
@@ -66,7 +72,7 @@ export default function EpisodeReviewPanel({
           id={inputId}
           value={reviewer}
           onChange={(event) => setReviewer(event.target.value)}
-          disabled={saving || !loaded || !reviewers.length}
+          disabled={!loaded || !reviewers.length}
           className="w-36 rounded border border-white/15 bg-[var(--surface-0)] px-2 py-1 text-slate-200 focus:border-cyan-400 focus:outline-none"
         >
           {!reviewers.length && (
@@ -102,7 +108,7 @@ export default function EpisodeReviewPanel({
             saving ||
             !loaded ||
             !reviewers.includes(reviewer) ||
-            !!error
+            !!loadError
           }
           className="rounded border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-emerald-200 hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-40"
         >
@@ -119,6 +125,11 @@ export default function EpisodeReviewPanel({
         <span className="text-[10px] text-slate-500">
           {t("review.manualHint")}
         </span>
+        {pendingCount > 0 && (
+          <span role="status" className="text-[10px] text-cyan-300">
+            {t("review.backgroundSaves", { count: pendingCount })}
+          </span>
+        )}
       </div>
       <p className="mt-2 text-[10px] text-slate-500">{t("review.crossHint")}</p>
       {loaded && reviews.length > 0 && (
@@ -170,10 +181,13 @@ export default function EpisodeReviewPanel({
           <button
             type="button"
             disabled={saving}
-            onClick={() => void refresh()}
+            onClick={() => {
+              if (loadError) void refresh();
+              else void mark(episodeId, source, !mine);
+            }}
             className="underline"
           >
-            {t("review.retry")}
+            {t(loadError ? "review.retry" : "review.retrySave")}
           </button>
         </div>
       )}
