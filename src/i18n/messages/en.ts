@@ -319,6 +319,10 @@ export const en = {
   "review.collectionPeople": "Counts by person (current browse directory)",
   "review.collectionHint":
     "Counts include all saved records in this directory, including historical datasets. Two distinct people indicate cross-review, not a quality pass.",
+  "review.details": "Inspection details ({count})",
+  "review.markShort": "Mark checked",
+  "review.crossMarkShort": "Cross-review",
+  "review.undoShort": "Undo mark",
   "review.title": "Human inspection",
   "review.loading": "Loading inspection records…",
   "review.checked": "Inspected",
@@ -326,6 +330,9 @@ export const en = {
   "review.reviewer": "Inspector",
   "review.selectReviewer": "Select an inspector",
   "review.saving": "Saving…",
+  "review.backgroundSaves":
+    "{count} marks saving in the background; you can switch episodes",
+  "review.retrySave": "Retry save",
   "review.undo": "Undo my inspection",
   "review.mark": "Mark as inspected",
   "review.manualHint":

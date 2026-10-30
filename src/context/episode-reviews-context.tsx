@@ -5,11 +5,14 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
+  startTransition,
   type ReactNode,
 } from "react";
 import { getLocalDatasetFileBase } from "@/utils/datasetRoute";
+import { ReviewSaveQueue, reviewSaveKey } from "@/utils/reviewSaveQueue";
 import {
   MAX_REVIEWER_LENGTH,
   parseReviewsFile,
@@ -32,17 +35,19 @@ function useReviewState(repoId: string, browsePath: string) {
   const requestRef = useRef<AbortController | null>(null);
   const [storagePath, setStoragePath] = useState("");
   const [loaded, setLoaded] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [pendingSaves, setPendingSaves] = useState<Record<string, boolean>>({});
+  const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const sequence = useRef(0);
-  const savingRef = useRef(false);
+  const queue = useRef(new ReviewSaveQueue()).current;
+  const mounted = useRef(false);
   const endpointBase = `${getLocalDatasetFileBase(repoId)}/reviews`;
 
   const endpoint =
     endpointBase + "?browsePath=" + encodeURIComponent(browsePath);
 
   const refresh = useCallback(async () => {
-    if (savingRef.current || requestRef.current || document.hidden) return;
+    if (queue.size || requestRef.current || document.hidden) return;
     const controller = new AbortController();
     requestRef.current = controller;
     const id = ++sequence.current;
@@ -85,7 +90,7 @@ function useReviewState(repoId: string, browsePath: string) {
     } finally {
       if (requestRef.current === controller) requestRef.current = null;
     }
-  }, [endpoint]);
+  }, [endpoint, queue]);
 
   const invalidateRequests = useCallback(() => {
     sequence.current += 1;
@@ -94,6 +99,7 @@ function useReviewState(repoId: string, browsePath: string) {
   }, []);
 
   useEffect(() => {
+    mounted.current = true;
     const readName = () => {
       try {
         setReviewerState(
@@ -121,6 +127,7 @@ function useReviewState(repoId: string, browsePath: string) {
     window.addEventListener("focus", focus);
     window.addEventListener("storage", storage);
     return () => {
+      mounted.current = false;
       invalidateRequests();
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", focus);
@@ -147,38 +154,59 @@ function useReviewState(repoId: string, browsePath: string) {
     source: ReviewSource,
     reviewed: boolean,
   ) => {
-    if (savingRef.current || !loaded || !reviewers.includes(reviewer) || error)
-      return;
+    if (!loaded || !reviewers.includes(reviewer) || error) return;
+    const key = reviewSaveKey(episodeIndex, reviewer);
+    if (queue.has(key)) return;
+    // Capture the target before queueing; switching episodes/persons/entry
+    // points must never retarget a pending write to the currently visible one.
+    const payload = {
+      episode_index: episodeIndex,
+      reviewer: reviewer.trim(),
+      source,
+      reviewed,
+    };
     invalidateRequests();
-    savingRef.current = true;
-    setSaving(true);
-    const id = ++sequence.current;
+    setPendingSaves((previous) => ({ ...previous, [key]: true }));
+    setSaveErrors((previous) => {
+      const next = { ...previous };
+      delete next[key];
+      return next;
+    });
     try {
-      const response = await fetch(endpoint, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          episode_index: episodeIndex,
-          reviewer: reviewer.trim(),
-          source,
-          reviewed,
-        }),
+      await queue.enqueue(key, async () => {
+        const response = await fetch(endpoint, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          // View changes do not cancel a confirmed write. Small review bodies
+          // can also finish in flight when the document itself navigates away.
+          keepalive: true,
+        });
+        if (!response.ok)
+          throw new Error(
+            (await response.json()).error ?? String(response.status),
+          );
+        const raw = await response.json();
+        if (mounted.current) {
+          const next = parseReviewsFile(raw);
+          // Updating sidebar badges/filtering is lower priority than a click
+          // that selects another episode or seeks the currently playing video.
+          startTransition(() => setFile(next));
+        }
       });
-      if (!response.ok)
-        throw new Error(
-          (await response.json()).error ?? String(response.status),
-        );
-      const next = parseReviewsFile(await response.json());
-      if (id === sequence.current) {
-        setFile(next);
-        setError(null);
-      }
     } catch (error) {
-      if (id === sequence.current)
-        setError(error instanceof Error ? error.message : String(error));
+      if (mounted.current)
+        setSaveErrors((previous) => ({
+          ...previous,
+          [key]: error instanceof Error ? error.message : String(error),
+        }));
     } finally {
-      savingRef.current = false;
-      setSaving(false);
+      if (mounted.current)
+        setPendingSaves((previous) => {
+          const next = { ...previous };
+          delete next[key];
+          return next;
+        });
     }
   };
 
@@ -190,7 +218,8 @@ function useReviewState(repoId: string, browsePath: string) {
     reviewer,
     setReviewer,
     loaded,
-    saving,
+    pendingSaves,
+    saveErrors,
     error,
     refresh,
     mark,
@@ -198,28 +227,74 @@ function useReviewState(repoId: string, browsePath: string) {
   };
 }
 
-const ReviewsContext = createContext<ReturnType<typeof useReviewState> | null>(
-  null,
-);
+type ReviewState = ReturnType<typeof useReviewState>;
+type ReviewData = Pick<
+  ReviewState,
+  | "file"
+  | "reviewers"
+  | "profiles"
+  | "storagePath"
+  | "reviewer"
+  | "loaded"
+  | "error"
+>;
+const ReviewDataContext = createContext<ReviewData | null>(null);
+const ReviewActionsContext = createContext<Omit<
+  ReviewState,
+  keyof ReviewData
+> | null>(null);
 
-export function EpisodeReviewsProvider({
-  repoId,
-  browsePath,
-  children,
-}: {
+type ProviderProps = {
   repoId: string;
   browsePath: string;
   children: ReactNode;
-}) {
-  const value = useReviewState(repoId, browsePath);
+};
+
+export function EpisodeReviewsProvider(props: ProviderProps) {
   return (
-    <ReviewsContext.Provider value={value}>{children}</ReviewsContext.Provider>
+    <EpisodeReviewScope
+      key={JSON.stringify([props.repoId, props.browsePath])}
+      {...props}
+    />
   );
 }
 
-export function useEpisodeReviews() {
-  const value = useContext(ReviewsContext);
+function EpisodeReviewScope({ repoId, browsePath, children }: ProviderProps) {
+  const value = useReviewState(repoId, browsePath);
+  const {
+    file,
+    reviewers,
+    profiles,
+    storagePath,
+    reviewer,
+    loaded,
+    error,
+    ...actions
+  } = value;
+  const data = useMemo(
+    () => ({ file, reviewers, profiles, storagePath, reviewer, loaded, error }),
+    [file, reviewers, profiles, storagePath, reviewer, loaded, error],
+  );
+  return (
+    <ReviewDataContext.Provider value={data}>
+      <ReviewActionsContext.Provider value={actions}>
+        {children}
+      </ReviewActionsContext.Provider>
+    </ReviewDataContext.Provider>
+  );
+}
+
+export function useEpisodeReviewData() {
+  const value = useContext(ReviewDataContext);
   if (!value)
     throw new Error("useEpisodeReviews requires EpisodeReviewsProvider");
   return value;
+}
+
+export function useEpisodeReviews() {
+  const data = useEpisodeReviewData();
+  const actions = useContext(ReviewActionsContext);
+  if (!actions)
+    throw new Error("useEpisodeReviews requires EpisodeReviewsProvider");
+  return { ...data, ...actions };
 }

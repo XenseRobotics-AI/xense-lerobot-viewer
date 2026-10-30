@@ -34,10 +34,12 @@ import { AnnotationsTimeline } from "@/components/annotations-timeline";
 import { SubtaskPanel } from "@/components/subtask-panel";
 import {
   EpisodeReviewsProvider,
-  useEpisodeReviews,
+  useEpisodeReviewData,
 } from "@/context/episode-reviews-context";
 import EpisodeReviewPanel from "@/components/episode-review-panel";
 import Sidebar from "@/components/side-nav";
+import EpisodeListLoading from "@/components/episode-list-loading";
+import { useDocumentVisible } from "@/hooks/use-document-visible";
 import LanguageSwitcher from "@/components/language-switcher";
 import { useLocale, useT } from "@/context/locale-context";
 import StatsPanel from "@/components/stats-panel";
@@ -47,6 +49,8 @@ import { hasURDFSupport } from "@/lib/so101-robot";
 import {
   computeColumnMinMax,
   getEpisodeDataSafe,
+  getEpisodeList,
+  warmEpisodeListMetadata,
   loadAllEpisodeLengthsV3,
   loadAllEpisodeFrameInfo,
   loadCrossEpisodeActionVariance,
@@ -238,12 +242,29 @@ export default function EpisodeViewer({
 }) {
   const t = useT();
   const [data, setData] = useState<EpisodeData | null>(null);
+  const [list, setList] = useState<{
+    key: string;
+    repoId: string;
+    episodes: number[];
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [episodeLoading, setEpisodeLoading] = useState(false);
   const [selectedEpisodeId, setSelectedEpisodeId] = useState(episodeId);
   const requestIdRef = useRef(0);
   const loadedDatasetRef = useRef<string | null>(null);
   const datasetKey = `${org}/${dataset}`;
+
+  useEffect(() => {
+    let disposed = false;
+    void getEpisodeList(org, dataset)
+      .then((result) => {
+        if (!disposed) setList({ key: datasetKey, ...result });
+      })
+      .catch(() => undefined); // Foreground loader owns visible errors.
+    return () => {
+      disposed = true;
+    };
+  }, [org, dataset, datasetKey]);
 
   useEffect(() => {
     setSelectedEpisodeId(episodeId);
@@ -341,7 +362,14 @@ export default function EpisodeViewer({
   }
 
   if (!data) {
-    return (
+    return list?.key === datasetKey ? (
+      <EpisodeListLoading
+        repoId={list.repoId}
+        episodes={list.episodes}
+        episodeId={selectedEpisodeId}
+        onEpisodeSelect={selectEpisode}
+      />
+    ) : (
       <div className="relative h-screen bg-[var(--bg)]">
         <Loading />
       </div>
@@ -351,7 +379,6 @@ export default function EpisodeViewer({
   return (
     <TimeProvider duration={data!.duration} resetKey={data!.episodeId}>
       <EpisodeReviewsProvider
-        key={data!.datasetInfo.repoId + reviewBrowsePath}
         repoId={data!.datasetInfo.repoId}
         browsePath={reviewBrowsePath}
       >
@@ -867,7 +894,7 @@ function EpisodeViewerInner({
     if (activeTab === "urdf") setUrdfMounted(true);
   }, [activeTab]);
 
-  const { file: reviewFile, reviewer } = useEpisodeReviews();
+  const { file: reviewFile, reviewer } = useEpisodeReviewData();
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
   const reviewFilteredEpisodes = useMemo(
     () =>
@@ -892,6 +919,47 @@ function EpisodeViewerInner({
     (currentPage - 1) * pageSize,
     currentPage * pageSize,
   );
+  const documentVisible = useDocumentVisible();
+  const preloadPageKey = paginatedEpisodes.join(",");
+  useEffect(() => {
+    if (!documentVisible || episodeTransitioning || !videosReady) return;
+    const connection = (
+      navigator as Navigator & {
+        connection?: { saveData?: boolean; effectiveType?: string };
+      }
+    ).connection;
+    if (
+      navigator.onLine === false ||
+      connection?.saveData ||
+      ["slow-2g", "2g"].includes(connection?.effectiveType ?? "")
+    )
+      return;
+    let disposed = false;
+    const run = () => {
+      void warmEpisodeListMetadata(
+        datasetInfo.repoId,
+        datasetInfo.codebase_version,
+        preloadPageKey.split(",").filter(Boolean).map(Number),
+        () => !disposed && !document.hidden,
+      ).catch(() => undefined);
+    };
+    const idle = typeof window.requestIdleCallback === "function";
+    const handle = idle
+      ? window.requestIdleCallback(run)
+      : window.setTimeout(run, 750);
+    return () => {
+      disposed = true;
+      if (idle) window.cancelIdleCallback(handle);
+      else window.clearTimeout(handle);
+    };
+  }, [
+    datasetInfo.repoId,
+    datasetInfo.codebase_version,
+    documentVisible,
+    episodeTransitioning,
+    videosReady,
+    preloadPageKey,
+  ]);
 
   // Apply a URL time only after the route and loaded episode agree. Without
   // this guard, a paused `?t=` from the previous episode can issue a second
@@ -1073,6 +1141,15 @@ function EpisodeViewerInner({
           activeTab === "annotations" ||
           activeTab === "urdf") && (
           <Sidebar
+            reviewPanel={
+              activeTab === "episodes" || activeTab === "urdf" ? (
+                <EpisodeReviewPanel
+                  episodeId={episodeId}
+                  source={activeTab === "urdf" ? "urdf" : "episodes"}
+                  disabled={episodeTransitioning || !!episodeError}
+                />
+              ) : null
+            }
             datasetInfo={datasetInfo}
             paginatedEpisodes={paginatedEpisodes}
             reviewFilter={reviewFilter}
@@ -1124,18 +1201,6 @@ function EpisodeViewerInner({
                 </p>
               </div>
             </div>
-          )}
-
-          {(activeTab === "episodes" || activeTab === "urdf") && (
-            <EpisodeReviewPanel
-              episodeId={episodeId}
-              source={activeTab === "urdf" ? "urdf" : "episodes"}
-              disabled={
-                episodeLoading ||
-                selectedEpisodeId !== episodeId ||
-                !!episodeError
-              }
-            />
           )}
 
           {activeTab === "episodes" && (

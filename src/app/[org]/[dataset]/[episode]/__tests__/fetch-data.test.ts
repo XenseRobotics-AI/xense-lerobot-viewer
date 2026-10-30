@@ -445,3 +445,38 @@ describe("v3.0 episode metadata row parsing helpers", () => {
     }
   });
 });
+
+describe("lightweight episode list preparation", () => {
+  test("prepares all episode indices with only info.json and reuses the array", async () => {
+    const { getEpisodeList, warmEpisodeListMetadata } =
+      await import("../fetch-data");
+    const { encodeLocalDatasetPath } = await import("@/utils/datasetRoute");
+    const original = globalThis.fetch;
+    const requests: string[] = [];
+    globalThis.fetch = (async (input) => {
+      requests.push(String(input));
+      return Response.json({
+        codebase_version: "v3.0",
+        total_episodes: 1139,
+        features: {},
+      });
+    }) as typeof fetch;
+    try {
+      const encoded = encodeLocalDatasetPath(
+        "/tmp/list-" + crypto.randomUUID(),
+      );
+      const list = await getEpisodeList("_local", encoded);
+      expect(list.episodes).toHaveLength(1139);
+      expect(list.episodes[0]).toBe(0);
+      expect(list.episodes.at(-1)).toBe(1138);
+      expect((await getEpisodeList("_local", encoded)).episodes).toBe(
+        list.episodes,
+      );
+      await warmEpisodeListMetadata(list.repoId, "v3.0", [0, 1, 2], () => true);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toEndWith("/meta/info.json");
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});

@@ -524,6 +524,68 @@ function buildSampledEpisodeSet(
   return new Set(evenlySampleIndices(totalEpisodes, maxEpisodes));
 }
 
+const episodeLists = new WeakMap<
+  object,
+  { filter: string | undefined; episodes: number[] }
+>();
+function episodeIndices(
+  info: { total_episodes: number },
+  version: string,
+): number[] {
+  const filter = version === "v3.0" ? undefined : process.env.EPISODES;
+  const cached = episodeLists.get(info);
+  if (cached && cached.filter === filter) return cached.episodes;
+  const episodes =
+    filter === undefined
+      ? Array.from({ length: info.total_episodes }, (_, i) => i)
+      : filter
+          .split(/\s+/)
+          .map((value) => parseInt(value.trim(), 10))
+          .filter((value) => !isNaN(value));
+  episodeLists.set(info, { filter, episodes });
+  return episodes;
+}
+
+/** Index only: no video, episode parquet or pose/chart decoding. */
+export async function getEpisodeList(org: string, dataset: string) {
+  const repoId = repoIdFromRouteParams(org, dataset);
+  const { version, info } = await getDatasetVersionAndInfo(repoId);
+  return { repoId, episodes: episodeIndices(info, version) };
+}
+
+/** Warm only metadata already fetched for the foreground episode. */
+export async function warmEpisodeListMetadata(
+  repoId: string,
+  version: string,
+  episodeIds: number[],
+  shouldContinue: () => boolean,
+) {
+  if (version !== "v3.0" || !shouldContinue()) return;
+  const wanted = new Set(episodeIds.slice(0, 100));
+  const prefix = buildVersionedUrl(repoId, version, "meta/episodes/");
+  let count = 0;
+  for (const [url, rows] of [...episodeMetadataFileCache]) {
+    if (!url.startsWith(prefix) || !rows) continue;
+    for (const row of rows) {
+      if (!shouldContinue()) return;
+      const id = bigIntToNumber(row.episode_index, -1);
+      if (wanted.has(id)) {
+        const metadata = parseEpisodeRowSimple(row);
+        rememberInLru(
+          episodeMetadataRowCache,
+          repoId + "\u0000" + version + "\u0000" + id,
+          metadata,
+          MAX_EPISODE_METADATA_ROWS,
+        );
+        wanted.delete(id);
+        if (!wanted.size) return;
+      }
+      if (++count % 64 === 0)
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+  }
+}
+
 export async function getEpisodeData(
   org: string,
   dataset: string,
@@ -701,17 +763,7 @@ async function getEpisodeDataV2(
     cameras: [],
   };
 
-  // Generate list of episodes
-  const episodes =
-    process.env.EPISODES === undefined
-      ? Array.from(
-          { length: datasetInfo.total_episodes },
-          // episode id starts from 0
-          (_, i) => i,
-        )
-      : process.env.EPISODES.split(/\s+/)
-          .map((x) => parseInt(x.trim(), 10))
-          .filter((x) => !isNaN(x));
+  const episodes = episodeIndices(info, version);
 
   // Videos information
   const videosInfo =
@@ -938,7 +990,7 @@ async function getEpisodeDataV3(
     cameras: [],
   };
 
-  const episodes = Array.from({ length: info.total_episodes }, (_, i) => i);
+  const episodes = episodeIndices(info, version);
 
   // Load episode metadata to get timestamps for episode 0
   const episodeMetadata = await loadEpisodeMetadataV3Simple(
