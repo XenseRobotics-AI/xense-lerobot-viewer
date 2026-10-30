@@ -49,6 +49,46 @@ describe("episode data cache", () => {
     expect(await cache.get("1", async () => 99)).toEqual({ data: 7 });
   });
 
+  test("failed in-flight preloads recover once on the foreground path for all selectors", async () => {
+    const cache = make();
+    cache.setTargets(["1"], "0");
+    const wait = deferred<number>();
+    const bg = cache.prefetch("1", () => wait.promise);
+    let calls = 0;
+    const load = async () => {
+      calls++;
+      return 7;
+    };
+    const first = cache.get("1", load);
+    const second = cache.get("1", load);
+    wait.reject(new Error("Worker unavailable or result too large"));
+    expect(await bg).toEqual({
+      error: "Worker unavailable or result too large",
+    });
+    expect(await first).toEqual({ data: 7 });
+    expect(await second).toEqual({ data: 7 });
+    expect(calls).toBe(1);
+    expect(cache.backgroundBusy).toBe(false);
+    expect(cache.stats.pending).toBe(0);
+  });
+
+  test("foreground recovery reports actual data failure without a retry loop", async () => {
+    const cache = make();
+    cache.setTargets(["1"], "0");
+    const wait = deferred<number>();
+    const bg = cache.prefetch("1", () => wait.promise);
+    let calls = 0;
+    const first = cache.get("1", async () => {
+      calls++;
+      throw new Error("Corrupt data");
+    });
+    wait.reject(new Error("Background failed"));
+    await bg;
+    expect(await first).toEqual({ error: "Corrupt data" });
+    expect(calls).toBe(1);
+    expect(cache.stats.pending).toBe(0);
+  });
+
   test("prefetch never displaces foreground history and promotion reuses the result", async () => {
     const cache = make();
     await cache.get("0", async () => 8);

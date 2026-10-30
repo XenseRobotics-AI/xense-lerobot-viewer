@@ -3,8 +3,74 @@ import {
   formatStringWithVars,
   arrayToCSV,
   getRows,
+  readParquetAsObjects,
+  readParquetColumn,
 } from "@/utils/parquetUtils";
 import { PADDING } from "@/utils/constants";
+
+test("parallel parquet readers share footer setup and failed metadata remains retryable", async () => {
+  let reads = 0;
+  const file = {
+    byteLength: 64,
+    slice: async () => {
+      reads++;
+      throw new Error("Read failed");
+    },
+  };
+  const result = await Promise.allSettled([
+    readParquetAsObjects(file),
+    readParquetColumn(file, []),
+  ]);
+  expect(result.every((r) => r.status === "rejected")).toBe(true);
+  expect(reads).toBe(1);
+  await expect(readParquetColumn(file, [])).rejects.toThrow("Read failed");
+  expect(reads).toBe(2);
+});
+
+// Three uncompressed float64 rows generated with PyArrow; tests need no Python.
+const parquetFixture = Uint8Array.from(
+  Buffer.from(
+    "UEFSMRUAFTwVPCwVBhUAFQYVBhwYCAAAAAAAAAhAGAgAAAAAAADwPxYAKAgAAAAAAAAIQBgIAAAAAAAA8D8REQAAAAIAAAAGAQAAAAAAAPA/AAAAAAAAAEAAAAAAAAAIQBUEGSw1ABgGc2NoZW1hFQIAFQolAhgBeAAWBhkcGRwmABwVChklBgAZGAF4FQAWBha6ARa6ASYIPBgIAAAAAAAACEAYCAAAAAAAAPA/FgAoCAAAAAAAAAhAGAgAAAAAAADwPxERABkcFQAVABUCADwpBhkmAAYAAAAWugEWBiYIFroBABkcGAxBUlJPVzpzY2hlbWEYoAEvLy8vLzNBQUFBQVFBQUFBQUFBS0FBd0FCZ0FGQUFnQUNnQUFBQUFCQkFBTUFBQUFDQUFJQUFBQUJBQUlBQUFBQkFBQUFBRUFBQUFVQUFBQUVBQVVBQWdBQmdBSEFBd0FBQUFRQUJBQUFBQUFBQUVERUFBQUFCZ0FBQUFFQUFBQUFBQUFBQUVBQUFCNEFBWUFDQUFHQUFZQUFBQUFBQUlBABggcGFycXVldC1jcHAtYXJyb3cgdmVyc2lvbiAyNi4wLjAZHBwAAABgAQAAUEFSMQ==",
+    "base64",
+  ),
+).buffer;
+
+test("parallel column and object reads reuse one valid footer", async () => {
+  let footers = 0;
+  const file = {
+    byteLength: parquetFixture.byteLength,
+    slice: async (start: number, end?: number) => {
+      if (start === 0 && end === parquetFixture.byteLength) footers++;
+      return parquetFixture.slice(start, end);
+    },
+  };
+  const [objects, columns] = await Promise.all([
+    readParquetAsObjects(file),
+    readParquetColumn(file, ["x"]),
+  ]);
+  expect(objects).toEqual([{ x: 1 }, { x: 2 }, { x: 3 }]);
+  expect(columns).toEqual([[1], [2], [3]]);
+  expect(footers).toBe(1);
+});
+
+test("column data-page failure after valid metadata rejects and can be retried", async () => {
+  let fail = true;
+  let footers = 0;
+  const file = {
+    byteLength: parquetFixture.byteLength,
+    slice: async (start: number, end?: number) => {
+      if (start === 0 && end === parquetFixture.byteLength) footers++;
+      else if (fail) throw new Error("Data page unavailable");
+      return parquetFixture.slice(start, end);
+    },
+  };
+  await expect(readParquetColumn(file, ["x"])).rejects.toThrow(
+    "Data page unavailable",
+  );
+  fail = false;
+  expect(await readParquetColumn(file, ["x"])).toEqual([[1], [2], [3]]);
+  expect(footers).toBe(1);
+});
 
 // ---------------------------------------------------------------------------
 // formatStringWithVars — used to build v2.x data / video paths at runtime

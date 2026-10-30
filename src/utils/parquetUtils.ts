@@ -2,6 +2,8 @@ import {
   asyncBufferFromUrl,
   parquetRead,
   parquetReadObjects,
+  parquetMetadataAsync,
+  type FileMetaData,
   type AsyncBuffer,
 } from "hyparquet";
 import { ParquetBufferCache } from "./parquetBufferCache";
@@ -49,6 +51,19 @@ export function formatStringWithVars(
 
 // Fetch and parse the Parquet file
 type ParquetFile = ArrayBuffer | AsyncBuffer;
+const parquetMetadataCache = new WeakMap<ParquetFile, Promise<FileMetaData>>();
+
+function readMetadata(file: ParquetFile): Promise<FileMetaData> {
+  const cached = parquetMetadataCache.get(file);
+  if (cached) return cached;
+  const result = parquetMetadataAsync(file).catch((error: unknown) => {
+    if (parquetMetadataCache.get(file) === result)
+      parquetMetadataCache.delete(file);
+    throw error;
+  });
+  parquetMetadataCache.set(file, result);
+  return result;
+}
 
 const parquetFileCache = new ParquetBufferCache({
   open: async (url) => {
@@ -94,21 +109,18 @@ export async function readParquetColumn(
   columns: string[],
   options?: { rowStart?: number; rowEnd?: number },
 ): Promise<unknown[][]> {
-  return new Promise((resolve, reject) => {
-    try {
-      parquetRead({
-        file: fileBuffer,
-        columns: columns.length > 0 ? columns : undefined,
-        rowStart: options?.rowStart,
-        rowEnd: options?.rowEnd,
-        onComplete: (data: unknown[][]) => {
-          resolve(data);
-        },
-      });
-    } catch (error) {
-      reject(error);
-    }
+  let rows: unknown[][] = [];
+  await parquetRead({
+    file: fileBuffer,
+    metadata: await readMetadata(fileBuffer),
+    columns: columns.length > 0 ? columns : undefined,
+    rowStart: options?.rowStart,
+    rowEnd: options?.rowEnd,
+    onComplete: (data: unknown[][]) => {
+      rows = data;
+    },
   });
+  return rows;
 }
 
 export async function readParquetAsObjects(
@@ -118,6 +130,7 @@ export async function readParquetAsObjects(
 ): Promise<Record<string, unknown>[]> {
   return parquetReadObjects({
     file: fileBuffer,
+    metadata: await readMetadata(fileBuffer),
     columns: columns.length > 0 ? columns : undefined,
     rowStart: options?.rowStart,
     rowEnd: options?.rowEnd,

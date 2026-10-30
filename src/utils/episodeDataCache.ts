@@ -5,6 +5,7 @@ export type EpisodeLoadResult<T> = { data?: T; error?: string };
 type Pending<T> = {
   foreground: boolean;
   result: Promise<EpisodeLoadResult<T>>;
+  foregroundResult?: Promise<EpisodeLoadResult<T>>;
 };
 
 /** One background load; foreground reads bypass it or join the exact same key. */
@@ -186,8 +187,15 @@ export class EpisodeDataCache<T> {
       if (!pending.foreground) {
         pending.foreground = true;
         this.foregroundLoads++;
+        // A selected preload can fail due to worker limits or availability.
+        // Retry once on the foreground path; concurrent selectors share it.
+        pending.foregroundResult = pending.result.then((result) => {
+          if (result.error === undefined) return result;
+          const replacement = this.pending.get(key);
+          return replacement?.result ?? this.start(key, load, true);
+        });
       }
-      return pending.result;
+      return pending.foregroundResult ?? pending.result;
     }
     return this.start(key, load, true);
   }

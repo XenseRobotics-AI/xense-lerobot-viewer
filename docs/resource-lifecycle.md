@@ -103,8 +103,9 @@ and episode consumers share the same metadata request, including body consumptio
 failed requests are removed from the in-flight map. Index arrays are reused.
 After foreground media is ready and playback is paused, an IntersectionObserver
 rooted in the sidebar scroll container selects only episode links actually on
-screen. After 800 ms without scroll/navigation/input, requestIdleCallback starts
-one background episode read, nearest to the active episode first. Browsers without
+screen. After 350 ms without scroll/navigation/input, requestIdleCallback starts
+one background episode read, nearest to the active episode first. Subsequent idle
+jobs have a 50 ms gap; any new interaction resets the settling period. Browsers without
 that API use the delayed callback. This warms parsed chart/pose data and metadata,
 not adjacent MP4s or every route rendered on the page. The preloader is a leaf
 subscriber so its visibility/playback updates do not redraw the viewer.
@@ -133,11 +134,31 @@ not preallocated memory, dataset/file-size limits, disk quotas or cumulative
 network-read limits. Raising byte budgets does not raise the entry limits or
 background concurrency.
 
-The shared raw Parquet cache independently caps 16 handles, 512 ranges and 128 MiB
-across all files, with 10-minute idle expiry. Equivalent suffix/range requests
+The main thread and one background worker each cap raw Parquet caches at 16
+handles, 512 ranges and 128 MiB across files, with 10-minute idle expiry. Combined
+raw-cache ceilings are 256 MiB per tab; the named parsed/raw budgets total 576 MiB,
+not a hard total-memory limit. Equivalent suffix/range requests
 and concurrent file opens share reads. Failed requests are removed. Eviction only
 releases cache references and never closes or cancels an active consumer. Endpoints
 returning a full file instead of 206 do not retain an extra unbounded hidden copy.
+
+Cold foreground reads take the direct core path, avoiding worker queueing and
+large structured-clone overhead. One dedicated worker handles speculative reads;
+unsupported/crashed workers disable preloading while foreground remains usable. A foreground selection that
+adopts a failing preload retries once directly; concurrent selectors share the retry.
+The worker has no permanent parsed-result cache and omits its episode index from
+results; the UI reattaches its shared index. Results larger than the speculative
+budget are rejected before cloning. Queued jobs are bounded to eight, newest
+first; active jobs finish normally. Worker idle termination after 10 minutes
+releases its caches. A 120-second task deadline is a separate failure boundary
+with retry, never a response to hiding a tab or navigating away.
+
+Parquet footer promises are shared per cached file object in a WeakMap, including
+parallel column/object reads. Failed metadata is removed for retry, and data-page
+errors propagate to callers instead of leaving unresolved reads. Ordinary chart
+rows are flattened only after selecting the existing display indices. Full-rate
+pose/gripper derivatives still run before sampling; source timestamps, endpoints
+and the 4,000-point display limit are unchanged.
 
 Regression checks use the actual sidebar, IntersectionObserver, time/visibility
 providers and V2/V3 Parquet decoders in Chrome: only visible links are warmed,
