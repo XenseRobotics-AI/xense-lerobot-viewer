@@ -8,6 +8,7 @@ import type {
 } from "@/lib/local-datasets-discovery";
 import type { DailyDelta } from "@/utils/corpusHistory";
 import { groupDatasetsByPrefix } from "@/utils/datasetGrouping";
+import ReviewCollectionPanel from "@/components/review-collection-panel";
 import CorpusDashboard from "@/components/corpus-dashboard";
 import DatasetPathSwitcher from "@/components/dataset-path-switcher";
 import InterruptedConversions from "@/components/interrupted-conversions";
@@ -122,6 +123,8 @@ export default function LocalDatasetGrid({
         </div>
         <LanguageSwitcher className="mt-1.5" />
       </header>
+
+      <ReviewCollectionPanel key={browsePath} browsePath={browsePath} />
 
       {/* Corpus dashboard. Replaces the old counts line + health pills: the same
           facts, plus where the recorded time comes from, per-source growth, and

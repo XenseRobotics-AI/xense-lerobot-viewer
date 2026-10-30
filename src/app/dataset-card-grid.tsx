@@ -654,6 +654,7 @@ export default function DatasetCardGrid({
               <Link
                 key={ds.encodedPath}
                 href={buildEpisodeRoute(ds.encodedPath)}
+                prefetch={false}
                 title={
                   health.tone === "ok"
                     ? ds.relativePath

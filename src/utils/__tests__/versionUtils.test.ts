@@ -402,3 +402,74 @@ describe("getDatasetVersionAndInfo", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("dataset metadata request sharing", () => {
+  test("concurrent list and episode consumers share one info response through body consumption", async () => {
+    const { getDatasetVersionAndInfo } = await import("@/utils/versionUtils");
+    const original = globalThis.fetch;
+    let calls = 0;
+    let finish!: () => void;
+    const bodyReady = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const repoId = makeLocalRepoId("/tmp/shared-info-" + crypto.randomUUID());
+    globalThis.fetch = (async () => {
+      calls++;
+      return new Response(
+        new ReadableStream({
+          async start(controller) {
+            await bodyReady;
+            controller.enqueue(
+              new TextEncoder().encode(
+                JSON.stringify({
+                  codebase_version: "v3.0",
+                  total_episodes: 1139,
+                  features: {},
+                }),
+              ),
+            );
+            controller.close();
+          },
+        }),
+      );
+    }) as typeof fetch;
+    try {
+      const first = getDatasetVersionAndInfo(repoId);
+      const second = getDatasetVersionAndInfo(repoId);
+      expect(calls).toBe(1);
+      finish();
+      const [a, b] = await Promise.all([first, second]);
+      expect(a.info).toBe(b.info);
+      expect(calls).toBe(1);
+    } finally {
+      globalThis.fetch = original;
+      finish();
+    }
+  });
+
+  test("a failed shared request is evicted so a later foreground request can retry", async () => {
+    const { getDatasetVersionAndInfo } = await import("@/utils/versionUtils");
+    const original = globalThis.fetch;
+    const repoId = makeLocalRepoId("/tmp/retry-info-" + crypto.randomUUID());
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      if (++calls === 1) throw new Error("temporary disconnect");
+      return Response.json({
+        codebase_version: "v3.0",
+        total_episodes: 2,
+        features: {},
+      });
+    }) as typeof fetch;
+    try {
+      await expect(getDatasetVersionAndInfo(repoId)).rejects.toThrow(
+        "temporary disconnect",
+      );
+      expect((await getDatasetVersionAndInfo(repoId)).info.total_episodes).toBe(
+        2,
+      );
+      expect(calls).toBe(2);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});

@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
+import { createBackgroundProcessResponse } from "@/lib/background-process-response";
 import { resolveLocalDatasetRoot } from "@/lib/local-datasets-discovery";
 import {
   PythonUnavailableError,
@@ -84,6 +85,9 @@ const SYNC_DISABLED_REASON =
 
 /** One sync at a time, process-wide: concurrent runs would write the same files. */
 let activeSync: { source: string; startedAt: number } | null = null;
+function currentSync() {
+  return activeSync;
+}
 
 type SyncResult = {
   org: string;
@@ -212,106 +216,6 @@ async function runToCompletion(
   });
 }
 
-/** Pipe the script's NDJSON straight through to the client as it arrives. */
-function streamDownload(args: string[], pythonBin: string): Response {
-  const encoder = new TextEncoder();
-  return new Response(
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        let closed = false;
-        const send = (obj: unknown) => {
-          if (closed) return;
-          try {
-            controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
-          } catch {
-            closed = true;
-          }
-        };
-        const close = () => {
-          if (closed) return;
-          closed = true;
-          try {
-            controller.close();
-          } catch {
-            /* already torn down */
-          }
-        };
-
-        let child: ChildProcessWithoutNullStreams;
-        try {
-          child = spawnScript(pythonBin, args);
-        } catch (err) {
-          send({ type: "error", error: `Failed to launch Python: ${err}` });
-          activeSync = null;
-          close();
-          return;
-        }
-
-        // The script reports its own failures as an error event and then exits
-        // non-zero. Track that, or the generic exit-code message below would
-        // land second and overwrite the diagnosis the user actually needs.
-        let sentError = false;
-
-        // The script emits one JSON object per line; hold a buffer because a
-        // chunk boundary can land mid-line.
-        let buffer = "";
-        const forward = (line: string) => {
-          if (!line.trim()) return;
-          try {
-            const event = JSON.parse(line);
-            if (event?.type === "error") sentError = true;
-            send(event);
-          } catch {
-            /* ignore an unparseable line rather than killing the stream */
-          }
-        };
-        child.stdout.on("data", (chunk) => {
-          buffer += chunk.toString();
-          const lines = buffer.split(/\r?\n/);
-          buffer = lines.pop() ?? "";
-          for (const line of lines) forward(line);
-        });
-
-        let stderr = "";
-        child.stderr.on("data", (d) => (stderr += d.toString()));
-
-        child.on("error", (err) => {
-          send({ type: "error", error: `Python failed: ${err.message}` });
-          activeSync = null;
-          close();
-        });
-
-        child.on("close", (code) => {
-          forward(buffer);
-          // Only synthesise an error when the script died without explaining
-          // itself — a crash or a kill. Otherwise its own message stands.
-          if (code !== 0 && !sentError) {
-            send({
-              type: "error",
-              error:
-                stderr.trim().split(/\r?\n/).pop() ||
-                `Sync exited with code ${code} and no output.`,
-            });
-          }
-          activeSync = null;
-          close();
-        });
-      },
-      cancel() {
-        // Client navigated away; the child keeps running to completion so a
-        // half-written dataset directory isn't left behind.
-        activeSync = null;
-      },
-    }),
-    {
-      headers: {
-        "content-type": "application/x-ndjson; charset=utf-8",
-        "cache-control": "no-store, no-transform",
-      },
-    },
-  );
-}
-
 /**
  * The requested target as script arguments.
  *
@@ -422,9 +326,26 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 
-  activeSync = { source: target.label, startedAt: Date.now() };
-  return streamDownload(
-    body.force === true ? [...baseArgs, "--force"] : baseArgs,
-    python.bin,
+  // Python resolution awaited above; another request may have acquired the lock.
+  if (request.signal.aborted) return new Response(null, { status: 499 });
+  const running = currentSync();
+  if (running) {
+    return Response.json(
+      { error: `A sync of ${running.source} is already running.` },
+      { status: 409 },
+    );
+  }
+  const lease = { source: target.label, startedAt: Date.now() };
+  activeSync = lease;
+  return createBackgroundProcessResponse(
+    () =>
+      spawnScript(
+        python.bin,
+        body.force === true ? [...baseArgs, "--force"] : baseArgs,
+      ),
+    () => {
+      if (activeSync === lease) activeSync = null;
+    },
+    request.signal,
   );
 }

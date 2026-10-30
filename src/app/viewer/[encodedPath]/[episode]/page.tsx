@@ -1,4 +1,8 @@
 import EpisodeViewer from "@/app/[org]/[dataset]/[episode]/episode-viewer";
+import { cookies } from "next/headers";
+import { resolveBrowsePath } from "@/lib/dataset-locations-store";
+import { resolveLocalDatasetRoot } from "@/lib/local-datasets-discovery";
+import { BROWSE_PATH_COOKIE } from "@/utils/browsePath";
 import { Suspense } from "react";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -207,9 +211,15 @@ export default async function LocalEpisodePage({
     return <IntegrityErrorPage datasetPath={datasetPath} issue={issue} t={t} />;
   }
 
+  const reviewBrowsePath = await resolveBrowsePath(
+    resolveLocalDatasetRoot(),
+    (await cookies()).get(BROWSE_PATH_COOKIE)?.value,
+  );
+
   return (
     <Suspense fallback={null}>
       <EpisodeViewer
+        reviewBrowsePath={reviewBrowsePath}
         org="_local"
         dataset={encodedPath}
         episodeId={episodeNumber}

@@ -42,6 +42,7 @@ const datasetInfoCache = new Map<
   string,
   { data: DatasetInfo; expiry: number }
 >();
+const datasetInfoInFlight = new Map<string, Promise<DatasetInfo>>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_CACHE_ENTRIES = Math.max(
   8,
@@ -76,21 +77,31 @@ export async function getDatasetInfo(repoId: string): Promise<DatasetInfo> {
     console.log(`[perf] getDatasetInfo cache HIT for ${repoId}`);
     return cached.data;
   }
+  const pending = datasetInfoInFlight.get(repoId);
+  if (pending) return pending;
+  const request = fetchDatasetInfo(repoId);
+  datasetInfoInFlight.set(repoId, request);
+  try {
+    return await request;
+  } finally {
+    if (datasetInfoInFlight.get(repoId) === request)
+      datasetInfoInFlight.delete(repoId);
+  }
+}
+
+async function fetchDatasetInfo(repoId: string): Promise<DatasetInfo> {
   console.log(`[perf] getDatasetInfo cache MISS for ${repoId} — fetching`);
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
   try {
     const testUrl = buildVersionedUrl(repoId, "v3.0", "meta/info.json");
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
 
     const response = await fetch(testUrl, {
       method: "GET",
       cache: "no-store",
       signal: controller.signal,
     });
-
-    clearTimeout(timeoutId);
 
     if (!response.ok) {
       throw new Error(
@@ -120,6 +131,8 @@ export async function getDatasetInfo(repoId: string): Promise<DatasetInfo> {
       `Dataset ${repoId} is not compatible with this visualizer. ` +
         "Failed to read dataset information from the main revision.",
     );
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 

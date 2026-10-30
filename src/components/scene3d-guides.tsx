@@ -67,7 +67,7 @@ export function CameraFit({
   controlsRef: React.RefObject<ControlsHandle | null>;
   offset?: [number, number, number];
 }) {
-  const { camera } = useThree();
+  const { camera, invalidate } = useThree();
   const [offsetX, offsetY, offsetZ] = offset;
 
   useEffect(() => {
@@ -88,7 +88,8 @@ export function CameraFit({
 
     controlsRef.current?.target.copy(bounds.center);
     controlsRef.current?.update();
-  }, [bounds, camera, controlsRef, offsetX, offsetY, offsetZ]);
+    invalidate();
+  }, [bounds, camera, controlsRef, offsetX, offsetY, offsetZ, invalidate]);
 
   return null;
 }

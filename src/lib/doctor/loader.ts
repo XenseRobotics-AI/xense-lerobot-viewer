@@ -71,13 +71,19 @@ async function readJsonObject(absolutePath: string): Promise<DoctorRawRow> {
   return value;
 }
 
-async function readJsonLines(absolutePath: string): Promise<DoctorRawRow[]> {
+async function readJsonLines(
+  absolutePath: string,
+  signal?: AbortSignal,
+): Promise<DoctorRawRow[]> {
+  throwIfDoctorAborted(signal);
   const stat = await fs.stat(absolutePath);
   if (!stat.isFile()) throw new Error("not a regular file");
   if (stat.size > MAX_JSON_BYTES) {
     throw new Error(`file exceeds ${MAX_JSON_BYTES / 1024 / 1024} MiB limit`);
   }
-  const text = await fs.readFile(absolutePath, "utf8");
+  throwIfDoctorAborted(signal);
+  const text = await fs.readFile(absolutePath, { encoding: "utf8", signal });
+  throwIfDoctorAborted(signal);
   const rows: DoctorRawRow[] = [];
   for (const [index, line] of text.split(/\r?\n/).entries()) {
     const trimmed = line.trim();
@@ -99,7 +105,9 @@ async function listFilesUnder(
   root: string,
   relativeDirectory: string,
   suffix?: string,
+  signal?: AbortSignal,
 ): Promise<string[]> {
+  throwIfDoctorAborted(signal);
   const start = resolveInsideDataset(root, relativeDirectory);
   if (!start) return [];
 
@@ -112,6 +120,7 @@ async function listFilesUnder(
   const files: string[] = [];
   const pending = [start];
   while (pending.length > 0) {
+    throwIfDoctorAborted(signal);
     const directory = pending.pop();
     if (!directory) break;
     const entries = await fs.readdir(directory, { withFileTypes: true });
@@ -131,6 +140,7 @@ async function listFilesUnder(
       }
     }
   }
+  throwIfDoctorAborted(signal);
   return files.sort((left, right) => left.localeCompare(right));
 }
 
@@ -155,6 +165,7 @@ async function buildInventory(
     }
 
     for (const child of children) {
+      throwIfDoctorAborted(signal);
       if (entries.length >= MAX_INVENTORY_ENTRIES) {
         truncated = true;
         return { entries, totalSize, truncated };
@@ -275,17 +286,26 @@ async function readParquetFile(
   if (!stat.isFile() || !isInsideRoot(realRoot, realFile)) {
     throw new Error(`Parquet path escapes dataset: ${relPath}`);
   }
+  throwIfDoctorAborted(signal);
   const handle = await openParquet(
     absolutePath,
     relPath,
     Number(stat.size),
     stat.mtimeMs,
   );
+  throwIfDoctorAborted(signal);
   // Match PyArrow's pq.read_table() behavior used by the Python Doctor: read
   // each parquet file once. LeRobot v3 commonly writes a ~100 MB data file as
   // one row group, so splitting this into logical 50k-row reads would decode
   // that same row group repeatedly.
-  return readParquetRowsRaw(handle, 0, handle.info.numRows, columns);
+  const rows = await readParquetRowsRaw(
+    handle,
+    0,
+    handle.info.numRows,
+    columns,
+  );
+  throwIfDoctorAborted(signal);
+  return rows;
 }
 
 async function readParquetRange(
@@ -308,17 +328,20 @@ async function readParquetRange(
   if (!stat.isFile() || !isInsideRoot(realRoot, realFile)) {
     throw new Error(`Parquet path escapes dataset: ${relPath}`);
   }
+  throwIfDoctorAborted(signal);
   const handle = await openParquet(
     absolutePath,
     relPath,
     Number(stat.size),
     stat.mtimeMs,
   );
+  throwIfDoctorAborted(signal);
   let fileStartIndex = 0;
   if (indicesAreDatasetGlobal && handle.info.numRows > 0) {
     const firstRow = await readParquetRowsRaw(handle, 0, 1, ["index"]);
     fileStartIndex = Math.trunc(numberValue(firstRow[0]?.index, 0) ?? 0);
   }
+  throwIfDoctorAborted(signal);
   const localFrom = fromIndex - fileStartIndex;
   const localTo = toIndex - fileStartIndex;
   const start = Math.max(
@@ -329,7 +352,9 @@ async function readParquetRange(
     start,
     Math.min(handle.info.numRows, Math.trunc(localTo)),
   );
-  return readParquetRowsRaw(handle, start, end - start, columns);
+  const rows = await readParquetRowsRaw(handle, start, end - start, columns);
+  throwIfDoctorAborted(signal);
+  return rows;
 }
 
 function episodeMetaFromRow(
@@ -385,9 +410,15 @@ async function loadEpisodeMeta(
   const warnings: string[] = [];
   let rows: DoctorRawRow[] = [];
   let total = 0;
-  const parquetFiles = await listFilesUnder(root, "meta/episodes", ".parquet");
+  const parquetFiles = await listFilesUnder(
+    root,
+    "meta/episodes",
+    ".parquet",
+    signal,
+  );
   if (parquetFiles.length > 0) {
     for (const relPath of parquetFiles) {
+      throwIfDoctorAborted(signal);
       try {
         // Episode metadata is small compared with data/video shards and is
         // needed in full for dataset-wide video/path checks. The maxEpisodes
@@ -401,6 +432,7 @@ async function loadEpisodeMeta(
           )),
         );
       } catch (error) {
+        throwIfDoctorAborted(signal);
         warnings.push(
           `Could not read episode metadata ${relPath}: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -411,9 +443,13 @@ async function loadEpisodeMeta(
     (await pathExists(path.join(root, "meta", "episodes.jsonl")))
   ) {
     try {
-      rows = await readJsonLines(path.join(root, "meta", "episodes.jsonl"));
+      rows = await readJsonLines(
+        path.join(root, "meta", "episodes.jsonl"),
+        signal,
+      );
       total = rows.length;
     } catch (error) {
+      throwIfDoctorAborted(signal);
       warnings.push(
         `Could not read meta/episodes.jsonl: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -620,6 +656,7 @@ async function loadEpisodesFromMetadata(
         }
       }
     } catch (error) {
+      throwIfDoctorAborted(signal);
       warnings.push(
         `${relPath}: could not load episodes [${locations
           .slice(0, 10)
@@ -660,7 +697,7 @@ async function loadEpisodesByScanning(
 ): Promise<{ episodes: DoctorEpisodeData[]; warnings: string[] }> {
   const warnings: string[] = [];
   const grouped = new Map<number, DoctorEpisodeData>();
-  const parquetFiles = await listFilesUnder(root, "data", ".parquet");
+  const parquetFiles = await listFilesUnder(root, "data", ".parquet", signal);
   for (const [fileIndex, relPath] of parquetFiles.entries()) {
     throwIfDoctorAborted(signal);
     onFileProgress?.(
@@ -672,6 +709,7 @@ async function loadEpisodesByScanning(
     try {
       rows = await readParquetFile(root, relPath, signal);
     } catch (error) {
+      throwIfDoctorAborted(signal);
       warnings.push(
         `Could not read data parquet ${relPath}: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -802,6 +840,7 @@ export async function loadDoctorDataset(
     loadInfo(root),
     buildInventory(root, options.signal),
   ]);
+  throwIfDoctorAborted(options.signal);
   reportLoadProgress(
     options,
     0.15,
@@ -842,6 +881,7 @@ export async function loadDoctorDataset(
     loadTasks(root),
     loadStats(root),
   ]);
+  throwIfDoctorAborted(options.signal);
   reportLoadProgress(
     options,
     0.3,
@@ -859,6 +899,7 @@ export async function loadDoctorDataset(
         message,
       ),
   );
+  throwIfDoctorAborted(options.signal);
   if (!hasAllEpisodeData(dataResult.episodes, metaResult.selected)) {
     const metadataWarnings = dataResult.warnings;
     reportLoadProgress(
@@ -891,6 +932,7 @@ export async function loadDoctorDataset(
     }
   }
 
+  throwIfDoctorAborted(options.signal);
   reportLoadProgress(
     options,
     1,

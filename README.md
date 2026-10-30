@@ -4,6 +4,162 @@ A web tool by **Xense Robotics** for interactive exploration of **local** LeRobo
 
 This fork removes the Hugging Face Hub remote-loading path; everything reads from your local LeRobot cache (`~/.cache/huggingface/lerobot` by default).
 
+## Startup and browser recovery
+
+Public episode URLs remain `/_local/...`. An internal `/viewer/...` route avoids
+Next 15 dev client navigation under-encoding escaped underscore script paths.
+The UI uses installed system fonts; starting or building the viewer does not
+require Google Fonts. Dataset-card and episode-list links load on selection
+instead of prefetching routes while you browse. Preview videos detach when they
+leave the viewport or the grid unmounts, and local files stream with cancellation
+rather than buffering complete videos in memory. Cold dataset-size scans use a
+bounded filesystem queue; concurrent refreshes share the same in-progress scan.
+The first scan of a large archive can still take time, especially on slow storage.
+
+If a browser tab was open against another app or an older build on the same
+host and port, close those old tabs and perform a hard refresh. The viewer has
+no `/api/workbench/shared-sync` endpoint or caller. Persistent requests to that
+path come from another client; use the browser Network panel's Initiator column
+to identify it. Do not run `bun run build` while `bun dev` is running in the
+same checkout: both write `.next/`. A failed JavaScript asset triggers at most
+one automatic recovery reload per tab, so a persistent failure reaches the error
+UI instead of repeatedly reloading while a slow compilation finishes.
+
+## Human episode inspection
+
+The **Episode** and **3D Replay** tabs share manual inspection marks. Select a
+preset inspector, then click **Mark as inspected** after checking an episode.
+The last selected inspector is remembered in the browser across episodes, tabs
+and datasets. Playback alone never creates a mark. Multiple inspectors can
+inspect the same episode; undo removes only the selected inspector's mark.
+Each new mark records the inspector name, roster role, server timestamp (UTC+8) and entry tab
+(`episodes` or `urdf`). Names are self-selected labels, not authenticated identities.
+
+Records are stored together under the directory selected by the homepage's path
+switcher, **not inside an individual dataset** and not always under
+`LOCAL_DATASET_ROOT`:
+
+```text
+<selected-browse-directory>/.xense-viewer/episode-reviews.json
+<selected-browse-directory>/.xense-viewer/reviewers.json
+```
+
+The roster is local configuration, read fresh from the **currently selected work
+directory** on each API request. There are no hardcoded personal names, shared
+roster cache, or environment-variable fallbacks. Switching browse directories
+also switches both the roster and inspection records. Edit that directory's
+reviewers.json to update people without rebuilding the application. A missing or
+explicitly empty file disables marking; existing records remain readable.
+
+Use role objects; legacy arrays of names are still accepted as inspectors:
+
+    [
+      { "name": "Inspector A", "role": "inspector" },
+      { "name": "Administrator A", "role": "admin" },
+      { "name": "Developer A", "role": "developer" }
+    ]
+
+Roles are labels, not authentication or access control. Both reviewers.json and
+episode-reviews.json belong in .xense-viewer, which is excluded by .gitignore;
+never commit personal configuration or review data with the source code.
+The selected work directory must be writable for marking.
+
+New records use ISO 8601 timestamps with an explicit +08:00 offset. Historical
+UTC timestamps retain their actual instant and are converted to UTC+8 on read,
+display and export; they are not shifted twice. Browser/OS timezone settings do
+not change the inspection time shown.
+
+The record file is keyed by each dataset's path relative to the browse directory,
+then by episode index, so identically numbered episodes in different datasets do
+not collide. The viewer pins the selected browse directory when it opens, so
+switching the homepage directory in another browser tab cannot redirect a save.
+An episode outside that directory must be reopened from the correct dataset list.
+
+The sidebar shows inspection progress, per-person counts, and filters for
+uninspected / inspected / awaiting cross-review / cross-reviewed / awaiting my
+check / inspected by me. Two or more **different people** marking an episode
+make it cross-reviewed; repeated marks by the same name count once. Undo removes
+only that person's mark and updates the status. A mark records that somebody
+checked the episode, not a quality pass or fail.
+
+The **homepage** provides collection-wide counts and CSV / JSON export under
+“Inspection management”. CSV contains one row per person and episode with the
+dataset path, role, UTC+8 timestamp, entry tab, status and number of inspectors.
+Statistics include saved historical records even if a dataset is no longer
+present. The overview only reads the shared record file; it never scans media.
+
+Other open viewers refresh on focus and every 30 seconds while visible; the
+homepage overview refreshes every 60 seconds while visible. Requests do not
+overlap and reads are aborted when the owning view unmounts. Writes merge under
+an exclusive lock and replace the JSON atomically; failures are shown without
+displaying an unsaved checkmark. If the server crashes while writing and leaves
+episode-reviews.json.lock behind, stop all viewer processes before removing
+that stale lock directory.
+
+Resource handling preserves active playback: paused 3D scenes render on demand
+(including seeking, camera controls and asynchronously loaded models), active
+playback keeps the full render loop, and inactive/hidden 3D views stop rendering.
+Episode pose plots and spatial trajectory scenes also redraw only when their
+data or controls change, retaining the existing dataset-frame playback clock.
+Hiding the browser tab pauses playback without automatically resuming it on
+return. Offscreen previews and unmounted videos release their media sources;
+metadata/parquet loading for the active episode is not throttled away.
+
+When playback is paused and the active media is ready, Episodes and 3D Replay
+warm parsed chart/pose data for episode links actually visible in the sidebar.
+After 350 ms without navigation/scroll/input, browser idle time starts one
+background episode at a time, nearest to the current episode first, with a 50 ms
+gap between completed idle jobs. Hidden tabs,
+offline connections, data saver and 2G stop new background work. Existing reads
+finish normally; selecting the same episode joins its read, and selecting another
+episode starts immediately. Preloading never creates inspection marks and does
+not download adjacent videos or prefetch every route on the page.
+
+Parsed foreground history is limited to 8 episodes / an estimated 192 MiB; the
+active episode stays usable even if it alone exceeds the byte budget. A separate
+background cache holds at most 24 episodes / an estimated 128 MiB. Once offscreen,
+entries within 2 episodes expire after 10 minutes, within 12 after 4 minutes,
+and farther away or in another dataset after 1 minute. Pruning runs every
+30 seconds; capacity pressure releases distant offscreen entries sooner. Visible
+and current entries remain protected from age eviction. Leaving the viewer
+also schedules cleanup. The main thread and one background worker each limit raw
+Parquet caches to 16 files / 512 ranges / 128 MiB, with 10-minute idle expiry
+(256 MiB combined raw-cache ceilings per tab). Together with parsed caches, the
+named budgets sum to 576 MiB; these are cache budgets, not a hard cap on browser
+memory or active
+decoding/video buffers. Failed byte reads are retryable and never cached forever.
+Retention, cleanup periods and byte budgets are centralized in
+src/utils/episodeCachePolicy.ts. Count limits are unchanged when byte budgets
+are raised; caches allocate only when data is read, not up front.
+These limits are shared across datasets in one browser tab, independently of
+other tabs or machines. Counts and bytes are simultaneous limits: reaching
+either triggers capacity eviction without waiting for age expiry. Parsed-data
+bytes use a sampled object-size estimate (chart/pose rows, timestamp arrays and
+language content), not a browser heap measurement. Raw Parquet bytes use actual
+ArrayBuffer.byteLength, shared across files within each runtime rather than
+allocated per file.
+Byte budgets apply to retained in-memory data, not dataset size, file-size
+access limits, disk usage or cumulative network traffic. A speculative episode
+larger than its whole budget is not retained. Video,
+GPU/3D resources, mounted views and in-flight decodes are outside these budgets.
+
+Cold foreground reads start directly, avoiding worker queueing and large result
+clones. Background decoding runs in one dedicated Web Worker, keeping speculative
+Parquet/chart processing off the UI thread. An unsupported or failed worker skips
+preloading; foreground loading remains available. A foreground selection that
+adopts a failing preload retries once directly; concurrent selectors share the retry. Workers release after 10 idle
+minutes; a separate 120-second decode deadline permits retry without treating tab
+visibility as cancellation. Worker results reuse the UI's shared episode index,
+and oversized speculative results are rejected before cloning.
+
+Ordinary joint charts flatten only the existing 4,000 display samples. Pose and
+gripper velocities still use original adjacent source frames before display
+sampling; original frame timestamps and sampling endpoints are preserved. A
+synthetic V3 fixture (20.6 MiB, 30,000 frames, 43 state and 43 action dimensions)
+measured three-run median cold decoding of about 349 ms before and 245 ms after
+this optimization in headless Chrome. This isolates parsing/chart preparation;
+NFS latency, video loading and other dataset shapes can differ.
+
 ## Features
 
 - **Local dataset browser**: the homepage lists every LeRobot dataset under your local root with a video preview and metadata badge (robot type, codebase version, episode count). Filter by name, robot type, or **dataset tags** (see below). Source cards name the robot types they hold, and each dataset card shows its shape (`20-dim + 7 streams`) — amber when that shape contradicts the dataset's declared `robot_type`, which is how a half-configured capture gets caught.
