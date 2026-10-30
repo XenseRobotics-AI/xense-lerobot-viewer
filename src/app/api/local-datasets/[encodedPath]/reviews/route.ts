@@ -14,6 +14,7 @@ import {
 } from "@/lib/episode-review-scope";
 import { parseReviewUpdate } from "@/types/episode-review.types";
 import { BROWSE_PATH_COOKIE } from "@/utils/browsePath";
+import { ReviewWriteLockError } from "@/lib/review-write-lock";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,7 +32,12 @@ function failure(error: unknown): Response {
     },
     {
       status:
-        error instanceof ReviewStoreError ? error.status : missing ? 404 : 500,
+        error instanceof ReviewStoreError ||
+        error instanceof ReviewWriteLockError
+          ? error.status
+          : missing
+            ? 404
+            : 500,
     },
   );
 }

@@ -2,6 +2,10 @@ import { reviewTimestamp } from "@/utils/reviewTime";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import {
+  acquireReviewWriteLock,
+  ReviewWriteLockError,
+} from "@/lib/review-write-lock";
 import { isInsideRoot } from "@/lib/local-dataset-paths";
 import {
   REVIEW_FILENAME,
@@ -137,23 +141,13 @@ export async function updateEpisodeReview(
     throw new ReviewStoreError("Invalid reviewer role", 400);
   const datasetKey = await reviewDatasetKey(browsePath, datasetPath);
   const target = await reviewPath(browsePath, true);
-  // mkdir is exclusive across requests AND Node workers. Never write a stale
-  // browser snapshot back over another inspector's records.
-  const lock = `${target}.lock`;
-  const deadline = Date.now() + 3000;
-  while (true) {
-    try {
-      await fs.mkdir(lock);
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      if (Date.now() >= deadline)
-        throw new ReviewStoreError(
-          "Review file is busy; retry shortly. If the server crashed, remove the stale .lock directory after stopping all writers.",
-          409,
-        );
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
+  let lock;
+  try {
+    lock = await acquireReviewWriteLock(target);
+  } catch (error) {
+    if (error instanceof ReviewWriteLockError)
+      throw new ReviewStoreError(error.message, error.status);
+    throw error;
   }
   const tmp = `${target}.tmp-${randomUUID()}`;
   try {
@@ -187,9 +181,10 @@ export async function updateEpisodeReview(
       encoding: "utf8",
       flag: "wx",
     });
+    lock.assertHeld();
     await fs.rename(tmp, target);
     return file;
   } finally {
-    await fs.rm(tmp, { force: true }).finally(() => fs.rmdir(lock));
+    await fs.rm(tmp, { force: true }).finally(() => lock.release());
   }
 }

@@ -310,6 +310,10 @@ export const zh: Record<MessageKey, string> = {
   "review.collectionPeople": "按人员统计（当前浏览目录）",
   "review.collectionHint":
     "汇总此浏览目录下已保存的记录（含历史数据集）；两名及以上不同人员标记即为交叉复检，不代表质量合格。",
+  "review.details": "检查详情（{count} 人）",
+  "review.markShort": "标记已检",
+  "review.crossMarkShort": "标记复检",
+  "review.undoShort": "撤销标记",
   "review.title": "人工质检",
   "review.loading": "正在加载质检记录…",
   "review.checked": "已检查",

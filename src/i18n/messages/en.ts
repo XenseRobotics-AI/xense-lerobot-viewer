@@ -319,6 +319,10 @@ export const en = {
   "review.collectionPeople": "Counts by person (current browse directory)",
   "review.collectionHint":
     "Counts include all saved records in this directory, including historical datasets. Two distinct people indicate cross-review, not a quality pass.",
+  "review.details": "Inspection details ({count})",
+  "review.markShort": "Mark checked",
+  "review.crossMarkShort": "Cross-review",
+  "review.undoShort": "Undo mark",
   "review.title": "Human inspection",
   "review.loading": "Loading inspection records…",
   "review.checked": "Inspected",
