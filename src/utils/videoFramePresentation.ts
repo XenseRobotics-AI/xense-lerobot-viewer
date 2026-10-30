@@ -99,9 +99,11 @@ export class VideoFramePresentation {
     if (this.state.phase === "error") return;
     const targetChanged = Math.abs(this.targetSeconds - nextTarget) > 1 / 120;
     this.targetSeconds = nextTarget;
-    if (targetChanged && this.video.paused) {
+    const mediaAlreadyAtTarget =
+      Math.abs(this.video.currentTime - nextTarget) <= FRAME_TOLERANCE_SECONDS;
+    if (targetChanged && this.video.paused && !mediaAlreadyAtTarget) {
       this.begin(nextTarget);
-      this.seek(nextTarget);
+      this.seekToTarget();
     } else if (this.pending) {
       this.scheduleFrameCheck(this.generation);
       this.scheduleRafCheck(this.generation);

@@ -187,6 +187,28 @@ describe("video frame presentation", () => {
     presentation.dispose();
   });
 
+  test("keeps the frame when a pause flush reports the media's current time", () => {
+    const { video, states, presentation, load, readyAt } = setup();
+    load("/camera.mp4", "dataset-a:episode-3");
+    readyAt();
+    video.presentFrame();
+    video.currentTime = 0.2;
+    video.seeking = false;
+    presentation.update("/camera.mp4", "dataset-a:episode-3", 0.2, false);
+    expect(states.at(-1)?.phase).toBe("ready");
+    presentation.dispose();
+  });
+
+  test("gates a paused video when the requested time is not decoded yet", () => {
+    const { video, states, presentation, load, readyAt } = setup();
+    load("/camera.mp4", "dataset-a:episode-3");
+    readyAt();
+    video.presentFrame();
+    presentation.update("/camera.mp4", "dataset-a:episode-3", 2, false);
+    expect(states.at(-1)?.phase).toBe("loading");
+    presentation.dispose();
+  });
+
   test("does not flash loading when playback emits a same-time seeking event", () => {
     const { video, states, presentation, load, readyAt } = setup();
     load("/camera.mp4", "dataset-a:episode-3");
