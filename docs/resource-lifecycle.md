@@ -168,6 +168,36 @@ and hiding the tab lets the in-flight request finish without starting another.
 Unit tests cover distance expiry, cache capacity, failed-read retries, same-key
 promotion, scope changes and 1,000 episode / 500 file switching cycles.
 
+## Playback controls and decode boundaries
+
+Play/pause changes media playback only; it does not invalidate an already
+decoded frame. EPISODE's play intent updates synchronously with its control,
+before React commits, so a queued segment-end event cannot loop a paused video.
+3D Replay uses explicit seek revisions for slider, keyboard and replay commands.
+Late sampled clock updates after pausing are status reports, not decoder seeks.
+Replay's row clock preserves fractional frames across pauses and includes the
+last partial RAF interval, even when playback stops before the first RAF. Only
+timeline changes and explicit seek revisions reset that fraction. This avoids
+cumulative drift from rapid toggles triggering corrective decoder seeks.
+The driver sits alongside DOM media rather than inside Canvas, so playback
+commands do not depend on separate 3D renderer commits.
+Showing a retained replay view without a new seek revision keeps its paused
+media position; a seek issued while inactive is applied when the view returns.
+Pending seeks are idempotent and frame checks retain their scheduled callbacks,
+so duplicate commands or frequent clock renders cannot starve presentation.
+Source/episode changes and explicit seeks still gate stale frames until the new
+target is available.
+
+`bun run test:video-playback` exercises the real React components in Chromium
+with generated H.264 video (requires ffmpeg and Chrome/Chromium; `CHROME_BIN`
+can override the executable). It uses the production replay clock and driver,
+and covers same-task pause/boundary events, late paused-clock updates, exact
+paused/inactive seeks, 400 play/pause cycles per entry, and another 200 cycles
+with eight cameras under 4x CPU throttling. Retained-view activation and document
+visibility changes are checked separately from explicit seek commands.
+The fixtures run in development Strict Mode, check every loading-state
+transition and currentTime/load call, and remove their temporary files.
+
 ## Review write locks and old-version interoperability
 
 Linux review writes require util-linux flock and filesystem shared-lock support.

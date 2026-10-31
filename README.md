@@ -267,6 +267,7 @@ bun dev              # Next.js dev server
 bun run build        # Production build
 bun start            # Production server
 bun test             # Unit tests (bun:test)
+bun run test:video-playback # Chromium/H.264 playback regression (requires ffmpeg)
 bun run type-check   # TypeScript: app + tests
 bun run lint         # ESLint
 bun run format       # Prettier --write

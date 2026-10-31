@@ -36,7 +36,10 @@ export class VideoFramePresentation {
   private pending = true;
   private state: VideoFrameState = { phase: "loading" };
   private frameCallback?: number;
+  private frameCheckVersion = 0;
   private rafCallback?: number;
+  private rafSecondCallback?: number;
+  private rafCheckVersion = 0;
   private disposed = false;
 
   constructor(
@@ -97,12 +100,9 @@ export class VideoFramePresentation {
     }
 
     if (this.state.phase === "error") return;
-    const targetChanged = Math.abs(this.targetSeconds - nextTarget) > 1 / 120;
     this.targetSeconds = nextTarget;
-    if (targetChanged && this.video.paused) {
-      this.begin(nextTarget);
-      this.seek(nextTarget);
-    } else if (this.pending) {
+    if (this.pending) {
+      this.seekToTarget();
       this.scheduleFrameCheck(this.generation);
       this.scheduleRafCheck(this.generation);
     }
@@ -110,15 +110,22 @@ export class VideoFramePresentation {
 
   seek(targetSeconds: number): void {
     if (this.disposed || this.suspended || this.state.phase === "error") return;
-    this.targetSeconds = Number.isFinite(targetSeconds)
+    const nextTarget = Number.isFinite(targetSeconds)
       ? Math.max(0, targetSeconds)
       : 0;
+    const targetChanged = Math.abs(nextTarget - this.targetSeconds) > 1 / 120;
+    this.targetSeconds = nextTarget;
     if (
       this.pending ||
       Math.abs(this.video.currentTime - this.targetSeconds) > 1 / 120
     ) {
-      this.begin(this.targetSeconds);
+      // Repeating the same command must not discard the callback that is
+      // already waiting to present its frame. No new seeked event is owed
+      // when currentTime is already at that pending target.
+      if (!this.pending || targetChanged) this.begin(this.targetSeconds);
       this.seekToTarget();
+      this.scheduleFrameCheck(this.generation);
+      this.scheduleRafCheck(this.generation);
     }
   }
 
@@ -191,25 +198,20 @@ export class VideoFramePresentation {
       return;
     const video = this.video as FrameVideo;
     if (video.requestVideoFrameCallback) {
-      if (this.frameCallback !== undefined)
-        video.cancelVideoFrameCallback?.(this.frameCallback);
+      if (this.frameCallback !== undefined) return;
+      const checkVersion = ++this.frameCheckVersion;
       this.frameCallback = video.requestVideoFrameCallback((_now, metadata) => {
+        if (checkVersion !== this.frameCheckVersion) return;
         this.frameCallback = undefined;
         this.tryPresent(generation, metadata.mediaTime);
         if (this.pending) this.scheduleFrameCheck(generation);
       });
-      return;
     }
-
-    this.rafCallback = requestAnimationFrame(() => {
-      this.rafCallback = requestAnimationFrame(() => {
-        this.rafCallback = undefined;
-        this.tryPresent(generation);
-      });
-    });
   }
 
   private cancelCallbacks(): void {
+    this.frameCheckVersion++;
+    this.rafCheckVersion++;
     const video = this.video as FrameVideo;
     if (this.frameCallback !== undefined) {
       video.cancelVideoFrameCallback?.(this.frameCallback);
@@ -218,6 +220,10 @@ export class VideoFramePresentation {
     if (this.rafCallback !== undefined) {
       cancelAnimationFrame(this.rafCallback);
       this.rafCallback = undefined;
+    }
+    if (this.rafSecondCallback !== undefined) {
+      cancelAnimationFrame(this.rafSecondCallback);
+      this.rafSecondCallback = undefined;
     }
   }
 
@@ -229,6 +235,7 @@ export class VideoFramePresentation {
   private onMediaChange = (): void => {
     if (this.disposed || this.suspended) return;
     if (this.video.seeking) {
+      if (!this.pending) return;
       // Browsers may emit a transient seeking event when play() starts. If
       // the media clock is still at the requested frame, keep that decoded
       // frame visible; only a real target mismatch needs a new frame gate.
@@ -240,7 +247,10 @@ export class VideoFramePresentation {
       }
       return;
     }
-    if (this.video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+    if (
+      this.pending &&
+      this.video.readyState >= HTMLMediaElement.HAVE_METADATA
+    ) {
       this.seekToTarget();
       this.scheduleFrameCheck(this.generation);
       this.scheduleRafCheck(this.generation);
@@ -250,10 +260,31 @@ export class VideoFramePresentation {
   private scheduleRafCheck(generation: number): void {
     if (this.disposed || generation !== this.generation || !this.pending)
       return;
-    if (this.rafCallback !== undefined) cancelAnimationFrame(this.rafCallback);
+    // Clock renders and media events may arrive more often than RAF. Keep
+    // the scheduled pair instead of endlessly restarting its second frame.
+    if (this.rafCallback !== undefined || this.rafSecondCallback !== undefined)
+      return;
+    const checkVersion = ++this.rafCheckVersion;
     this.rafCallback = requestAnimationFrame(() => {
-      this.rafCallback = requestAnimationFrame(() => {
-        this.rafCallback = undefined;
+      if (checkVersion !== this.rafCheckVersion) return;
+      this.rafCallback = undefined;
+      if (
+        this.disposed ||
+        generation !== this.generation ||
+        !this.pending ||
+        this.suspended
+      )
+        return;
+      this.rafSecondCallback = requestAnimationFrame(() => {
+        if (checkVersion !== this.rafCheckVersion) return;
+        this.rafSecondCallback = undefined;
+        if (
+          this.disposed ||
+          generation !== this.generation ||
+          !this.pending ||
+          this.suspended
+        )
+          return;
         this.tryPresent(generation);
       });
     });

@@ -48,6 +48,10 @@ type VideoPlayerProps = {
 
 const videoEventCleanup = new WeakMap<HTMLVideoElement, () => void>();
 
+function invalidatePlayAttempt(attempt: { current: number }): void {
+  attempt.current++;
+}
+
 export const SimpleVideosPlayer = ({
   datasetKey,
   videosInfo,
@@ -58,7 +62,7 @@ export const SimpleVideosPlayer = ({
 }: VideoPlayerProps) => {
   const t = useT();
   const visible = useDocumentVisible();
-  const { seek, setIsPlaying } = useTimeControls();
+  const { seek, setIsPlaying, playingIntentRef } = useTimeControls();
   const { currentTime, externalSeekVersion, isPlaying } = useTimeState();
   const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
   // Mirror videoRefs into state so the absolutely-positioned VQA overlay can
@@ -107,6 +111,7 @@ export const SimpleVideosPlayer = ({
   const [showHiddenMenu, setShowHiddenMenu] = React.useState(false);
   const [videosReady, setVideosReady] = React.useState(false);
   const wasPlayingWhenHiddenRef = useRef(false);
+  const playAttemptRef = useRef(0);
 
   const videoNames = React.useMemo(
     () => videosInfo.map((video) => video.filename),
@@ -246,7 +251,10 @@ export const SimpleVideosPlayer = ({
     // played fresh frames while the others still showed the segment-end
     // frame. Now the gap is microseconds.
     const loopAllVideos = () => {
-      if (cancelled) return;
+      // A timeupdate can race the React pause update at a segment boundary.
+      // Never turn that final playback tick into an explicit seek: doing so
+      // invalidates the decoded frame exactly as the user pauses.
+      if (cancelled || !playingIntentRef.current) return;
       videoRefs.current.forEach((other, otherIdx) => {
         if (!other) return;
         const otherInfo = videosInfo[otherIdx];
@@ -278,6 +286,7 @@ export const SimpleVideosPlayer = ({
             video.currentTime >=
             segmentEnd - THRESHOLDS.VIDEO_SEGMENT_BOUNDARY
           ) {
+            if (!playingIntentRef.current) return;
             // Primary drives the coordinated loop. Non-primary cameras
             // that race ahead just snap to segmentStart and wait — the
             // primary's next loop will re-align everyone.
@@ -303,6 +312,7 @@ export const SimpleVideosPlayer = ({
       // — covers the case where the user paused outside the segment range.
       const handlePlay = info.isSegmented
         ? () => {
+            if (!playingIntentRef.current) return;
             const segmentStart = videoSegmentStart(info);
             const segmentEnd = videoSegmentEnd(info) ?? video.duration;
             if (
@@ -355,6 +365,7 @@ export const SimpleVideosPlayer = ({
       const handleEnded = info.isSegmented
         ? null
         : () => {
+            if (!playingIntentRef.current) return;
             // Same coordinated loop strategy for non-segmented videos at
             // their natural end — primary drives, others wait for primary
             // to align them.
@@ -437,11 +448,15 @@ export const SimpleVideosPlayer = ({
     // firstVisibleIdxRef above).
     // onVideosReady intentionally omitted — read via onVideosReadyRef so
     // an inline parent prop doesn't tear this effect down on every render.
-  }, [loading, videosInfo, setIsPlaying, seek]);
+  }, [loading, videosInfo, setIsPlaying, seek, playingIntentRef]);
 
   // Handle play/pause — skip hidden videos
   useEffect(() => {
-    if (!videosReady) return;
+    const attempt = ++playAttemptRef.current;
+    if (!videosReady)
+      return () => {
+        invalidatePlayAttempt(playAttemptRef);
+      };
 
     videoRefs.current.forEach((video, idx) => {
       if (!video || hiddenSet.has(videosInfo[idx].filename)) return;
@@ -454,6 +469,12 @@ export const SimpleVideosPlayer = ({
             error.name === "AbortError"
           )
             return;
+          if (
+            playAttemptRef.current !== attempt ||
+            !playingIntentRef.current ||
+            document.hidden
+          )
+            return;
           // Keep the global control truthful when a browser rejects playback
           // (codec, policy, or a stream that failed between ready and play).
           setIsPlaying(false);
@@ -462,7 +483,18 @@ export const SimpleVideosPlayer = ({
         video.pause();
       }
     });
-  }, [isPlaying, videosReady, hiddenSet, videosInfo, visible, setIsPlaying]);
+    return () => {
+      invalidatePlayAttempt(playAttemptRef);
+    };
+  }, [
+    isPlaying,
+    videosReady,
+    hiddenSet,
+    videosInfo,
+    visible,
+    setIsPlaying,
+    playingIntentRef,
+  ]);
 
   // Drive every video to currentTime on external seeks (slider drag, chart
   // click, loop reset). The version-based check replaces a 0.3s heuristic

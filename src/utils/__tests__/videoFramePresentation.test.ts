@@ -29,6 +29,11 @@ function paintTwoFrames() {
     for (const [, callback] of current) callback(16 * (pass + 1));
   }
 }
+function paintOneFrame() {
+  const current = [...scheduledFrames];
+  scheduledFrames.clear();
+  for (const [, callback] of current) callback(16);
+}
 afterAll(() => {
   scheduledFrames.clear();
   Object.defineProperty(globalThis, "HTMLMediaElement", {
@@ -141,6 +146,7 @@ describe("video frame presentation", () => {
     load("/camera-b.mp4", "dataset-a:episode-4", 22);
     staleCallback?.(16, { mediaTime: 0 });
     expect(states.at(-1)?.phase).toBe("loading");
+    expect(video.playbacks.size).toBe(1);
     readyAt(20);
     video.presentFrame();
     expect(states.at(-1)?.phase).toBe("loading");
@@ -187,6 +193,29 @@ describe("video frame presentation", () => {
     presentation.dispose();
   });
 
+  test("keeps the displayed frame when a pause flush reports a stale playback clock", () => {
+    const { video, states, presentation, load, readyAt } = setup();
+    load("/camera.mp4", "dataset-a:episode-3");
+    readyAt();
+    video.presentFrame();
+    video.currentTime = 0.5;
+    video.seeking = false;
+    presentation.update("/camera.mp4", "dataset-a:episode-3", 0.2, false);
+    expect(states.at(-1)?.phase).toBe("ready");
+    expect(video.currentTime).toBe(0.5);
+    presentation.dispose();
+  });
+
+  test("gates a paused video when the requested time is not decoded yet", () => {
+    const { video, states, presentation, load, readyAt } = setup();
+    load("/camera.mp4", "dataset-a:episode-3");
+    readyAt();
+    video.presentFrame();
+    seekVideoWithFrameGate(video, 2);
+    expect(states.at(-1)?.phase).toBe("loading");
+    presentation.dispose();
+  });
+
   test("does not flash loading when playback emits a same-time seeking event", () => {
     const { video, states, presentation, load, readyAt } = setup();
     load("/camera.mp4", "dataset-a:episode-3");
@@ -196,6 +225,36 @@ describe("video frame presentation", () => {
 
     video.seeking = true;
     video.dispatchEvent(new Event("seeking"));
+    expect(states.at(-1)?.phase).toBe("ready");
+    presentation.dispose();
+  });
+
+  test("a repeated pending seek keeps its decoded-frame callback alive", () => {
+    const { video, states, presentation, load, readyAt } = setup();
+    load("/camera.mp4", "dataset-a:episode-3");
+    readyAt();
+    video.presentFrame();
+    seekVideoWithFrameGate(video, 2);
+    video.finishSeek();
+    expect(video.playbacks.size).toBe(1);
+    seekVideoWithFrameGate(video, 2);
+    expect(video.playbacks.size).toBe(1);
+    video.presentFrame();
+    expect(states.at(-1)?.phase).toBe("ready");
+    presentation.dispose();
+  });
+
+  test("clock updates between fallback frames do not postpone presentation", () => {
+    const { video, states, presentation, load, readyAt } = setup();
+    Object.defineProperty(video, "requestVideoFrameCallback", {
+      configurable: true,
+      value: undefined,
+    });
+    load("/camera.mp4", "dataset-a:episode-3");
+    readyAt();
+    paintOneFrame();
+    presentation.update("/camera.mp4", "dataset-a:episode-3", 0, false);
+    paintOneFrame();
     expect(states.at(-1)?.phase).toBe("ready");
     presentation.dispose();
   });
@@ -214,6 +273,60 @@ describe("video frame presentation", () => {
     video.dispatchEvent(new Event("error"));
     paintTwoFrames();
     expect(states).toHaveLength(count);
+  });
+
+  test("uses two animation frames when decoded-frame callbacks are unavailable", () => {
+    const { video, states, presentation, load, readyAt } = setup();
+    Object.defineProperty(video, "requestVideoFrameCallback", {
+      configurable: true,
+      value: undefined,
+    });
+    load("/camera.mp4", "dataset-a:episode-3");
+    readyAt();
+
+    paintOneFrame();
+    expect(states.at(-1)?.phase).toBe("loading");
+    paintOneFrame();
+    expect(states.at(-1)?.phase).toBe("ready");
+    presentation.dispose();
+  });
+
+  test("ignores canceled animation-frame callbacks after a source switch", () => {
+    const { video, states, presentation, load, readyAt } = setup();
+    Object.defineProperty(video, "requestVideoFrameCallback", {
+      configurable: true,
+      value: undefined,
+    });
+    load("/camera-a.mp4", "dataset-a:episode-3");
+    const canceledFirstFrame = [...scheduledFrames.values()][0];
+
+    load("/camera-b.mp4", "dataset-a:episode-4");
+    canceledFirstFrame?.(16);
+    expect(states.at(-1)?.phase).toBe("loading");
+    expect(scheduledFrames.size).toBe(1);
+
+    readyAt();
+    paintTwoFrames();
+    expect(states.at(-1)?.phase).toBe("ready");
+    presentation.dispose();
+  });
+
+  test("cancels the second fallback frame on disposal", () => {
+    const { video, states, presentation, load, readyAt } = setup();
+    Object.defineProperty(video, "requestVideoFrameCallback", {
+      configurable: true,
+      value: undefined,
+    });
+    load("/camera.mp4", "dataset-a:episode-3");
+    readyAt();
+    paintOneFrame();
+    const canceledSecondFrame = [...scheduledFrames.values()][0];
+    const stateCount = states.length;
+
+    presentation.dispose();
+    canceledSecondFrame?.(32);
+    expect(states).toHaveLength(stateCount);
+    expect(states.at(-1)?.phase).toBe("loading");
   });
 
   test("reports an invalid source as a controlled media error", () => {

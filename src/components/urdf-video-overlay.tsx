@@ -46,6 +46,12 @@ function ReplayVideoTile({
   const targetTime = mediaTimeFromEpisodeTime(video, episodeTimeSeconds);
   const targetTimeRef = useRef(targetTime);
   const shouldPlayRef = useRef(active && playing);
+  const previousPlayingRef = useRef(playing);
+  const lastSeekRef = useRef<{
+    datasetKey: string;
+    episodeId: number;
+    revision: number;
+  } | null>(null);
   targetTimeRef.current = targetTime;
   shouldPlayRef.current = active && playing;
 
@@ -58,7 +64,6 @@ function ReplayVideoTile({
       element.seeking
     ) {
       seekVideoWithFrameGate(element, targetTimeRef.current);
-      element.currentTime = targetTimeRef.current;
     }
   }, []);
 
@@ -72,12 +77,17 @@ function ReplayVideoTile({
     });
   }, [video.filename]);
 
-  // Paused slider changes are exact seeks. During playback the MP4 runs on its
+  // Explicit seeks use replayRevision below. During playback the MP4 runs on its
   // own media clock and is only corrected when it drifts materially, avoiding
   // eight expensive decoder seeks on every rendered frame.
   useEffect(() => {
-    if (!active) return;
-    syncToReplay(!playing);
+    const wasPlaying = previousPlayingRef.current;
+    previousPlayingRef.current = playing;
+    // Play/pause and late clock samples are never seek commands. In
+    // particular a final frame update can commit AFTER the pause render.
+    // Only explicit seek revisions may move a paused video's decoder.
+    if (!active || !playing || !wasPlaying) return;
+    syncToReplay(false);
     // Seeking away from the native `ended` position does not resume an MP4
     // automatically. Restart it when the 3D frame counter loops to frame 0.
     playFromReplay();
@@ -90,15 +100,33 @@ function ReplayVideoTile({
       element.pause();
       return;
     }
-    syncToReplay(true);
     playFromReplay();
-  }, [active, playFromReplay, playing, syncToReplay]);
+  }, [active, playFromReplay, playing]);
 
   useEffect(() => {
     if (!active) return;
-    syncToReplay(true);
+    const previous = lastSeekRef.current;
+    lastSeekRef.current = { datasetKey, episodeId, revision: replayRevision };
+    // Showing a retained view is not a seek command. A paused video's clock
+    // normally lies between sampled 3D rows; forcing that fractional offset
+    // back to a row would reopen the decoder every time the view is shown.
+    if (
+      !previous ||
+      previous.datasetKey !== datasetKey ||
+      previous.episodeId !== episodeId ||
+      previous.revision !== replayRevision
+    ) {
+      syncToReplay(true);
+    }
     playFromReplay();
-  }, [active, playFromReplay, replayRevision, syncToReplay]);
+  }, [
+    active,
+    datasetKey,
+    episodeId,
+    playFromReplay,
+    replayRevision,
+    syncToReplay,
+  ]);
 
   const handleLoadedMetadata = useCallback(() => {
     syncToReplay(true);
