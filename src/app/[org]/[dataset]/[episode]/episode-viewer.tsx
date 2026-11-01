@@ -37,6 +37,7 @@ import {
   useEpisodeReviewData,
 } from "@/context/episode-reviews-context";
 import EpisodeReviewPanel from "@/components/episode-review-panel";
+import { AutoAnnotationPanel } from "@/components/auto-annotation-panel";
 import Sidebar from "@/components/side-nav";
 import EpisodeListLoading from "@/components/episode-list-loading";
 import LanguageSwitcher from "@/components/language-switcher";
@@ -882,9 +883,13 @@ function EpisodeViewerInner({
     undefined,
   );
   // Which annotation system the Annotations tab's right pane is showing.
+  // `?ann=` opens a link straight on one editor (e.g. `?tab=annotations&ann=auto`).
   const [annotationEditor, setAnnotationEditor] = useState<
-    "atoms" | "subtasks"
-  >("atoms");
+    "atoms" | "subtasks" | "auto"
+  >(() => {
+    const fromUrl = searchParams.get("ann");
+    return fromUrl === "subtasks" || fromUrl === "auto" ? fromUrl : "atoms";
+  });
 
   const [urdfMounted, setUrdfMounted] = useState(activeTab === "urdf");
 
@@ -1367,6 +1372,7 @@ function EpisodeViewerInner({
                       [
                         { id: "atoms", label: t("ann.title") },
                         { id: "subtasks", label: t("subtask.title") },
+                        { id: "auto", label: t("autoAnn.title") },
                       ] as const
                     ).map((entry) => (
                       <button
@@ -1390,13 +1396,18 @@ function EpisodeViewerInner({
                       <AnnotationsPanel
                         cameraKeys={videosInfo.map((v) => v.filename)}
                       />
-                    ) : (
+                    ) : annotationEditor === "subtasks" ? (
                       <SubtaskPanel
                         encodedPath={encodedDatasetPath}
                         episodeId={episodeId}
                         fps={datasetInfo.fps}
                         task={task}
                         frameTimestamps={data.frameTimestamps}
+                      />
+                    ) : (
+                      <AutoAnnotationPanel
+                        encodedPath={encodedDatasetPath}
+                        episodeId={episodeId}
                       />
                     )}
                   </div>
