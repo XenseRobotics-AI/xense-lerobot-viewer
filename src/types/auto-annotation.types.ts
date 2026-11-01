@@ -143,3 +143,93 @@ export function activeRowAt(rows: AutoTimelineRow[], t: number): number {
   }
   return found;
 }
+
+// --- dataset-level summary (homepage dashboard) -------------------------------
+
+/** One data issue or operator mistake, located — the homepage's cross-dataset list. */
+export interface AutoFindingRow extends AutoFinding {
+  episode_index: number;
+}
+
+/** What the homepage shows about one dataset's ④ annotation. */
+export interface AutoAnnotationDatasetSummary {
+  models: string[];
+  annotated_at: string | null;
+  episodes_total: number;
+  episodes_usable: number;
+  spent_usd: number;
+  /** completion.task_completed of each usable episode → count; "unknown" when a usable episode names none */
+  outcomes: Record<string, number>;
+  /** episodes whose labels carry at least one data issue or operator mistake */
+  episodes_with_findings: number;
+  findings: AutoFindingRow[];
+}
+
+/** Summarise a `tacflow.annotate.dataset/1` report (already schema-checked) for the homepage. */
+export function summarizeReport(
+  report: Record<string, unknown>,
+  annotatedAt: string | null,
+): AutoAnnotationDatasetSummary {
+  const entries = Array.isArray(report.episodes) ? report.episodes : [];
+  const outcomes: Record<string, number> = {};
+  const findings: AutoFindingRow[] = [];
+  let usable = 0;
+  let withFindings = 0;
+  for (const raw of entries) {
+    const ep = normalizeEpisode(raw);
+    if (!ep || !ep.usable) continue;
+    usable += 1;
+    const key = ep.outcome ?? "unknown";
+    outcomes[key] = (outcomes[key] ?? 0) + 1;
+    if (ep.findings.length) withFindings += 1;
+    for (const f of ep.findings)
+      findings.push({ ...f, episode_index: ep.episode_index });
+  }
+  findings.sort(
+    (a, b) =>
+      a.episode_index - b.episode_index ||
+      (a.t_s ?? Infinity) - (b.t_s ?? Infinity),
+  );
+  const spent = num(report.spent_usd);
+  return {
+    models: Array.isArray(report.models) ? report.models.map(String) : [],
+    annotated_at: annotatedAt,
+    episodes_total: num(report.episodes_total) ?? entries.length,
+    episodes_usable: usable,
+    spent_usd: spent ?? 0,
+    outcomes,
+    episodes_with_findings: withFindings,
+    findings,
+  };
+}
+
+/** Totals across datasets: how many are annotated, episode counts, outcome mix, findings by category. */
+export function totalSummaries(summaries: AutoAnnotationDatasetSummary[]) {
+  const outcomes: Record<string, number> = {};
+  const categories: Record<string, number> = {};
+  let episodes = 0;
+  let usable = 0;
+  let spent = 0;
+  let findings = 0;
+  for (const s of summaries) {
+    episodes += s.episodes_total;
+    usable += s.episodes_usable;
+    spent += s.spent_usd;
+    findings += s.findings.length;
+    for (const [k, v] of Object.entries(s.outcomes))
+      outcomes[k] = (outcomes[k] ?? 0) + v;
+    for (const f of s.findings) {
+      const c = f.category ?? f.kind;
+      categories[c] = (categories[c] ?? 0) + 1;
+    }
+  }
+  return {
+    datasets: summaries.length,
+    episodes,
+    usable,
+    spent,
+    findings,
+    outcomes,
+    categories,
+  };
+}

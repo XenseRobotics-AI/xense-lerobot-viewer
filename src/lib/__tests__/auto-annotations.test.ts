@@ -92,3 +92,31 @@ describe("loadAutoAnnotation", () => {
     );
   });
 });
+
+import {
+  loadAnnotationSummary,
+  withAnnotationSummaries,
+} from "@/lib/auto-annotations";
+
+describe("homepage summaries", () => {
+  test("summarise the dataset's latest report and attach null where there is none", async () => {
+    const { dataset } = await corpus(REPORT);
+    const summary = await loadAnnotationSummary(dataset);
+    expect(summary?.episodes_usable).toBe(1);
+    expect(summary?.outcomes).toEqual({ success: 1 });
+    const other = await fs.mkdtemp(path.join(os.tmpdir(), "auto-ann-plain-"));
+    roots.push(other);
+    const attached = await withAnnotationSummaries(
+      [{ encodedPath: "a" }, { encodedPath: "b" }, { encodedPath: "bad" }],
+      (e) => {
+        if (e === "bad") throw new Error("undecodable");
+        return e === "a" ? dataset : path.join(other, "ds");
+      },
+    );
+    expect(attached.map((d) => d.annotation?.episodes_usable ?? null)).toEqual([
+      1,
+      null,
+      null,
+    ]);
+  });
+});

@@ -8,6 +8,7 @@ import type {
 } from "@/lib/local-datasets-discovery";
 import type { DailyDelta } from "@/utils/corpusHistory";
 import { groupDatasetsByPrefix } from "@/utils/datasetGrouping";
+import AnnotationOverview from "@/components/annotation-overview";
 import CorpusDashboard from "@/components/corpus-dashboard";
 import DatasetPathSwitcher from "@/components/dataset-path-switcher";
 import InterruptedConversions from "@/components/interrupted-conversions";
@@ -132,6 +133,9 @@ export default function LocalDatasetGrid({
         delta={delta}
         onSelectSource={focusSource}
       />
+
+      {/* TacFlow ④ automatic annotations: totals and every finding across the corpus; nothing when none exist. */}
+      <AnnotationOverview datasets={datasets} />
 
       {/* Deliberately outside the dashboard: `CorpusDashboard` renders nothing
           when no source exists yet, and an empty root is precisely when pulling

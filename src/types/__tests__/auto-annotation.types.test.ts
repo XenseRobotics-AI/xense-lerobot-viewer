@@ -74,3 +74,68 @@ describe("normalizeEpisode", () => {
     expect(ep?.problems).toEqual(["no reply"]);
   });
 });
+
+import { summarizeReport, totalSummaries } from "@/types/auto-annotation.types";
+
+describe("summarizeReport / totalSummaries", () => {
+  const report = {
+    schema: "tacflow.annotate.dataset/1",
+    models: ["gpt-6.1-terra"],
+    episodes_total: 3,
+    spent_usd: 0.06,
+    episodes: [
+      {
+        episode_index: 0,
+        usable: true,
+        labels: { completion: { task_completed: "success" } },
+      },
+      {
+        episode_index: 1,
+        usable: true,
+        labels: {
+          completion: { task_completed: "success_then_undone" },
+          data_issues: [
+            {
+              issue: "single instruction, many items",
+              category: "instruction_mismatch",
+              t_s: 5,
+            },
+          ],
+          operator_mistakes: [
+            { issue: "recap", category: "goal_undone", t_s: 43 },
+          ],
+        },
+      },
+      { episode_index: 2, usable: false, problems: ["no reply"], labels: null },
+    ],
+  };
+
+  test("counts only usable episodes and lists every finding with its episode", () => {
+    const s = summarizeReport(report, "2026-10-30T13:21:21+00:00");
+    expect(s.episodes_total).toBe(3);
+    expect(s.episodes_usable).toBe(2);
+    expect(s.outcomes).toEqual({ success: 1, success_then_undone: 1 });
+    expect(s.episodes_with_findings).toBe(1);
+    expect(s.findings.map((f) => [f.episode_index, f.category])).toEqual([
+      [1, "instruction_mismatch"],
+      [1, "goal_undone"],
+    ]);
+  });
+
+  test("totals add up across datasets and group findings by category", () => {
+    const a = summarizeReport(report, null);
+    const totals = totalSummaries([a, a]);
+    expect(totals).toMatchObject({
+      datasets: 2,
+      episodes: 6,
+      usable: 4,
+      findings: 4,
+    });
+    expect(totals.outcomes).toEqual({ success: 2, success_then_undone: 2 });
+    expect(totals.categories).toEqual({
+      instruction_mismatch: 2,
+      goal_undone: 2,
+    });
+    expect(totals.spent).toBeCloseTo(0.12);
+  });
+});

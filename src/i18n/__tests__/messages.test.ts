@@ -106,6 +106,8 @@ describe("zh translation coverage", () => {
     "doctor.checksWord",
     "doctor.distBins",
     "grid.framesSuffix",
+    // ④ + usable/total — symbols and numbers only.
+    "grid.annotationChip",
     "pq.columns",
     "pq.jumpTitle",
     "pq.rowGroups",
