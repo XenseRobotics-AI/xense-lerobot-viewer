@@ -39,6 +39,7 @@ import type { MessageKey } from "@/i18n/messages";
 
 type DatasetCardGridProps = {
   datasets: LocalDatasetSummary[];
+  reviewedEpisodesByDataset: Record<string, number>;
   /**
    * False while browsing a switched-to location: the trash lives under the
    * default root and refuses anything outside it, so the card hides the
@@ -123,6 +124,7 @@ function describeIntegrity(
 
 export default function DatasetCardGrid({
   datasets,
+  reviewedEpisodesByDataset,
   canDelete,
   query,
   onQueryChange,
@@ -638,6 +640,8 @@ export default function DatasetCardGrid({
               ? getDatasetPrefix(ds.relativePath)
               : null;
             const expectedShape = expectedShapeOf(ds.robot_type);
+            const reviewedEpisodeCount =
+              reviewedEpisodesByDataset[ds.relativePath] ?? 0;
             const borderTone =
               health.tone === "error"
                 ? "border-red-500/60 hover:border-red-400"
@@ -826,6 +830,18 @@ export default function DatasetCardGrid({
                     <span className="tabular">
                       {t("grid.epCount", { count: ds.total_episodes })}
                     </span>
+                    {reviewedEpisodeCount > 0 && (
+                      <span
+                        className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-emerald-200"
+                        title={t("grid.reviewedEpisodesTitle", {
+                          count: reviewedEpisodeCount,
+                        })}
+                      >
+                        {t("grid.reviewedEpisodes", {
+                          count: reviewedEpisodeCount,
+                        })}
+                      </span>
+                    )}
                     {ds.total_frames > 0 && (
                       <span className="tabular text-slate-400">
                         ·{" "}

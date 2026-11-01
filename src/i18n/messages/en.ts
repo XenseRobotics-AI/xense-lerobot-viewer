@@ -76,6 +76,8 @@ export const en = {
   "grid.allRobots": "All robots ({count})",
   "grid.datasetCount_one": "{count} dataset",
   "grid.datasetCount_other": "{count} datasets",
+  "grid.reviewedEpisodes": "Reviewed {count}",
+  "grid.reviewedEpisodesTitle": "Inspection records exist for {count} episodes",
   "grid.noMatch": "No tasks match the current filter.",
   "grid.sourceLabel": "Source",
   "grid.sourceAll": "All",

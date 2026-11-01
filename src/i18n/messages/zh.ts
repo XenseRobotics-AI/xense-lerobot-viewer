@@ -84,6 +84,8 @@ export const zh: Record<MessageKey, string> = {
   "grid.allRobots": "全部机器人（{count}）",
   "grid.datasetCount_one": "{count} 个数据集",
   "grid.datasetCount_other": "{count} 个数据集",
+  "grid.reviewedEpisodes": "已检查 {count}",
+  "grid.reviewedEpisodesTitle": "有 {count} 个 Episode 存在质检记录",
   "grid.noMatch": "没有任务符合当前过滤条件。",
   "grid.sourceLabel": "来源",
   "grid.sourceAll": "全部",

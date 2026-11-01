@@ -37,9 +37,17 @@ export async function GET(req: NextRequest): Promise<Response> {
           "Content-Disposition": 'attachment; filename="episode-reviews.json"',
         },
       });
+    const reviewedEpisodesByDataset: Record<string, number> = {};
+    for (const [datasetKey, file] of Object.entries(collection.datasets)) {
+      const count = Object.values(file.episodes).filter(
+        (records) => records.length > 0,
+      ).length;
+      if (count > 0) reviewedEpisodesByDataset[datasetKey] = count;
+    }
     return Response.json(
       {
         summary: reviewCollectionSummary(collection),
+        reviewed_episodes_by_dataset: reviewedEpisodesByDataset,
         storage_path: reviewsFilePath(browsePath),
       },
       { headers },

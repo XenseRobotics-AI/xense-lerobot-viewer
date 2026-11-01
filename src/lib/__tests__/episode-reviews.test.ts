@@ -509,6 +509,7 @@ describe("homepage collection exports", () => {
     expect(await response.json()).toMatchObject({
       storage_path: reviewsFilePath(browse),
       summary: { datasets: 0, inspected: 0, records: 0 },
+      reviewed_episodes_by_dataset: {},
     });
     expect(await fs.exists(reviewsFilePath(browse))).toBe(false);
   });
@@ -520,7 +521,16 @@ describe("homepage collection exports", () => {
       source: "urdf",
       role: "admin",
     });
+    await updateEpisodeReview(browse, datasetA, {
+      ...mark,
+      episode_index: 1,
+    });
     await updateEpisodeReview(browse, datasetB, mark);
+    const overview = await collectionGET(request());
+    expect((await overview.json()).reviewed_episodes_by_dataset).toEqual({
+      "source/dataset-a": 2,
+      "source/dataset-b": 1,
+    });
     const json = await collectionGET(request("GET", undefined, "&format=json"));
     expect(json.headers.get("Content-Disposition")).toContain("attachment");
     expect(Object.keys((await json.json()).datasets)).toEqual([
@@ -535,7 +545,7 @@ describe("homepage collection exports", () => {
     expect(text).toContain("+08:00");
     expect(text).toContain('"3D REPLAY"');
     expect(text).toContain('"已交叉复检"');
-    expect(text.trim().split("\r\n")).toHaveLength(4);
+    expect(text.trim().split("\r\n")).toHaveLength(5);
     expect(await fs.exists(reviewsFilePath(defaultRoot))).toBe(false);
   });
   test("exports escape CSV and neutralize spreadsheet formula injection", () => {

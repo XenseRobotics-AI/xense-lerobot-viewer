@@ -6,13 +6,16 @@ import type { reviewCollectionSummary } from "@/types/episode-review.types";
 
 type Overview = {
   summary: ReturnType<typeof reviewCollectionSummary>;
+  reviewed_episodes_by_dataset: Record<string, number>;
   storage_path: string;
 };
 
 export default function ReviewCollectionPanel({
   browsePath,
+  onReviewCounts,
 }: {
   browsePath: string;
+  onReviewCounts: (counts: Record<string, number>) => void;
 }) {
   const { t } = useLocale();
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -36,6 +39,7 @@ export default function ReviewCollectionPanel({
         throw new Error(result.error ?? String(response.status));
       if (!controller.signal.aborted) {
         setOverview(result);
+        onReviewCounts(result.reviewed_episodes_by_dataset ?? {});
         setError("");
       }
     } catch (error) {
@@ -47,7 +51,7 @@ export default function ReviewCollectionPanel({
         setLoading(false);
       }
     }
-  }, [endpoint]);
+  }, [endpoint, onReviewCounts]);
   useEffect(() => {
     void refresh();
     const visible = () => {
