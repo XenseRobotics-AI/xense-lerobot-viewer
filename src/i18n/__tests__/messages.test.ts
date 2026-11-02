@@ -114,8 +114,6 @@ describe("zh translation coverage", () => {
     "pq.rows",
     "source.filesDetail",
     "stats.bins_other",
-    "subtask.frame",
-    "subtask.frameOf",
   ].sort();
 
   it("keeps exactly the intended terms in English", () => {

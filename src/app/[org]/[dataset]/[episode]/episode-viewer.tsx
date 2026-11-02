@@ -20,13 +20,6 @@ import {
   useTimeState,
 } from "@/context/time-context";
 import { FlaggedEpisodesProvider } from "@/context/flagged-episodes-context";
-import {
-  AnnotationsProvider,
-  useAnnotations,
-} from "@/context/annotations-context";
-import { AnnotationsPanel } from "@/components/annotations-panel";
-import { AnnotationsTimeline } from "@/components/annotations-timeline";
-import { SubtaskPanel } from "@/components/subtask-panel";
 import { AutoAnnotationPanel } from "@/components/auto-annotation-panel";
 import Sidebar from "@/components/side-nav";
 import LanguageSwitcher from "@/components/language-switcher";
@@ -340,41 +333,18 @@ export default function EpisodeViewer({
   return (
     <TimeProvider duration={data!.duration} resetKey={data!.episodeId}>
       <FlaggedEpisodesProvider>
-        <AnnotationsProvider>
-          <EpisodeBootstrap data={data!} />
-          <EpisodeViewerInner
-            data={data!}
-            org={org}
-            dataset={dataset}
-            episodeLoading={episodeLoading}
-            episodeError={error}
-            selectedEpisodeId={selectedEpisodeId}
-            onEpisodeSelect={selectEpisode}
-          />
-        </AnnotationsProvider>
+        <EpisodeViewerInner
+          data={data!}
+          org={org}
+          dataset={dataset}
+          episodeLoading={episodeLoading}
+          episodeError={error}
+          selectedEpisodeId={selectedEpisodeId}
+          onEpisodeSelect={selectEpisode}
+        />
       </FlaggedEpisodesProvider>
     </TimeProvider>
   );
-}
-
-/** Wires the loaded episode into the AnnotationsProvider. */
-function EpisodeBootstrap({ data }: { data: EpisodeData }) {
-  const { setEpisode } = useAnnotations();
-  useEffect(() => {
-    setEpisode(
-      data.episodeId,
-      { repoId: data.datasetInfo.repoId },
-      data.languageAtoms,
-      data.frameTimestamps,
-    );
-  }, [
-    data.episodeId,
-    data.datasetInfo.repoId,
-    data.languageAtoms,
-    data.frameTimestamps,
-    setEpisode,
-  ]);
-  return null;
 }
 
 function EpisodeViewerInner({
@@ -394,7 +364,7 @@ function EpisodeViewerInner({
   selectedEpisodeId: number;
   onEpisodeSelect: (episodeId: number) => void;
 }) {
-  const { t, tRich } = useLocale();
+  const { t } = useLocale();
   const {
     datasetInfo,
     episodeId,
@@ -839,24 +809,13 @@ function EpisodeViewerInner({
   const urdfSeekByRef = useRef<((seconds: number) => void) | undefined>(
     undefined,
   );
-  // Which annotation system the Annotations tab's right pane is showing.
-  // `?ann=` opens a link straight on one editor (e.g. `?tab=annotations&ann=auto`).
-  const [annotationEditor, setAnnotationEditor] = useState<
-    "atoms" | "subtasks" | "auto"
-  >(() => {
-    const fromUrl = searchParams.get("ann");
-    return fromUrl === "subtasks" || fromUrl === "auto" ? fromUrl : "atoms";
-  });
-
   // Left of the auto annotation: the 3D replay (default — poses and every camera together) or the plain
   // videos. `?left=video` opens on the videos.
   const [autoLeft, setAutoLeft] = useState<"replay" | "video">(() =>
     searchParams.get("left") === "video" ? "video" : "replay",
   );
   const replayBesideAnnotation =
-    activeTab === "annotations" &&
-    annotationEditor === "auto" &&
-    autoLeft === "replay";
+    activeTab === "annotations" && autoLeft === "replay";
 
   const [urdfMounted, setUrdfMounted] = useState(activeTab === "urdf");
 
@@ -1218,7 +1177,7 @@ function EpisodeViewerInner({
           )}
 
           {activeTab === "annotations" && (
-            <div className="annotations-skin flex flex-1 min-h-0 flex-col gap-4">
+            <div className="flex flex-1 min-h-0 flex-col gap-4">
               <div className="flex shrink-0 items-center gap-3">
                 <p
                   className="truncate text-base font-medium text-slate-200"
@@ -1229,57 +1188,39 @@ function EpisodeViewerInner({
                 <p className="text-[10px] uppercase tracking-wide text-slate-500 tabular">
                   {t("ep.episodeLabel", { id: episodeId })}
                 </p>
-                {annotationEditor === "auto" && (
-                  <div
-                    role="tablist"
-                    aria-label={t("autoAnn.leftAria")}
-                    className="inline-flex shrink-0 ml-auto overflow-hidden rounded-md border border-white/10 text-sm"
-                  >
-                    {(
-                      [
-                        { id: "replay", label: t("autoAnn.leftReplay") },
-                        { id: "video", label: t("autoAnn.leftVideo") },
-                      ] as const
-                    ).map((entry) => (
-                      <button
-                        key={entry.id}
-                        role="tab"
-                        type="button"
-                        aria-selected={autoLeft === entry.id}
-                        onClick={() => setAutoLeft(entry.id)}
-                        className={`px-3 py-1.5 transition-colors ${
-                          autoLeft === entry.id
-                            ? "bg-cyan-500/20 text-cyan-100"
-                            : "bg-[var(--surface-1)]/60 text-slate-300 hover:text-slate-100"
-                        }`}
-                      >
-                        {entry.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                <div
+                  role="tablist"
+                  aria-label={t("autoAnn.leftAria")}
+                  className="inline-flex shrink-0 ml-auto overflow-hidden rounded-md border border-white/10 text-sm"
+                >
+                  {(
+                    [
+                      { id: "replay", label: t("autoAnn.leftReplay") },
+                      { id: "video", label: t("autoAnn.leftVideo") },
+                    ] as const
+                  ).map((entry) => (
+                    <button
+                      key={entry.id}
+                      role="tab"
+                      type="button"
+                      aria-selected={autoLeft === entry.id}
+                      onClick={() => setAutoLeft(entry.id)}
+                      className={`px-3 py-1.5 transition-colors ${
+                        autoLeft === entry.id
+                          ? "bg-cyan-500/20 text-cyan-100"
+                          : "bg-[var(--surface-1)]/60 text-slate-300 hover:text-slate-100"
+                      }`}
+                    >
+                      {entry.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              {/* Footage and editor on screen together — annotating while the
-                  video is scrolled out of view is the whole problem this layout
-                  exists to fix.
-
-                  A grid, not nested flex columns, because the video has to be a
-                  direct child of the scroller: `position: sticky` is confined to
-                  its own parent's box, so a video nested inside the left column
-                  unsticks the moment that column scrolls past — which at narrow
-                  widths is exactly when the editor below it comes into view.
-                  Grid placement lets the DOM stay [video][rest][editor] while
-                  `lg` puts the first two in column 1 and the editor alongside. */}
-              {/* The read-only auto annotation is read, not authored: its column takes ~44% of the width (as on the
-                  Argus board) instead of the editors' fixed 30rem. */}
-              <div
-                className={`grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto lg:grid-rows-[auto_minmax(0,1fr)] lg:overflow-hidden ${
-                  annotationEditor === "auto"
-                    ? "lg:grid-cols-[minmax(0,1fr)_minmax(28rem,44%)]"
-                    : "lg:grid-cols-[minmax(0,1fr)_27rem] xl:grid-cols-[minmax(0,1fr)_30rem]"
-                }`}
-              >
+              {/* Footage beside the automatic annotation. A grid, not nested flex columns: the video has to be a
+                  direct child of the scroller for `position: sticky` to hold at narrow widths. The annotation is read,
+                  not authored, so its column takes ~44% of the width (as on the Argus board). */}
+              <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_minmax(28rem,44%)] lg:grid-rows-[auto_minmax(0,1fr)] lg:overflow-hidden">
                 {replayBesideAnnotation ? (
                   /* The 3D replay as the footage: poses and every camera stream together, its clock bridged to
                      the page's so the annotation panel follows it and drives it (URDFViewer `syncClock`). */
@@ -1306,88 +1247,21 @@ function EpisodeViewerInner({
                           episodeId={episodeId}
                           loading={playerLoading}
                           onVideosReady={handleVideosReady}
-                          annotationOverlay
                         />
                       </div>
                     )}
-
                     <div className="flex min-w-0 flex-col gap-4 lg:col-start-1 lg:row-start-2 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
-                      {annotationEditor !== "auto" && (
-                        <div className="grounding-intro">
-                          <span className="section-kicker">
-                            {t("ep.groundedVqa")}
-                          </span>
-                          <ul>
-                            <li>{t("ep.vqaHint1")}</li>
-                            <li>
-                              {tRich("ep.vqaHint2", {
-                                enter: <kbd>↵</kbd>,
-                                esc: <kbd>Esc</kbd>,
-                              })}
-                            </li>
-                          </ul>
-                        </div>
-                      )}
                       <PlaybackBar />
-                      {annotationEditor !== "auto" && (
-                        <AnnotationsTimeline duration={data.duration} />
-                      )}
                     </div>
                   </>
                 )}
 
-                {/* Both annotation systems live here, one at a time: stacking
-                    them would put the lower one back off screen. */}
-                <div className="flex min-h-0 flex-col lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:overflow-hidden">
-                  <div
-                    role="tablist"
-                    aria-label={t("ann.editorTablistAria")}
-                    className="flex shrink-0 gap-1 border-b border-white/5"
-                  >
-                    {(
-                      [
-                        { id: "atoms", label: t("ann.title") },
-                        { id: "subtasks", label: t("subtask.title") },
-                        { id: "auto", label: t("autoAnn.title") },
-                      ] as const
-                    ).map((entry) => (
-                      <button
-                        key={entry.id}
-                        role="tab"
-                        type="button"
-                        aria-selected={annotationEditor === entry.id}
-                        onClick={() => setAnnotationEditor(entry.id)}
-                        className={`-mb-px rounded-t-md border-b-2 px-3 py-2 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-ring)] ${
-                          annotationEditor === entry.id
-                            ? "border-[var(--accent)] text-[var(--accent)]"
-                            : "border-transparent text-slate-400 hover:text-slate-200"
-                        }`}
-                      >
-                        {entry.label}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="min-h-0 flex-1 pt-3 lg:overflow-y-auto lg:pr-1">
-                    {annotationEditor === "atoms" ? (
-                      <AnnotationsPanel
-                        cameraKeys={videosInfo.map((v) => v.filename)}
-                      />
-                    ) : annotationEditor === "subtasks" ? (
-                      <SubtaskPanel
-                        encodedPath={encodedDatasetPath}
-                        episodeId={episodeId}
-                        fps={datasetInfo.fps}
-                        task={task}
-                        frameTimestamps={data.frameTimestamps}
-                      />
-                    ) : (
-                      <AutoAnnotationPanel
-                        encodedPath={encodedDatasetPath}
-                        episodeId={episodeId}
-                        task={task}
-                      />
-                    )}
-                  </div>
+                <div className="min-h-0 lg:col-start-2 lg:row-span-2 lg:row-start-1 lg:overflow-y-auto lg:pr-1">
+                  <AutoAnnotationPanel
+                    encodedPath={encodedDatasetPath}
+                    episodeId={episodeId}
+                    task={task}
+                  />
                 </div>
               </div>
             </div>

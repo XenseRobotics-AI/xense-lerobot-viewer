@@ -10,10 +10,9 @@ This fork removes the Hugging Face Hub remote-loading path; everything reads fro
 - **Dataset health probing**: each dataset is scanned for `meta/info.json` + `data/` + `videos/` and classified as Healthy / Empty / Incomplete. The homepage shows red/amber card borders + corner badges for problem datasets; clicking an incomplete one opens a diagnostic page instead of failing on a missing file.
 - **Editable dataset tags** (task / scene / objects): annotate each dataset with a task category (`pick_and_place`, `peeling`, …), a scene (`tabletop`, `kitchen`, …), and a list of manipulated objects (`cucumber`, `box`, …). Tags persist as `meta/xense_tags.json` inside the dataset and power a task-based filter on the homepage. See [Tagging datasets](#tagging-datasets) below.
 - **Synchronized video + telemetry**: episode pages play all cameras side-by-side, synced to interactive Recharts time series for `observation.state`, `action`, and other signals.
-- **Language annotations editor** (lerobot v3.1 schema): an **Annotations** tab for authoring per-episode language atoms — subtasks, plans, memory, task rephrasings, interjections, robot speech, and VQA. Draw a bounding box or click a keypoint directly on any video for grounded VQA, arrange events on a multi-track timeline, and edit each atom in an inspector. Saves to `meta/lerobot_annotations.json` inside the dataset. See [Annotating episodes](#annotating-episodes) below.
+- **TacFlow automatic annotation** (read-only): the homepage summarises TacFlow's ④ annotations across the corpus (outcomes, findings by category, one list of every data issue and operator mistake, each linking to that moment); the **Annotations** tab shows one episode's annotation beside the 3D replay or the videos, following and driving playback. See [Automatic annotation](#automatic-annotation) below.
 - **Statistics, Frames, Action Insights, Filtering** panels for dataset quality inspection — flagged episodes can be exported as a ready-to-run LeRobot CLI command.
 - **3D pose trajectories**: the Episodes chart has a `3D` mode that draws the current episode's Cartesian path with a marker synced to video playback, and Action Insights adds a **cross-episode trajectory distribution** — one line per episode, hover to identify, click to isolate, with per-arm layers toggled independently. Both need complete named xyz feature groups (`left_tcp.x/y/z`); numeric-only feature names are skipped, since nothing identifies which three dimensions form a position.
-- **Subtask labeling** (Pi-style segmentation): an Episodes-tab panel for labeling contiguous subtask ranges that persist until the next one, saved to `meta/annotations.json`. An **Export** button compiles them into lerobot-native per-frame `subtask_index` + `meta/subtasks.parquet` — the layer that produces a trainable `sample["subtask"]`.
 - **Parquet browser**: a raw table view of any `.parquet` in the dataset — file picker, column picker, paged rows, cell expansion, CSV export. Parsing happens server-side, so a 100 MB v3 data file pages without shipping the whole row group to the browser.
 - **Doctor**: read-only, dataset-wide diagnostics immediately after Action Insights. Its native TypeScript engine provides 13 checks over metadata, timing, actions, dimension-level continuity, optional configurable TCP linear/angular speed limits, video containers, statistics, episode consistency, training readiness, anomalies, and portability; the speed check is enabled explicitly in the Doctor panel, it needs no Python runtime, and it can send affected episode IDs into the existing flagged-episode workflow.
 - **3D URDF replay** for SO-100, SO-101, OpenArm, G1, and bimanual TacCap data-collection grippers. TacCap replay treats recorded poses as canonical TCP by default; the `Tracker → TCP` button applies the measured or dataset-provided extrinsic only when selected manually. It animates both finger joints, conditionally replays complete `head.xyz+r1-r6` trajectories with a self-contained schematic HMD, and labels the world axes (+X forward, +Y left, +Z up); its URDF/STL assets are bundled under `public/urdf/taccap-grippers`. Other robot assets load from the public Hugging Face `lerobot/robot-urdfs` bucket. Recorded cameras replay alongside the model as synchronized overlays — grouped into left / top-center / right by `left`, `right` and `head` in the feature name — and each tile can be dragged to resize, clicked to bring to front, or double-clicked to reset.
@@ -194,54 +193,14 @@ The search box also matches against task / scene / object values, so typing `cuc
 
 `updated_at` is auto-stamped by the server on every save. Missing fields are treated as "unset" — an absent `xense_tags.json` is equivalent to all fields empty.
 
-## Annotating episodes
+## Automatic annotation
 
-The **Annotations** tab brings lerobot's v3.1 language schema ([lerobot#3467](https://github.com/huggingface/lerobot/pull/3467)) into the visualizer so you can author multi-modal language supervision next to the frames it describes. Each annotation is a _language atom_, split into two kinds:
+TacFlow's ④ stage has a vision-language model read each episode's head-camera footage and writes a report into the corpus registry (`<corpus>/.registry/reports/annotate/…`), next to the dataset, not inside it. The viewer only reads it:
 
-| Kind           | Styles                                  | Stored in             | Behavior                             |
-| -------------- | --------------------------------------- | --------------------- | ------------------------------------ |
-| **Persistent** | `task_aug`, `subtask`, `plan`, `memory` | `language_persistent` | Holds across the episode (broadcast) |
-| **Event**      | `interjection`, `vqa`, speech (`say`)   | `language_events`     | Fires at a specific frame timestamp  |
+- **Homepage panel** — annotated datasets / episodes, the outcome mix, findings by category, and every data issue and operator mistake; a row opens the episode at that moment (`?tab=annotations&t=`).
+- **Annotations tab** — the dataset's instruction and the model's reading of the work (and whether they agree), the outcome, findings as cards, a timeline band coloured by hand, and the step feed. Every time seeks the player; the step under the playhead stays highlighted. The left side is the 3D replay by default (`?left=video` for the plain videos).
 
-What the tab gives you:
-
-- **Quick-add bar** for text atoms (subtask / plan / memory / task rephrasing / robot speech / non-spatial VQA).
-- **Grounded VQA** — drag a bounding box or click a keypoint directly on any video. The gesture becomes a `Where is the X?` / `Point to the X.` Q&A pair tied to the camera you drew on.
-- **Multi-track timeline** — one lane per atom kind; click to seek, drag a playhead, and drag-create / edge-resize subtask spans.
-- **Inspector** — select any atom to edit its content, timestamp (snapped to the nearest source frame), or camera tag.
-
-### How annotations are stored
-
-Saving writes a per-dataset JSON sidecar:
-
-```
-<LOCAL_DATASET_ROOT>/<org>/<dataset>/meta/lerobot_annotations.json
-```
-
-```json
-{
-  "version": 2,
-  "episodes": {
-    "0": {
-      "atoms": [
-        {
-          "role": "assistant",
-          "content": "pick up the box",
-          "style": "subtask",
-          "timestamp": 1.5,
-          "camera": null,
-          "tool_calls": null
-        }
-      ]
-    }
-  },
-  "updated_at": "2026-06-22T14:13:58.714Z"
-}
-```
-
-On load, atoms are read with this precedence: **unsaved in-session edits → the JSON sidecar → atoms already embedded in the parquet** (`language_persistent` / `language_events`). A dataset that ships with the columns renders immediately; a dataset without them starts blank.
-
-This fork is **local-only**: there is no FastAPI backend and no push-to-Hub. Writing annotations back into the dataset's `data/chunk-*/file-*.parquet` (the lerobot export path) is intentionally **not** implemented — the JSON sidecar is the source of truth, and the visualizer reads it directly. Because saving writes into the dataset's `meta/` directory, mount your dataset root **writable** (drop the `:ro` flag in the Docker examples below) if you want to persist edits.
+Nothing is edited here: the labels are claims to check, and corrections go back through TacFlow. The manual language-atom and subtask editors this fork once had are gone (2026-11-02): annotation starts from the model, not from a blank timeline.
 
 ## Homepage dashboard & Hugging Face sync
 
@@ -282,7 +241,7 @@ and a token for private repos (`huggingface-cli login`).
 
 - Dataset files are served by an internal route `/api/local-datasets/[encodedPath]/[...filePath]` with HTTP range support for video streaming.
 - The Doctor tab posts to `…/[encodedPath]/doctor`. The route loads JSON/JSONL and Parquet directly in Node/Bun with `hyparquet`, runs the checks in TypeScript, and returns a structured PASS/WARN/FAIL report. It is read-only, defaults to the full dataset in the UI, samples at most 20 physical videos for MP4 structure/track metadata, and offers 10/25/50/100/full/custom scopes. The separate dimension-level continuity check reports coordinated frame-to-frame jumps by feature name and timestamp without changing the Python-compatible aggregate action check. TCP speed detection is opt-in via the panel switch; when enabled it independently checks each `vx/vy/vz` component (default 1.5 m/s) and world-frame `ωx/ωy/ωz` component derived from the r1–r6 SO(3) rotation (default 270 deg/s); both limits are configurable.
-- Dataset-level sidecars are read/written through dedicated routes: `…/[encodedPath]/tags` (`xense_tags.json`) and `…/[encodedPath]/annotations` (`lerobot_annotations.json`).
+- Dataset-level sidecars are read/written through dedicated routes: `…/[encodedPath]/tags` (`xense_tags.json`); the TacFlow annotation report is read through `…/[encodedPath]/auto-annotations`.
 - The homepage discovers datasets via `src/lib/local-datasets-discovery.ts`.
 - All cloud/HF Hub loading code (OAuth, proxy, search) has been removed.
 - SO/OpenArm/G1 URDF assets load from `https://huggingface.co/buckets/lerobot/robot-urdfs/` (override with `NEXT_PUBLIC_URDF_BASE_URL`). TacCap gripper assets are bundled in this repository under `public/urdf/taccap-grippers`.

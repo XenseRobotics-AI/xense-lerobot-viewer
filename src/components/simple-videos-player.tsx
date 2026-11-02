@@ -4,7 +4,6 @@ import React, { useEffect, useRef } from "react";
 import { useTimeControls, useTimeState } from "../context/time-context";
 import { FaExpand, FaCompress, FaTimes, FaEye } from "react-icons/fa";
 import type { VideoInfo } from "@/types";
-import { VideoOverlayCanvas } from "./video-overlay-canvas";
 import {
   episodeTimeFromMediaTime,
   mediaTimeFromEpisodeTime,
@@ -32,11 +31,6 @@ type VideoPlayerProps = {
    * next episode's metadata/data slice is being resolved. */
   loading?: boolean;
   onVideosReady?: () => void;
-  /**
-   * Mount the VQA bbox/keypoint overlay over each video. Off by default: the
-   * overlay is annotation machinery and belongs only to the Annotations tab.
-   */
-  annotationOverlay?: boolean;
 };
 
 const videoEventCleanup = new WeakMap<HTMLVideoElement, () => void>();
@@ -46,22 +40,12 @@ export const SimpleVideosPlayer = ({
   episodeId,
   loading = false,
   onVideosReady,
-  annotationOverlay = false,
 }: VideoPlayerProps) => {
   const t = useT();
   const { seek, setIsPlaying } = useTimeControls();
   const { currentTime, externalSeekVersion, isPlaying } = useTimeState();
   const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
-  // Mirror videoRefs into state so the absolutely-positioned VQA overlay can
-  // re-render with the actual <video> element once it mounts. Using a ref
-  // alone means the overlay's first render still sees `null`.
-  const [videoEls, setVideoEls] = React.useState<(HTMLVideoElement | null)[]>(
-    () => [],
-  );
-  // Stable ref callbacks per index. If we used inline `(el) => { ... }` here
-  // React would re-invoke the callback on every render (the function identity
-  // changes), which combined with `setVideoEls` would toggle state on each
-  // tick and produce a "Maximum update depth exceeded" loop.
+  // Stable ref callbacks per index, so React doesn't detach and re-attach every video on each render.
   const videoRefCallbacksRef = useRef<
     ((el: HTMLVideoElement | null) => void)[]
   >([]);
@@ -69,12 +53,6 @@ export const SimpleVideosPlayer = ({
     const idx = videoRefCallbacksRef.current.length;
     videoRefCallbacksRef.current.push((el: HTMLVideoElement | null) => {
       videoRefs.current[idx] = el;
-      setVideoEls((prev) => {
-        if (prev[idx] === el) return prev;
-        const next = prev.slice();
-        next[idx] = el;
-        return next;
-      });
     });
   }
   const [hiddenVideos, setHiddenVideos] = React.useState<string[]>([]);
@@ -544,15 +522,6 @@ export const SimpleVideosPlayer = ({
                   >
                     <span className="size-6 animate-spin rounded-full border-2 border-slate-700 border-t-cyan-300" />
                   </div>
-                )}
-                {/* VQA bbox/keypoint overlay. Reads atoms + drawMode from
-                    AnnotationsContext; pointer-events fall through when
-                    not in draw mode so video controls remain usable. */}
-                {annotationOverlay && (
-                  <VideoOverlayCanvas
-                    videoEl={videoEls[idx] ?? null}
-                    cameraKey={info.filename}
-                  />
                 )}
               </div>
             </div>

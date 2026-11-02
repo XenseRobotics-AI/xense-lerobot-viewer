@@ -3,7 +3,7 @@
 /**
  * Homepage panel for TacFlow's ④ automatic annotations: how many datasets / episodes are annotated, the outcome mix,
  * the findings by category, and one list of every data issue and operator mistake across the corpus. Each row opens
- * the episode on its Auto annotation panel at the finding's time (`?tab=annotations&ann=auto&t=`).
+ * the episode on its Auto annotation panel at the finding's time (`?tab=annotations&t=`).
  *
  * Read-only, like the per-episode panel; renders nothing when no dataset under the browsed path has an annotation.
  * The labels are a vision model's reading of the head camera — claims to check, which is what the list is for.
@@ -32,7 +32,7 @@ export function autoAnnotationLink(
   t: number | null,
 ): string {
   const time = t === null ? "" : `&t=${Math.max(0, t).toFixed(2)}`;
-  return `/_local/${encodedPath}/episode_${Math.max(0, Math.floor(episode))}?tab=annotations&ann=auto${time}`;
+  return `/_local/${encodedPath}/episode_${Math.max(0, Math.floor(episode))}?tab=annotations${time}`;
 }
 
 export default function AnnotationOverview({
