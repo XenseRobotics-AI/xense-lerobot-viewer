@@ -848,6 +848,16 @@ function EpisodeViewerInner({
     return fromUrl === "subtasks" || fromUrl === "auto" ? fromUrl : "atoms";
   });
 
+  // Left of the auto annotation: the 3D replay (default — poses and every camera together) or the plain
+  // videos. `?left=video` opens on the videos.
+  const [autoLeft, setAutoLeft] = useState<"replay" | "video">(() =>
+    searchParams.get("left") === "video" ? "video" : "replay",
+  );
+  const replayBesideAnnotation =
+    activeTab === "annotations" &&
+    annotationEditor === "auto" &&
+    autoLeft === "replay";
+
   const [urdfMounted, setUrdfMounted] = useState(activeTab === "urdf");
 
   useEffect(() => {
@@ -1219,6 +1229,35 @@ function EpisodeViewerInner({
                 <p className="text-[10px] uppercase tracking-wide text-slate-500 tabular">
                   {t("ep.episodeLabel", { id: episodeId })}
                 </p>
+                {annotationEditor === "auto" && (
+                  <div
+                    role="tablist"
+                    aria-label={t("autoAnn.leftAria")}
+                    className="inline-flex shrink-0 ml-auto overflow-hidden rounded-md border border-white/10 text-sm"
+                  >
+                    {(
+                      [
+                        { id: "replay", label: t("autoAnn.leftReplay") },
+                        { id: "video", label: t("autoAnn.leftVideo") },
+                      ] as const
+                    ).map((entry) => (
+                      <button
+                        key={entry.id}
+                        role="tab"
+                        type="button"
+                        aria-selected={autoLeft === entry.id}
+                        onClick={() => setAutoLeft(entry.id)}
+                        className={`px-3 py-1.5 transition-colors ${
+                          autoLeft === entry.id
+                            ? "bg-cyan-500/20 text-cyan-100"
+                            : "bg-[var(--surface-1)]/60 text-slate-300 hover:text-slate-100"
+                        }`}
+                      >
+                        {entry.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Footage and editor on screen together — annotating while the
@@ -1241,40 +1280,61 @@ function EpisodeViewerInner({
                     : "lg:grid-cols-[minmax(0,1fr)_27rem] xl:grid-cols-[minmax(0,1fr)_30rem]"
                 }`}
               >
-                {videosInfo.length > 0 && (
-                  <div className="sticky top-0 z-20 bg-[var(--bg)] pb-3 lg:static lg:col-start-1 lg:row-start-1 lg:max-h-[55vh] lg:overflow-y-auto lg:bg-transparent lg:pb-0">
-                    <SimpleVideosPlayer
-                      videosInfo={videosInfo}
-                      episodeId={episodeId}
-                      loading={playerLoading}
-                      onVideosReady={handleVideosReady}
-                      annotationOverlay
-                    />
+                {replayBesideAnnotation ? (
+                  /* The 3D replay as the footage: poses and every camera stream together, its clock bridged to
+                     the page's so the annotation panel follows it and drives it (URDFViewer `syncClock`). */
+                  <div className="flex min-h-[70vh] min-w-0 flex-col lg:col-start-1 lg:row-span-2 lg:row-start-1 lg:min-h-0">
+                    <Suspense fallback={<Loading />}>
+                      <URDFViewer
+                        key={`ann-${datasetInfo.repoId}`}
+                        data={data}
+                        active={
+                          replayBesideAnnotation &&
+                          !episodeLoading &&
+                          !episodeError
+                        }
+                        syncClock
+                      />
+                    </Suspense>
                   </div>
-                )}
+                ) : (
+                  <>
+                    {videosInfo.length > 0 && (
+                      <div className="sticky top-0 z-20 bg-[var(--bg)] pb-3 lg:static lg:col-start-1 lg:row-start-1 lg:max-h-[55vh] lg:overflow-y-auto lg:bg-transparent lg:pb-0">
+                        <SimpleVideosPlayer
+                          videosInfo={videosInfo}
+                          episodeId={episodeId}
+                          loading={playerLoading}
+                          onVideosReady={handleVideosReady}
+                          annotationOverlay
+                        />
+                      </div>
+                    )}
 
-                <div className="flex min-w-0 flex-col gap-4 lg:col-start-1 lg:row-start-2 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
-                  {annotationEditor !== "auto" && (
-                    <div className="grounding-intro">
-                      <span className="section-kicker">
-                        {t("ep.groundedVqa")}
-                      </span>
-                      <ul>
-                        <li>{t("ep.vqaHint1")}</li>
-                        <li>
-                          {tRich("ep.vqaHint2", {
-                            enter: <kbd>↵</kbd>,
-                            esc: <kbd>Esc</kbd>,
-                          })}
-                        </li>
-                      </ul>
+                    <div className="flex min-w-0 flex-col gap-4 lg:col-start-1 lg:row-start-2 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
+                      {annotationEditor !== "auto" && (
+                        <div className="grounding-intro">
+                          <span className="section-kicker">
+                            {t("ep.groundedVqa")}
+                          </span>
+                          <ul>
+                            <li>{t("ep.vqaHint1")}</li>
+                            <li>
+                              {tRich("ep.vqaHint2", {
+                                enter: <kbd>↵</kbd>,
+                                esc: <kbd>Esc</kbd>,
+                              })}
+                            </li>
+                          </ul>
+                        </div>
+                      )}
+                      <PlaybackBar />
+                      {annotationEditor !== "auto" && (
+                        <AnnotationsTimeline duration={data.duration} />
+                      )}
                     </div>
-                  )}
-                  <PlaybackBar />
-                  {annotationEditor !== "auto" && (
-                    <AnnotationsTimeline duration={data.duration} />
-                  )}
-                </div>
+                  </>
+                )}
 
                 {/* Both annotation systems live here, one at a time: stacking
                     them would put the lower one back off screen. */}

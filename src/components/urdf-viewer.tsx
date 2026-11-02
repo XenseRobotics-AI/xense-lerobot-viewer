@@ -23,6 +23,7 @@ import UrdfPlaybackBar from "@/components/urdf-playback-bar";
 import UrdfValueReadout from "@/components/urdf-value-readout";
 import UrdfVideoOverlay from "@/components/urdf-video-overlay";
 import { useLocale } from "@/context/locale-context";
+import { useTimeControls, useTimeState } from "@/context/time-context";
 import {
   type BundledGripperProfile,
   bundledGripperProfile,
@@ -2138,11 +2139,19 @@ export default function URDFViewer({
   active,
   playToggleRef,
   seekByRef,
+  syncClock = false,
 }: {
   data: EpisodeData;
   active: boolean;
   playToggleRef?: React.RefObject<(() => void) | undefined>;
   seekByRef?: React.RefObject<((seconds: number) => void) | undefined>;
+  /**
+   * Bridge the replay's own clock to the page's `TimeContext`, both ways: the replay reports its time and
+   * play state there (as a status report, not a seek), and follows external seeks and play/pause from it.
+   * Used where another panel (the Annotations tab's auto annotation) reads and drives the page clock while
+   * the replay is the footage on screen. Off for the 3D Replay tab, which has nothing else to sync with.
+   */
+  syncClock?: boolean;
 }) {
   const { t, tRich } = useLocale();
   const { datasetInfo } = data;
@@ -2446,6 +2455,38 @@ export default function URDFViewer({
       totalFrames,
     ],
   );
+
+  // ── page clock bridge (see `syncClock`) ──
+  const pageClock = useTimeControls();
+  const pageTime = useTimeState();
+  const reportedPlaying = useRef<boolean | null>(null);
+  // report: the replay's time and play state, as a status update (no external-seek bump, so no loop back)
+  useEffect(() => {
+    if (!syncClock || !active) return;
+    pageClock.seek(replayTimeSeconds, "video");
+  }, [syncClock, active, replayTimeSeconds, pageClock]);
+  useEffect(() => {
+    if (!syncClock || !active) return;
+    reportedPlaying.current = playing;
+    pageClock.setIsPlaying(playing);
+  }, [syncClock, active, playing, pageClock]);
+  // follow: play/pause from the page (Space, a panel pausing before a seek)
+  useEffect(() => {
+    if (!syncClock || !active) return;
+    if (pageTime.isPlaying === reportedPlaying.current) return;
+    if (pageTime.isPlaying && playbackDisabled) return;
+    setPlaying(pageTime.isPlaying);
+  }, [syncClock, active, pageTime.isPlaying, playbackDisabled]);
+  // follow: external seeks (a step or finding clicked in the annotation panel)
+  const lastSeekVersion = useRef(pageTime.externalSeekVersion);
+  useEffect(() => {
+    if (!syncClock || !active) return;
+    if (pageTime.externalSeekVersion === lastSeekVersion.current) return;
+    lastSeekVersion.current = pageTime.externalSeekVersion;
+    handleSeekBy(pageTime.currentTime - replayTimeSeconds);
+    // handleSeekBy and replayTimeSeconds change with every frame; only a new seek should run this
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncClock, active, pageTime.externalSeekVersion]);
 
   useEffect(() => {
     if (playToggleRef) playToggleRef.current = handlePlayPause;
