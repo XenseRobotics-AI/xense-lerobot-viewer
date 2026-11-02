@@ -1232,7 +1232,15 @@ function EpisodeViewerInner({
                   widths is exactly when the editor below it comes into view.
                   Grid placement lets the DOM stay [video][rest][editor] while
                   `lg` puts the first two in column 1 and the editor alongside. */}
-              <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_27rem] lg:grid-rows-[auto_minmax(0,1fr)] lg:overflow-hidden xl:grid-cols-[minmax(0,1fr)_30rem]">
+              {/* The read-only auto annotation is read, not authored: its column takes ~44% of the width (as on the
+                  Argus board) instead of the editors' fixed 30rem. */}
+              <div
+                className={`grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto lg:grid-rows-[auto_minmax(0,1fr)] lg:overflow-hidden ${
+                  annotationEditor === "auto"
+                    ? "lg:grid-cols-[minmax(0,1fr)_minmax(28rem,44%)]"
+                    : "lg:grid-cols-[minmax(0,1fr)_27rem] xl:grid-cols-[minmax(0,1fr)_30rem]"
+                }`}
+              >
                 {videosInfo.length > 0 && (
                   <div className="sticky top-0 z-20 bg-[var(--bg)] pb-3 lg:static lg:col-start-1 lg:row-start-1 lg:max-h-[55vh] lg:overflow-y-auto lg:bg-transparent lg:pb-0">
                     <SimpleVideosPlayer
@@ -1246,22 +1254,26 @@ function EpisodeViewerInner({
                 )}
 
                 <div className="flex min-w-0 flex-col gap-4 lg:col-start-1 lg:row-start-2 lg:min-h-0 lg:overflow-y-auto lg:pr-1">
-                  <div className="grounding-intro">
-                    <span className="section-kicker">
-                      {t("ep.groundedVqa")}
-                    </span>
-                    <ul>
-                      <li>{t("ep.vqaHint1")}</li>
-                      <li>
-                        {tRich("ep.vqaHint2", {
-                          enter: <kbd>↵</kbd>,
-                          esc: <kbd>Esc</kbd>,
-                        })}
-                      </li>
-                    </ul>
-                  </div>
+                  {annotationEditor !== "auto" && (
+                    <div className="grounding-intro">
+                      <span className="section-kicker">
+                        {t("ep.groundedVqa")}
+                      </span>
+                      <ul>
+                        <li>{t("ep.vqaHint1")}</li>
+                        <li>
+                          {tRich("ep.vqaHint2", {
+                            enter: <kbd>↵</kbd>,
+                            esc: <kbd>Esc</kbd>,
+                          })}
+                        </li>
+                      </ul>
+                    </div>
+                  )}
                   <PlaybackBar />
-                  <AnnotationsTimeline duration={data.duration} />
+                  {annotationEditor !== "auto" && (
+                    <AnnotationsTimeline duration={data.duration} />
+                  )}
                 </div>
 
                 {/* Both annotation systems live here, one at a time: stacking
@@ -1312,6 +1324,7 @@ function EpisodeViewerInner({
                       <AutoAnnotationPanel
                         encodedPath={encodedDatasetPath}
                         episodeId={episodeId}
+                        task={task}
                       />
                     )}
                   </div>

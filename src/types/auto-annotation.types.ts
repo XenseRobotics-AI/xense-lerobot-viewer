@@ -38,6 +38,14 @@ export interface AutoEpisodeAnnotation {
   problems: string[];
   outcome: string | null;
   outcome_reason: string | null;
+  /** completion.completed_at_s — when the model says the task was done */
+  completed_at_s: number | null;
+  /** goal_alignment: does the work match the dataset's instruction (aligned / narrower / broader / different / unrelated) */
+  alignment: {
+    relation: string | null;
+    matches: boolean | null;
+    note: string | null;
+  } | null;
   summary: string | null;
   performance_review: string | null;
   timeline: AutoTimelineRow[];
@@ -122,6 +130,17 @@ export function normalizeEpisode(entry: unknown): AutoEpisodeAnnotation | null {
     problems: Array.isArray(entry.problems) ? entry.problems.map(String) : [],
     outcome: str(completion.task_completed),
     outcome_reason: str(completion.reason),
+    completed_at_s: num(completion.completed_at_s),
+    alignment: isRecord(labels.goal_alignment)
+      ? {
+          relation: str(labels.goal_alignment.relation),
+          matches:
+            typeof labels.goal_alignment.matches_given === "boolean"
+              ? labels.goal_alignment.matches_given
+              : null,
+          note: str(labels.goal_alignment.note),
+        }
+      : null,
     summary: str(labels.task_summary),
     performance_review: str(labels.performance_review),
     timeline: normalizeTimeline(labels.timeline),
@@ -232,4 +251,16 @@ export function totalSummaries(summaries: AutoAnnotationDatasetSummary[]) {
     outcomes,
     categories,
   };
+}
+
+/** Count of steps per contribution (advancing / wasteful / idle / other), for the step list's summary chips. */
+export function contributionCounts(
+  rows: AutoTimelineRow[],
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const r of rows) {
+    const k = (r.contribution ?? "").toLowerCase() || "other";
+    out[k] = (out[k] ?? 0) + 1;
+  }
+  return out;
 }

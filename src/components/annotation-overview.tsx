@@ -78,10 +78,10 @@ export default function AnnotationOverview({
       className="mb-8 rounded-lg border border-white/5 bg-[var(--surface-0)]/60 px-5 py-5 sm:px-6"
     >
       <div className="mb-3 flex flex-wrap items-baseline gap-x-4 gap-y-1">
-        <h2 className="text-sm font-medium text-slate-200">
+        <h2 className="text-base font-semibold text-slate-100">
           {t("annOverview.title")}
         </h2>
-        <span className="text-xs text-slate-500">
+        <span className="text-sm text-slate-400">
           {t("annOverview.counts", {
             datasets: totals.datasets,
             all: datasets.length,
@@ -106,7 +106,7 @@ export default function AnnotationOverview({
           />
         ))}
       </div>
-      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-400">
         {outcomeEntries.map(([k, v]) => (
           <span key={k} className="inline-flex items-center gap-1.5">
             <span
@@ -123,7 +123,7 @@ export default function AnnotationOverview({
         ))}
       </div>
 
-      <p className="mt-4 mb-1 text-[10px] uppercase tracking-wide text-slate-500">
+      <p className="mt-5 mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
         {t("annOverview.findings", { count: rows.length })}
       </p>
       {rows.length === 0 ? (
@@ -134,10 +134,10 @@ export default function AnnotationOverview({
             <li key={`${r.encodedPath}-${r.episode_index}-${i}`}>
               <Link
                 href={autoAnnotationLink(r.encodedPath, r.episode_index, r.t_s)}
-                className="flex gap-3 px-3 py-1.5 text-xs hover:bg-white/5"
+                className="flex gap-3 px-3 py-2 text-sm hover:bg-white/5"
               >
                 <span
-                  className="w-56 shrink-0 truncate text-slate-300"
+                  className="w-64 shrink-0 truncate text-slate-200"
                   title={r.dataset}
                 >
                   {r.dataset}
@@ -146,7 +146,7 @@ export default function AnnotationOverview({
                   ep {r.episode_index} ·{" "}
                   {r.t_s === null ? "—" : `${r.t_s.toFixed(0)}s`}
                 </span>
-                <span className="w-40 shrink-0 truncate text-rose-200">
+                <span className="w-48 shrink-0 truncate text-rose-200">
                   {r.kind === "data_issue"
                     ? t("autoAnn.dataIssue")
                     : t("autoAnn.mistake")}
