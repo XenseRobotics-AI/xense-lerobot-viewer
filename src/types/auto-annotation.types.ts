@@ -22,6 +22,18 @@ export interface AutoTimelineRow {
   notes: string | null;
 }
 
+/**
+ * A person's ruling on a finding, recorded in TacFlow (`tacflow review --finding`, event `finding_resolved`) and folded
+ * into the dataset's registry snapshot under `findings_resolved`, keyed by `findingKey`.
+ */
+export interface AutoResolution {
+  /** confirmed (true; handled or kept) / false_positive (the model was wrong) / fixed (true; data repaired) */
+  resolution: string;
+  by: string | null;
+  at: string | null;
+  note: string | null;
+}
+
 export interface AutoFinding {
   kind: "data_issue" | "operator_mistake";
   category: string | null;
@@ -30,6 +42,47 @@ export interface AutoFinding {
   end_s: number | null;
   issue: string;
   evidence: string | null;
+  /** null until someone rules on it in TacFlow */
+  resolution?: AutoResolution | null;
+}
+
+/** Same spelling as TacFlow's `registry.finding_key`: one ruling covers an episode's findings of one kind + category. */
+export function findingKey(
+  episode: number,
+  kind: AutoFinding["kind"],
+  category: string | null,
+): string {
+  return `${episode}:${kind}:${category ?? ""}`;
+}
+
+/** The snapshot's `findings_resolved` map, normalised; malformed entries dropped. */
+export function normalizeResolutions(
+  raw: unknown,
+): Record<string, AutoResolution> {
+  const out: Record<string, AutoResolution> = {};
+  if (!isRecord(raw)) return out;
+  for (const [key, value] of Object.entries(raw)) {
+    if (!isRecord(value) || typeof value.resolution !== "string") continue;
+    out[key] = {
+      resolution: value.resolution,
+      by: str(value.by),
+      at: str(value.at),
+      note: str(value.note),
+    };
+  }
+  return out;
+}
+
+/** Findings of one episode with their rulings attached (unchanged findings when there are none). */
+export function withResolutions<T extends AutoFinding>(
+  episode: number,
+  findings: T[],
+  resolutions: Record<string, AutoResolution>,
+): T[] {
+  return findings.map((f) => ({
+    ...f,
+    resolution: resolutions[findingKey(episode, f.kind, f.category)] ?? null,
+  }));
 }
 
 export interface AutoEpisodeAnnotation {
@@ -220,6 +273,57 @@ export function summarizeReport(
     episodes_with_findings: withFindings,
     findings,
   };
+}
+
+/** One homepage row: a dataset's findings of one kind + category, merged across episodes. */
+export interface AutoFindingGroup {
+  kind: AutoFinding["kind"];
+  category: string | null;
+  /** the first finding (by episode, then time): the row links there and shows its text */
+  first: AutoFindingRow;
+  episodes: number[];
+  count: number;
+  /** how many of them someone has ruled on */
+  resolved: number;
+}
+
+/**
+ * Merge a dataset's findings by kind + category (the homepage shows one row per group, as the user asked on 11-02).
+ * A group is resolved when every finding in it is; `open` groups come first, then by first episode.
+ */
+export function groupFindings(findings: AutoFindingRow[]): AutoFindingGroup[] {
+  const groups = new Map<string, AutoFindingGroup>();
+  for (const f of findings) {
+    const key = `${f.kind}:${f.category ?? ""}`;
+    const g = groups.get(key);
+    if (!g) {
+      groups.set(key, {
+        kind: f.kind,
+        category: f.category,
+        first: f,
+        episodes: [f.episode_index],
+        count: 1,
+        resolved: f.resolution ? 1 : 0,
+      });
+      continue;
+    }
+    g.count += 1;
+    if (f.resolution) g.resolved += 1;
+    if (!g.episodes.includes(f.episode_index)) g.episodes.push(f.episode_index);
+    if (
+      f.episode_index < g.first.episode_index ||
+      (f.episode_index === g.first.episode_index &&
+        (f.t_s ?? Infinity) < (g.first.t_s ?? Infinity))
+    )
+      g.first = f;
+  }
+  return [...groups.values()]
+    .map((g) => ({ ...g, episodes: g.episodes.sort((a, b) => a - b) }))
+    .sort(
+      (a, b) =>
+        Number(a.resolved === a.count) - Number(b.resolved === b.count) ||
+        a.first.episode_index - b.first.episode_index,
+    );
 }
 
 /** Totals across datasets: how many are annotated, episode counts, outcome mix, findings by category. */

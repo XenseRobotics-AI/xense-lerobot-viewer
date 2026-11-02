@@ -14,7 +14,10 @@ import path from "node:path";
 import {
   AUTO_ANNOTATION_SCHEMA,
   normalizeEpisode,
+  findingKey,
+  normalizeResolutions,
   summarizeReport,
+  withResolutions,
   type AutoAnnotationDatasetSummary,
   type AutoAnnotationResponse,
 } from "@/types/auto-annotation.types";
@@ -102,6 +105,10 @@ export async function loadAutoAnnotation(
   const entry = report.episodes.find(
     (e: unknown) => isRecord(e) && e.episode_index === episode,
   );
+  const normalized = entry === undefined ? null : normalizeEpisode(entry);
+  const resolutions = normalizeResolutions(
+    isRecord(snapshot) ? snapshot.findings_resolved : null,
+  );
   return {
     status: "ok",
     body: {
@@ -110,7 +117,14 @@ export async function loadAutoAnnotation(
       annotated_at: typeof stage.at === "string" ? stage.at : null,
       episodes_total: Number(report.episodes_total ?? report.episodes.length),
       episodes_usable: Number(report.episodes_usable ?? 0),
-      episode: entry === undefined ? null : normalizeEpisode(entry),
+      episode: normalized && {
+        ...normalized,
+        findings: withResolutions(
+          normalized.episode_index,
+          normalized.findings,
+          resolutions,
+        ),
+      },
     },
   };
 }
@@ -123,6 +137,8 @@ async function latestReport(datasetDir: string): Promise<{
   report: Record<string, unknown>;
   at: string | null;
   file: string;
+  /** the snapshot's `findings_resolved`, normalised: rulings change without the report changing */
+  resolutions: ReturnType<typeof normalizeResolutions>;
 } | null> {
   const registry = await findRegistryRoot(datasetDir);
   if (!registry) return null;
@@ -144,7 +160,14 @@ async function latestReport(datasetDir: string): Promise<{
     !Array.isArray(report.episodes)
   )
     return null;
-  return { report, at: typeof stage.at === "string" ? stage.at : null, file };
+  return {
+    report,
+    at: typeof stage.at === "string" ? stage.at : null,
+    file,
+    resolutions: normalizeResolutions(
+      isRecord(snapshot) ? snapshot.findings_resolved : null,
+    ),
+  };
 }
 
 /**
@@ -166,10 +189,21 @@ export async function loadAnnotationSummary(
     if (!found) return null;
     const { mtimeMs } = await fs.stat(found.file);
     const cached = SUMMARY_CACHE.get(found.file);
-    if (cached && cached.mtimeMs === mtimeMs) return cached.summary;
-    const summary = summarizeReport(found.report, found.at);
-    SUMMARY_CACHE.set(found.file, { mtimeMs, summary });
-    return summary;
+    let summary = cached && cached.mtimeMs === mtimeMs ? cached.summary : null;
+    if (!summary) {
+      summary = summarizeReport(found.report, found.at);
+      SUMMARY_CACHE.set(found.file, { mtimeMs, summary });
+    }
+    // Rulings live in the snapshot, not the report, so they are attached on every read (cheap) rather than cached.
+    return {
+      ...summary,
+      findings: summary.findings.map((f) => ({
+        ...f,
+        resolution:
+          found.resolutions[findingKey(f.episode_index, f.kind, f.category)] ??
+          null,
+      })),
+    };
   } catch {
     return null;
   }

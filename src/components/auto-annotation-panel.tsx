@@ -278,12 +278,14 @@ export function AutoAnnotationPanel({ encodedPath, episodeId, task }: Props) {
               title={t("autoAnn.dataIssues")}
               items={dataIssues}
               onJump={jump}
+              t={t}
             />
             <FindingCard
               tone="indigo"
               title={t("autoAnn.mistakes")}
               items={mistakes}
               onJump={jump}
+              t={t}
             />
           </div>
         ))}
@@ -405,11 +407,13 @@ function FindingCard({
   title,
   items,
   onJump,
+  t,
 }: {
   tone: "rose" | "indigo";
   title: string;
   items: AutoFinding[];
   onJump: (s: number | null) => void;
+  t: T;
 }) {
   if (!items.length) return null;
   const c =
@@ -444,7 +448,9 @@ function FindingCard({
             <button
               type="button"
               onClick={() => onJump(f.t_s)}
-              className="w-full rounded-md border border-white/5 bg-black/20 px-3 py-2.5 text-left hover:bg-black/30"
+              className={`w-full rounded-md border border-white/5 bg-black/20 px-3 py-2.5 text-left hover:bg-black/30 ${
+                f.resolution ? "opacity-60" : ""
+              }`}
             >
               <span className="flex flex-wrap items-baseline gap-x-2 text-xs">
                 <span className="tabular font-semibold text-slate-200">
@@ -454,6 +460,15 @@ function FindingCard({
                 {f.severity && (
                   <span className="text-slate-500">{f.severity}</span>
                 )}
+                {f.resolution && (
+                  <span
+                    className="ml-auto rounded-full border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 font-semibold text-emerald-200"
+                    title={f.resolution.note ?? undefined}
+                  >
+                    {label(t, "resolution", f.resolution.resolution)}
+                    {f.resolution.by ? ` · ${f.resolution.by}` : ""}
+                  </span>
+                )}
               </span>
               <span className="mt-1 block text-[15px] leading-snug text-slate-100">
                 {f.issue}
@@ -461,6 +476,11 @@ function FindingCard({
               {f.evidence && (
                 <span className="mt-1 block text-sm leading-snug text-slate-400">
                   {f.evidence}
+                </span>
+              )}
+              {f.resolution?.note && (
+                <span className="mt-1 block text-sm leading-snug text-emerald-200/80">
+                  {f.resolution.note}
                 </span>
               )}
             </button>

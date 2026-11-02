@@ -5,6 +5,9 @@
  * the findings by category, and one list of every data issue and operator mistake across the corpus. Each row opens
  * the episode on its Auto annotation panel at the finding's time (`?tab=annotations&t=`).
  *
+ * The list has one row per dataset + kind + category (merged across episodes) and by default shows only rows someone
+ * still has to look at: findings ruled on in TacFlow (`tacflow review --finding`) are hidden behind a toggle.
+ *
  * Read-only, like the per-episode panel; renders nothing when no dataset under the browsed path has an annotation.
  * The labels are a vision model's reading of the head camera — claims to check, which is what the list is for.
  */
@@ -12,8 +15,8 @@
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
 import type { LocalDatasetSummary } from "@/lib/local-datasets-discovery";
-import { totalSummaries } from "@/types/auto-annotation.types";
-import { useT } from "@/context/locale-context";
+import { groupFindings, totalSummaries } from "@/types/auto-annotation.types";
+import { useLocale } from "@/context/locale-context";
 
 const OUTCOME_COLOR: Record<string, string> = {
   success: "bg-emerald-500/80",
@@ -40,8 +43,9 @@ export default function AnnotationOverview({
 }: {
   datasets: LocalDatasetSummary[];
 }) {
-  const t = useT();
+  const { t, tp } = useLocale();
   const [expanded, setExpanded] = useState(false);
+  const [showResolved, setShowResolved] = useState(false);
   const annotated = useMemo(
     () => datasets.filter((d) => d.annotation),
     [datasets],
@@ -50,17 +54,19 @@ export default function AnnotationOverview({
     () => totalSummaries(annotated.map((d) => d.annotation!)),
     [annotated],
   );
-  const rows = useMemo(
+  const groups = useMemo(
     () =>
       annotated.flatMap((d) =>
-        d.annotation!.findings.map((f) => ({
-          ...f,
+        groupFindings(d.annotation!.findings).map((g) => ({
+          ...g,
           dataset: d.relativePath,
           encodedPath: d.encodedPath,
         })),
       ),
     [annotated],
   );
+  const open = groups.filter((g) => g.resolved < g.count);
+  const rows = showResolved ? groups : open;
   if (annotated.length === 0) return null;
 
   const outcomeEntries = Object.entries(totals.outcomes).sort(
@@ -124,17 +130,40 @@ export default function AnnotationOverview({
       </div>
 
       <p className="mt-5 mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-        {t("annOverview.findings", { count: rows.length })}
+        {t("annOverview.findings", { count: open.length })}
+        {groups.length > open.length && (
+          <button
+            type="button"
+            onClick={() => setShowResolved((v) => !v)}
+            className="ml-3 font-normal normal-case tracking-normal text-cyan-300 hover:text-cyan-200"
+          >
+            {showResolved
+              ? t("annOverview.hideResolved")
+              : t("annOverview.showResolved", {
+                  count: groups.length - open.length,
+                })}
+          </button>
+        )}
       </p>
       {rows.length === 0 ? (
-        <p className="text-xs text-slate-500">{t("annOverview.noFindings")}</p>
+        <p className="text-xs text-slate-500">
+          {groups.length
+            ? t("annOverview.allResolved")
+            : t("annOverview.noFindings")}
+        </p>
       ) : (
         <ul className="divide-y divide-white/5 rounded-md border border-white/5">
-          {shown.map((r, i) => (
-            <li key={`${r.encodedPath}-${r.episode_index}-${i}`}>
+          {shown.map((r) => (
+            <li key={`${r.encodedPath}-${r.kind}-${r.category}`}>
               <Link
-                href={autoAnnotationLink(r.encodedPath, r.episode_index, r.t_s)}
-                className="flex gap-3 px-3 py-2 text-sm hover:bg-white/5"
+                href={autoAnnotationLink(
+                  r.encodedPath,
+                  r.first.episode_index,
+                  r.first.t_s,
+                )}
+                className={`flex gap-3 px-3 py-2 text-sm hover:bg-white/5 ${
+                  r.resolved === r.count ? "opacity-50" : ""
+                }`}
               >
                 <span
                   className="w-64 shrink-0 truncate text-slate-200"
@@ -142,9 +171,13 @@ export default function AnnotationOverview({
                 >
                   {r.dataset}
                 </span>
-                <span className="w-24 shrink-0 tabular text-slate-500">
-                  ep {r.episode_index} ·{" "}
-                  {r.t_s === null ? "—" : `${r.t_s.toFixed(0)}s`}
+                <span
+                  className="w-28 shrink-0 truncate tabular text-slate-500"
+                  title={r.episodes.map((e) => `ep ${e}`).join(", ")}
+                >
+                  {r.episodes.length === 1
+                    ? `ep ${r.first.episode_index} · ${r.first.t_s === null ? "—" : `${r.first.t_s.toFixed(0)}s`}`
+                    : tp("annOverview.episodes", r.episodes.length)}
                 </span>
                 <span className="w-48 shrink-0 truncate text-rose-200">
                   {r.kind === "data_issue"
@@ -154,10 +187,18 @@ export default function AnnotationOverview({
                 </span>
                 <span
                   className="min-w-0 flex-1 truncate text-slate-300"
-                  title={r.issue}
+                  title={r.first.issue}
                 >
-                  {r.issue}
+                  {r.first.issue}
                 </span>
+                {r.resolved > 0 && (
+                  <span className="shrink-0 text-xs text-emerald-300">
+                    {t("annOverview.resolvedCount", {
+                      done: r.resolved,
+                      all: r.count,
+                    })}
+                  </span>
+                )}
               </Link>
             </li>
           ))}

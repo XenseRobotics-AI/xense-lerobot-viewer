@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   activeRowAt,
+  findingKey,
+  groupFindings,
   normalizeEpisode,
+  normalizeResolutions,
   normalizeTimeline,
+  withResolutions,
 } from "@/types/auto-annotation.types";
 
 describe("normalizeTimeline", () => {
@@ -137,5 +141,78 @@ describe("summarizeReport / totalSummaries", () => {
       goal_undone: 2,
     });
     expect(totals.spent).toBeCloseTo(0.12);
+  });
+});
+
+describe("finding rulings (TacFlow `tacflow review --finding`)", () => {
+  const finding = (
+    episode_index: number,
+    kind: "data_issue" | "operator_mistake",
+    category: string | null,
+    t_s: number | null,
+  ) => ({
+    episode_index,
+    kind,
+    category,
+    severity: null,
+    t_s,
+    end_s: null,
+    issue: `${kind} ${category} @${episode_index}`,
+    evidence: null,
+  });
+
+  test("findingKey spells the key like TacFlow's registry.finding_key", () => {
+    expect(findingKey(4, "operator_mistake", "goal_undone")).toBe(
+      "4:operator_mistake:goal_undone",
+    );
+    expect(findingKey(0, "data_issue", null)).toBe("0:data_issue:");
+  });
+
+  test("normalizeResolutions keeps well-formed entries only", () => {
+    const out = normalizeResolutions({
+      "4:data_issue:x": {
+        resolution: "confirmed",
+        by: "u",
+        at: "t",
+        note: "keep",
+      },
+      bad: { by: "u" },
+      worse: 3,
+    });
+    expect(Object.keys(out)).toEqual(["4:data_issue:x"]);
+    expect(out["4:data_issue:x"].note).toBe("keep");
+    expect(normalizeResolutions(null)).toEqual({});
+  });
+
+  test("withResolutions attaches a ruling by episode + kind + category", () => {
+    const [ruled, open] = withResolutions(
+      4,
+      [finding(4, "data_issue", "x", 1), finding(4, "data_issue", "y", 2)],
+      normalizeResolutions({ "4:data_issue:x": { resolution: "fixed" } }),
+    );
+    expect(ruled.resolution?.resolution).toBe("fixed");
+    expect(open.resolution).toBeNull();
+  });
+
+  test("groupFindings merges a dataset's findings per kind + category, open groups first", () => {
+    const ruled = { resolution: "confirmed", by: null, at: null, note: null };
+    const groups = groupFindings([
+      {
+        ...finding(1, "data_issue", "instruction_mismatch", 9),
+        resolution: ruled,
+      },
+      finding(7, "data_issue", "instruction_mismatch", 3),
+      finding(3, "data_issue", "instruction_mismatch", 5),
+      {
+        ...finding(0, "operator_mistake", "goal_undone", 1),
+        resolution: ruled,
+      },
+    ]);
+    expect(groups.map((g) => [g.category, g.count, g.resolved])).toEqual([
+      ["instruction_mismatch", 3, 1],
+      ["goal_undone", 1, 1],
+    ]);
+    expect(groups[0].episodes).toEqual([1, 3, 7]);
+    expect(groups[0].first.episode_index).toBe(1);
   });
 });
