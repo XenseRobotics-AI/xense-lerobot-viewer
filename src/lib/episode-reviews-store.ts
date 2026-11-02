@@ -158,11 +158,39 @@ export async function updateEpisodeReview(
     };
     const key = String(update.episode_index);
     const records = file.episodes[key] ?? [];
-    const existing = records.some(
+    const existingRecord = records.find(
       (entry) => entry.reviewer === update.reviewer,
     );
+    const existing = !!existingRecord;
     // Repeating the same action is idempotent; keep the original check time.
-    if (existing === update.reviewed) return file;
+    if (existing === update.reviewed) {
+      if (
+        !existingRecord ||
+        existingRecord.stay_ms !== undefined ||
+        update.stay_ms === undefined
+      )
+        return file;
+      file.episodes[key] = records.map((entry) =>
+        entry.reviewer === update.reviewer
+          ? {
+              ...entry,
+              stay_ms: update.stay_ms,
+              episode_duration_ms: update.episode_duration_ms,
+            }
+          : entry,
+      );
+      const now = reviewTimestamp();
+      file.updated_at = now;
+      collection.datasets[datasetKey] = file;
+      collection.updated_at = now;
+      await fs.writeFile(tmp, JSON.stringify(collection, null, 2) + "\n", {
+        encoding: "utf8",
+        flag: "wx",
+      });
+      lock.assertHeld();
+      await fs.rename(tmp, target);
+      return file;
+    }
     const now = reviewTimestamp();
     const next = records.filter((entry) => entry.reviewer !== update.reviewer);
     if (update.reviewed)
@@ -171,6 +199,12 @@ export async function updateEpisodeReview(
         reviewed_at: now,
         source: update.source,
         ...(input.role ? { role: input.role } : {}),
+        ...(update.stay_ms !== undefined
+          ? {
+              stay_ms: update.stay_ms,
+              episode_duration_ms: update.episode_duration_ms,
+            }
+          : {}),
       });
     if (next.length) file.episodes[key] = next;
     else delete file.episodes[key];

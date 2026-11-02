@@ -14,6 +14,8 @@ export function reviewCollectionCsv(collection: ReviewCollectionFile): string {
       "角色",
       "检查时间（UTC+8）",
       "入口",
+      "停留时间（秒）",
+      "Episode 时长（秒）",
       "检查状态",
       "检查人数",
     ],
@@ -39,6 +41,12 @@ export function reviewCollectionCsv(collection: ReviewCollectionFile): string {
                 : "",
           reviewTimestamp(record.reviewed_at),
           record.source === "urdf" ? "3D REPLAY" : "EPISODE",
+          record.stay_ms === undefined
+            ? ""
+            : (record.stay_ms / 1000).toFixed(1),
+          record.episode_duration_ms === undefined
+            ? ""
+            : (record.episode_duration_ms / 1000).toFixed(1),
           status === "crossReviewed" ? "已交叉复检" : "待交叉复检",
           new Set(entries.map((entry) => entry.reviewer)).size,
         ]);

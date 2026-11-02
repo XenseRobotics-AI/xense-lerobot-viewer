@@ -296,6 +296,8 @@ export const zh: Record<MessageKey, string> = {
   "review.crossReviewed": "已交叉复检",
   "review.crossMark": "标记交叉复检完成",
   "review.crossHint": "交叉复检须由不同人员分别手动标记；同一姓名只计一次。",
+  "review.stayCurrent": "累计有效停留 {stay} / Episode 时长 {duration}",
+  "review.stayRecorded": "有效停留 {stay} / Episode 时长 {duration}",
   "review.filterPending": "待交叉复检",
   "review.filterCrossReviewed": "已交叉复检",
   "review.filterPendingMine": "待我复检（其他人已检查）",
@@ -328,6 +330,8 @@ export const zh: Record<MessageKey, string> = {
   "review.undo": "撤销我的检查标记",
   "review.mark": "标记为已检查",
   "review.manualHint": "检查完成后手动标记；浏览或播放不会自动标记。",
+  "review.stayHint":
+    "只累计 Episode 数据就绪且页面在前台可见时的停留；切换 Episode 或隐藏页面时暂停，最长计至 Episode 时长的两倍。",
   "review.error": "质检记录加载或保存失败：",
   "review.retry": "重新加载记录",
   "review.noReviewers":

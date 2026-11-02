@@ -305,6 +305,9 @@ export const en = {
   "review.crossMark": "Mark cross-review complete",
   "review.crossHint":
     "Cross-review requires independent marks from different people; each name counts once.",
+  "review.stayCurrent":
+    "Total active stay {stay} / episode duration {duration}",
+  "review.stayRecorded": "Active stay {stay} / episode duration {duration}",
   "review.filterPending": "Awaiting cross-review",
   "review.filterCrossReviewed": "Cross-reviewed episodes",
   "review.filterPendingMine": "Awaiting my check (others inspected)",
@@ -339,6 +342,8 @@ export const en = {
   "review.mark": "Mark as inspected",
   "review.manualHint":
     "Mark manually after inspection; viewing does not mark an episode.",
+  "review.stayHint":
+    "Counts only while episode data is ready and this page is visible. Timing pauses on episode changes or when hidden, and stops at twice the episode duration.",
   "review.error": "Inspection records could not be loaded or saved:",
   "review.retry": "Reload records",
   "review.noReviewers":

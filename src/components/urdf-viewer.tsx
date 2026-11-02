@@ -2096,11 +2096,13 @@ function RobotScene({
 export default function URDFViewer({
   data,
   active,
+  onReadyChange,
   playToggleRef,
   seekByRef,
 }: {
   data: EpisodeData;
   active: boolean;
+  onReadyChange?: (episodeId: number, ready: boolean) => void;
   playToggleRef?: React.RefObject<(() => void) | undefined>;
   seekByRef?: React.RefObject<((seconds: number) => void) | undefined>;
 }) {
@@ -2341,6 +2343,10 @@ export default function URDFViewer({
     : urdfJointNames.length === 0;
   const playbackDisabled =
     !active || !visible || urdfLoading || trajectoryUnavailable;
+
+  useEffect(() => {
+    onReadyChange?.(selectedEpisode, !urdfLoading && !trajectoryUnavailable);
+  }, [onReadyChange, selectedEpisode, trajectoryUnavailable, urdfLoading]);
 
   useEffect(() => {
     if (playbackDisabled) setPlaying(false);

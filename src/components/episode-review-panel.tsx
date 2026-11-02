@@ -1,13 +1,14 @@
 "use client";
 
 import { REVIEW_TIME_ZONE } from "@/utils/reviewTime";
-import { useId } from "react";
+import { useEffect, useId, useState } from "react";
 import { useEpisodeReviews } from "@/context/episode-reviews-context";
 import { reviewSaveKey } from "@/utils/reviewSaveQueue";
 import { useLocale } from "@/context/locale-context";
 import {
   REVIEWER_ROLES,
   reviewStatus,
+  type EpisodeStaySnapshot,
   type ReviewSource,
 } from "@/types/episode-review.types";
 
@@ -15,10 +16,14 @@ export default function EpisodeReviewPanel({
   episodeId,
   source,
   disabled,
+  episodeDurationMs,
+  readStayMs,
 }: {
   episodeId: number;
   source: ReviewSource;
   disabled: boolean;
+  episodeDurationMs: number;
+  readStayMs: () => number;
 }) {
   const { t, locale } = useLocale();
   const {
@@ -40,8 +45,43 @@ export default function EpisodeReviewPanel({
   const error = loadError ?? saveErrors[key];
   const pendingCount = Object.keys(pendingSaves).length;
   const inputId = useId();
+  const [, setStayTick] = useState(0);
   const reviews = file.episodes[String(episodeId)] ?? [];
   const mine = reviews.some((review) => review.reviewer === reviewer.trim());
+  useEffect(() => {
+    let interval: number | null = null;
+    const stop = () => {
+      if (interval === null) return;
+      window.clearInterval(interval);
+      interval = null;
+    };
+    const start = () => {
+      if (document.hidden || interval !== null) return;
+      interval = window.setInterval(
+        () => setStayTick((value) => value + 1),
+        1000,
+      );
+    };
+    const onVisibilityChange = () => {
+      if (document.hidden) stop();
+      else start();
+    };
+    start();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, []);
+  const saveMark = (reviewed: boolean) => {
+    const stay: EpisodeStaySnapshot | undefined = reviewed
+      ? {
+          stay_ms: Math.min(Math.floor(readStayMs()), episodeDurationMs * 2),
+          episode_duration_ms: episodeDurationMs,
+        }
+      : undefined;
+    void mark(episodeId, source, reviewed, stay);
+  };
   return (
     <section
       className="rounded-md border border-white/10 bg-white/[0.02] p-2 text-xs"
@@ -104,7 +144,7 @@ export default function EpisodeReviewPanel({
         </select>
         <button
           type="button"
-          onClick={() => void mark(episodeId, source, !mine)}
+          onClick={() => saveMark(!mine)}
           disabled={
             disabled ||
             saving ||
@@ -131,6 +171,12 @@ export default function EpisodeReviewPanel({
                   : "review.markShort",
           )}
         </button>
+        <span className="tabular-nums text-[10px] text-slate-400">
+          {t("review.stayCurrent", {
+            stay: formatReviewDuration(readStayMs()),
+            duration: formatReviewDuration(episodeDurationMs),
+          })}
+        </span>
         {pendingCount > 0 && (
           <span role="status" className="text-[10px] text-cyan-300">
             {t("review.backgroundSaves", { count: pendingCount })}
@@ -142,6 +188,7 @@ export default function EpisodeReviewPanel({
           {t("review.details", { count: reviews.length })}
         </summary>
         <p className="mt-2 text-slate-500">{t("review.manualHint")}</p>
+        <p className="mt-1 text-slate-500">{t("review.stayHint")}</p>
         <p className="mt-2 text-[10px] text-slate-500">
           {t("review.crossHint")}
         </p>
@@ -176,6 +223,17 @@ export default function EpisodeReviewPanel({
                     ? "viewer.tab.urdf"
                     : "viewer.tab.episodes",
                 )}
+                {review.stay_ms !== undefined &&
+                  review.episode_duration_ms !== undefined && (
+                    <span className="block text-slate-500">
+                      {t("review.stayRecorded", {
+                        stay: formatReviewDuration(review.stay_ms),
+                        duration: formatReviewDuration(
+                          review.episode_duration_ms,
+                        ),
+                      })}
+                    </span>
+                  )}
               </li>
             ))}
           </ul>
@@ -197,7 +255,7 @@ export default function EpisodeReviewPanel({
             disabled={saving}
             onClick={() => {
               if (loadError) void refresh();
-              else void mark(episodeId, source, !mine);
+              else saveMark(!mine);
             }}
             className="underline"
           >
@@ -207,4 +265,13 @@ export default function EpisodeReviewPanel({
       )}
     </section>
   );
+}
+
+function formatReviewDuration(milliseconds: number): string {
+  const totalSeconds = Math.floor(milliseconds / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0
+    ? `${minutes}:${String(seconds).padStart(2, "0")}`
+    : `${seconds}s`;
 }

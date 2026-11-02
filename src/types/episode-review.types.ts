@@ -24,11 +24,18 @@ export type ReviewFilter =
 
 export type ReviewSource = "episodes" | "urdf";
 
+export type EpisodeStaySnapshot = {
+  stay_ms: number;
+  episode_duration_ms: number;
+};
+
 export interface EpisodeReview {
   reviewer: string;
   reviewed_at: string;
   role?: ReviewerRole;
   source: ReviewSource;
+  stay_ms?: number;
+  episode_duration_ms?: number;
 }
 
 export interface EpisodeReviewsFile {
@@ -57,6 +64,8 @@ export interface ReviewUpdate {
   source: ReviewSource;
   reviewed: boolean;
   role?: ReviewerRole;
+  stay_ms?: number;
+  episode_duration_ms?: number;
 }
 
 export function parseReviewUpdate(input: unknown): ReviewUpdate {
@@ -87,11 +96,36 @@ export function parseReviewUpdate(input: unknown): ReviewUpdate {
   if (typeof raw.reviewed !== "boolean") {
     throw new Error("reviewed must be a boolean");
   }
+  const hasStay = raw.stay_ms !== undefined;
+  const hasDuration = raw.episode_duration_ms !== undefined;
+  if (hasStay !== hasDuration)
+    throw new Error(
+      "stay_ms and episode_duration_ms must be provided together",
+    );
+  if (hasStay) {
+    if (
+      !Number.isSafeInteger(raw.stay_ms) ||
+      (raw.stay_ms as number) < 0 ||
+      !Number.isSafeInteger(raw.episode_duration_ms) ||
+      (raw.episode_duration_ms as number) < 0 ||
+      !Number.isSafeInteger(2 * (raw.episode_duration_ms as number)) ||
+      (raw.stay_ms as number) > 2 * (raw.episode_duration_ms as number)
+    )
+      throw new Error("stay_ms cannot exceed twice the episode duration");
+    if (!raw.reviewed)
+      throw new Error("stay time can only be saved with a review mark");
+  }
   return {
     episode_index: raw.episode_index,
     reviewer: raw.reviewer.trim(),
     source: raw.source,
     reviewed: raw.reviewed,
+    ...(hasStay
+      ? {
+          stay_ms: raw.stay_ms as number,
+          episode_duration_ms: raw.episode_duration_ms as number,
+        }
+      : {}),
   };
 }
 
@@ -148,6 +182,12 @@ export function parseReviewsFile(input: unknown): EpisodeReviewsFile {
         source: validated.source,
         reviewed_at: reviewTimestamp(entry.reviewed_at),
         ...(entry.role ? { role: entry.role as ReviewerRole } : {}),
+        ...(validated.stay_ms !== undefined
+          ? {
+              stay_ms: validated.stay_ms,
+              episode_duration_ms: validated.episode_duration_ms,
+            }
+          : {}),
       };
     });
   }

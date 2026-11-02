@@ -117,10 +117,16 @@ describe("collection review persistence", () => {
   });
 
   test("saves names, UTC+8 time and source under selected browse directory", async () => {
-    const result = await updateEpisodeReview(browse, datasetA, mark);
+    const result = await updateEpisodeReview(browse, datasetA, {
+      ...mark,
+      stay_ms: 12_500,
+      episode_duration_ms: 20_000,
+    });
     expect(result.episodes["0"][0]).toMatchObject({
       reviewer: "Alice",
       source: "episodes",
+      stay_ms: 12_500,
+      episode_duration_ms: 20_000,
     });
     expect(result.episodes["0"][0].reviewed_at).toMatch(/^\d{4}-.*\+08:00$/);
     expect(Object.keys((await readReviewCollection(browse)).datasets)).toEqual([
@@ -160,6 +166,35 @@ describe("collection review persistence", () => {
     });
     expect(replay).toEqual(first);
     expect(replay.episodes["0"]).toHaveLength(1);
+  });
+
+  test("repeated marking keeps the first saved stay snapshot", async () => {
+    const first = await updateEpisodeReview(browse, datasetA, {
+      ...mark,
+      stay_ms: 4_000,
+      episode_duration_ms: 10_000,
+    });
+    const repeated = await updateEpisodeReview(browse, datasetA, {
+      ...mark,
+      source: "urdf",
+      stay_ms: 8_000,
+      episode_duration_ms: 10_000,
+    });
+    expect(repeated.episodes["0"][0]).toEqual(first.episodes["0"][0]);
+  });
+
+  test("backfills dwell time for an existing legacy mark without changing its check time", async () => {
+    const first = await updateEpisodeReview(browse, datasetA, mark);
+    const replay = await updateEpisodeReview(browse, datasetA, {
+      ...mark,
+      stay_ms: 8_000,
+      episode_duration_ms: 10_000,
+    });
+    expect(replay.episodes["0"][0]).toMatchObject({
+      reviewed_at: first.episodes["0"][0].reviewed_at,
+      stay_ms: 8_000,
+      episode_duration_ms: 10_000,
+    });
   });
 
   test("undo removes only selected inspector and keeps other episodes and datasets", async () => {
@@ -293,6 +328,28 @@ describe("review API", () => {
       source: "urdf",
     });
   });
+  test("accepts and persists exactly twice the reported episode duration", async () => {
+    const response = await PUT(
+      request("PUT", { ...mark, stay_ms: 20_000, episode_duration_ms: 10_000 }),
+      context(),
+    );
+    expect(response.status).toBe(200);
+    expect((await response.json()).episodes["0"][0]).toMatchObject({
+      stay_ms: 20_000,
+      episode_duration_ms: 10_000,
+    });
+  });
+  test("accepts a zero-duration episode with zero elapsed time", async () => {
+    const response = await PUT(
+      request("PUT", { ...mark, stay_ms: 0, episode_duration_ms: 0 }),
+      context(),
+    );
+    expect(response.status).toBe(200);
+    expect((await response.json()).episodes["0"][0]).toMatchObject({
+      stay_ms: 0,
+      episode_duration_ms: 0,
+    });
+  });
   test("rejects arbitrary inspectors and invalid payloads without creating records", async () => {
     for (const body of [
       null,
@@ -303,6 +360,16 @@ describe("review API", () => {
       { ...mark, episode_index: 1.2 },
       { ...mark, source: "unknown" },
       { ...mark, reviewed: "true" },
+      { ...mark, stay_ms: 100, episode_duration_ms: 10 },
+      { ...mark, stay_ms: 100 },
+      { ...mark, episode_duration_ms: 100 },
+      { ...mark, stay_ms: 0, episode_duration_ms: -1 },
+      { ...mark, stay_ms: 0.5, episode_duration_ms: 1 },
+      {
+        ...mark,
+        stay_ms: Number.MAX_SAFE_INTEGER,
+        episode_duration_ms: Number.MAX_SAFE_INTEGER,
+      },
     ]) {
       expect((await PUT(request("PUT", body), context())).status).toBe(400);
     }
@@ -347,6 +414,28 @@ describe("review schema and counts", () => {
       "Alice",
     );
   });
+  test("requires paired integer dwell fields and caps dwell at twice episode duration", () => {
+    expect(
+      parseReviewUpdate({
+        ...mark,
+        stay_ms: 20_000,
+        episode_duration_ms: 10_000,
+      }),
+    ).toMatchObject({ stay_ms: 20_000, episode_duration_ms: 10_000 });
+    for (const input of [
+      { ...mark, stay_ms: 10 },
+      { ...mark, stay_ms: -1, episode_duration_ms: 1_000 },
+      { ...mark, stay_ms: 1.5, episode_duration_ms: 1_000 },
+      { ...mark, stay_ms: 2_001, episode_duration_ms: 1_000 },
+      {
+        ...mark,
+        reviewed: false,
+        stay_ms: 0,
+        episode_duration_ms: 1_000,
+      },
+    ])
+      expect(() => parseReviewUpdate(input)).toThrow();
+  });
   test("rejects corrupt records and counts unique episode checks per inspector", () => {
     const record = {
       reviewer: "Alice",
@@ -364,6 +453,8 @@ describe("review schema and counts", () => {
       ["Alice", 2],
       ["Bob", 1],
     ]);
+    expect(file.episodes["0"][0].stay_ms).toBeUndefined();
+    expect(file.episodes["0"][0].episode_duration_ms).toBeUndefined();
     expect(() =>
       parseReviewsFile({ version: 1, episodes: { "0": [record, record] } }),
     ).toThrow();
@@ -373,6 +464,20 @@ describe("review schema and counts", () => {
         episodes: { "0": [{ ...record, reviewed_at: "invalid" }] },
       }),
     ).toThrow();
+    for (const invalidDwell of [
+      { stay_ms: -1, episode_duration_ms: 1_000 },
+      { stay_ms: 1_001, episode_duration_ms: 500 },
+      { stay_ms: 1, episode_duration_ms: 1.5 },
+      { stay_ms: 1 },
+      { episode_duration_ms: 1_000 },
+    ]) {
+      expect(() =>
+        parseReviewsFile({
+          version: 1,
+          episodes: { "0": [{ ...record, ...invalidDwell }] },
+        }),
+      ).toThrow();
+    }
   });
 });
 
@@ -514,7 +619,11 @@ describe("homepage collection exports", () => {
     expect(await fs.exists(reviewsFilePath(browse))).toBe(false);
   });
   test("homepage exports JSON and CSV from the explicit current browse directory", async () => {
-    await updateEpisodeReview(browse, datasetA, mark);
+    await updateEpisodeReview(browse, datasetA, {
+      ...mark,
+      stay_ms: 12_500,
+      episode_duration_ms: 20_000,
+    });
     await updateEpisodeReview(browse, datasetA, {
       ...mark,
       reviewer: "Bob",
@@ -545,6 +654,8 @@ describe("homepage collection exports", () => {
     expect(text).toContain("+08:00");
     expect(text).toContain('"3D REPLAY"');
     expect(text).toContain('"已交叉复检"');
+    expect(text).toContain("停留时间（秒）");
+    expect(text).toContain('"12.5"');
     expect(text.trim().split("\r\n")).toHaveLength(5);
     expect(await fs.exists(reviewsFilePath(defaultRoot))).toBe(false);
   });

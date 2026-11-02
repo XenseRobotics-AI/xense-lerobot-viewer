@@ -39,6 +39,7 @@ type VideoPlayerProps = {
    * next episode's metadata/data slice is being resolved. */
   loading?: boolean;
   onVideosReady?: () => void;
+  onVisibleVideoFrameReady?: (ready: boolean) => void;
   /**
    * Mount the VQA bbox/keypoint overlay over each video. Off by default: the
    * overlay is annotation machinery and belongs only to the Annotations tab.
@@ -58,6 +59,7 @@ export const SimpleVideosPlayer = ({
   episodeId,
   loading = false,
   onVideosReady,
+  onVisibleVideoFrameReady,
   annotationOverlay = false,
 }: VideoPlayerProps) => {
   const t = useT();
@@ -167,6 +169,27 @@ export const SimpleVideosPlayer = ({
   useEffect(() => {
     onVideosReadyRef.current = onVideosReady;
   }, [onVideosReady]);
+  const onVisibleVideoFrameReadyRef = useRef(onVisibleVideoFrameReady);
+  useEffect(() => {
+    onVisibleVideoFrameReadyRef.current = onVisibleVideoFrameReady;
+  }, [onVisibleVideoFrameReady]);
+
+  useEffect(() => {
+    const video =
+      firstVisibleIdx >= 0 ? videoRefs.current[firstVisibleIdx] : null;
+    const info = firstVisibleIdx >= 0 ? videosInfo[firstVisibleIdx] : null;
+    const targetTime = info ? mediaTimeFromEpisodeTime(info, 0) : 0;
+    const ready =
+      !loading &&
+      !!video &&
+      !!info &&
+      !video.seeking &&
+      video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+      (!info.isSegmented ||
+        Math.abs(video.currentTime - targetTime) <=
+          THRESHOLDS.VIDEO_SEGMENT_BOUNDARY);
+    onVisibleVideoFrameReadyRef.current?.(ready);
+  }, [episodeId, firstVisibleIdx, loading, videosInfo]);
 
   useEffect(() => {
     if (!visible) {
@@ -328,6 +351,8 @@ export const SimpleVideosPlayer = ({
       const markVideoReady = () => {
         if (cancelled || countedAsReady) return;
         countedAsReady = true;
+        if (index === firstVisibleIdxRef.current)
+          onVisibleVideoFrameReadyRef.current?.(true);
         checkReady();
       };
 

@@ -19,6 +19,7 @@ import {
   type EpisodeReviewsFile,
   type EpisodeReviewsResponse,
   type ReviewSource,
+  type EpisodeStaySnapshot,
   type ReviewerProfile,
 } from "@/types/episode-review.types";
 
@@ -153,6 +154,7 @@ function useReviewState(repoId: string, browsePath: string) {
     episodeIndex: number,
     source: ReviewSource,
     reviewed: boolean,
+    stay?: EpisodeStaySnapshot,
   ) => {
     if (!loaded || !reviewers.includes(reviewer) || error) return;
     const key = reviewSaveKey(episodeIndex, reviewer);
@@ -164,6 +166,12 @@ function useReviewState(repoId: string, browsePath: string) {
       reviewer: reviewer.trim(),
       source,
       reviewed,
+      ...(reviewed && stay
+        ? {
+            stay_ms: Math.floor(stay.stay_ms),
+            episode_duration_ms: Math.floor(stay.episode_duration_ms),
+          }
+        : {}),
     };
     invalidateRequests();
     setPendingSaves((previous) => ({ ...previous, [key]: true }));
