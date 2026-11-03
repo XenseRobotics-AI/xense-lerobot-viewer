@@ -141,13 +141,15 @@ async function readReviewResponse(
     timeoutMs?: number;
     signal?: AbortSignal;
     operationId?: string;
+    verificationOnly?: boolean;
   } = {},
 ): Promise<Record<string, unknown>> {
-  const url = options.operationId
-    ? endpoint +
-      (endpoint.includes("?") ? "&" : "?") +
-      "operation_id=" +
-      encodeURIComponent(options.operationId)
+  const params = new URLSearchParams();
+  if (options.operationId) params.set("operation_id", options.operationId);
+  if (options.verificationOnly) params.set("verify", "1");
+  const query = params.toString();
+  const url = query
+    ? endpoint + (endpoint.includes("?") ? "&" : "?") + query
     : endpoint;
   return deadline(
     async (signal) => {
@@ -169,6 +171,23 @@ async function readReviewResponse(
     options.timeoutMs ?? 10000,
     options.signal,
   );
+}
+
+/** Read only operation evidence; roster failures must not prevent reconciliation. */
+export async function readReviewOperationState(
+  endpoint: string,
+  options: NonNullable<Parameters<typeof readReviewResponse>[1]> & {
+    operationId: string;
+  },
+): Promise<Pick<EpisodeReviewsResponse, "file" | "operation">> {
+  const raw = await readReviewResponse(endpoint, {
+    ...options,
+    verificationOnly: true,
+  });
+  return {
+    file: parseReviewsFile(raw.file),
+    operation: parseReviewOperationReceipt(raw.operation),
+  };
 }
 
 /** Validate everything consumed by React before updating any provider state. */
@@ -291,13 +310,11 @@ export async function saveReviewWithDeadline(
     // A lost response cannot establish that the write failed. Read once, never
     // replay PUT. An absent record cannot prove that an unmark was committed.
     try {
-      const raw = await readReviewResponse(endpoint, {
+      const { file, operation } = await readReviewOperationState(endpoint, {
         fetcher,
         timeoutMs: options.reconcileMs ?? 5000,
         operationId: payload.operation_id,
       });
-      const file = parseReviewsFile(raw.file);
-      const operation = parseReviewOperationReceipt(raw.operation);
       const resolution = reviewOperationResolution(file, payload, operation);
       if (resolution === "succeeded") {
         report("timeout_confirmed");

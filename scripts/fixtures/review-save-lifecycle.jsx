@@ -8,6 +8,8 @@ import { useEpisodeStayTime } from "../../src/hooks/use-episode-stay-time";
 import { makeLocalRepoId } from "../../src/utils/datasetRoute";
 import { reviewSaveKey } from "../../src/utils/reviewSaveQueue";
 import { REVIEW_PENDING_STORAGE_KEY } from "../../src/utils/reviewPendingOperations";
+import EpisodeReviewPanel from "../../src/components/episode-review-panel";
+import { LocaleProvider } from "../../src/context/locale-context";
 
 window.reviewFixtureInstance = crypto.randomUUID();
 
@@ -77,13 +79,22 @@ window.fetch = async (input, init = {}) => {
     backend.hangingReads = (backend.hangingReads ?? 0) + 1;
     return new Promise(() => {});
   }
+  if (url.searchParams.get("verify") === "1")
+    return Response.json({
+      file: state.file,
+      operation: state.operations.get(url.searchParams.get("operation_id")),
+    });
+  const profiles = backend.profiles ?? [
+    { name: "Alice", role: "inspector" },
+    { name: "Bob", role: "admin" },
+  ];
   return Response.json({
     file: state.file,
-    profiles: [
-      { name: "Alice", role: "inspector" },
-      { name: "Bob", role: "admin" },
-    ],
-    reviewers: backend.mode === "malformed-read" ? undefined : ["Alice", "Bob"],
+    profiles,
+    reviewers:
+      backend.mode === "malformed-read"
+        ? undefined
+        : profiles.map((profile) => profile.name),
     storage_path: "/fixture/reviews.json",
     dataset_key: ".",
     operation: state.operations.get(url.searchParams.get("operation_id")),
@@ -116,7 +127,20 @@ function ReviewHarness() {
   useEffect(() => {
     window.reviewFixture = state;
   });
-  return <output>{state.loaded ? "ready" : "loading"}</output>;
+  return (
+    <>
+      <output>{state.loaded ? "ready" : "loading"}</output>
+      <EpisodeReviewPanel
+        episodeId={7}
+        source="episodes"
+        disabled={false}
+        episodeDurationMs={10000}
+        readStayMs={() => 0}
+        readStaySnapshot={() => undefined}
+        readDiagnostics={() => window.stayFixture.readDiagnostics()}
+      />
+    </>
+  );
 }
 function App() {
   const [scope, setScope] = useState("/fixture-a");
@@ -137,7 +161,9 @@ function App() {
 }
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <App />
+    <LocaleProvider initialLocale="en">
+      <App />
+    </LocaleProvider>
   </React.StrictMode>,
 );
 const ensure = (condition, message) => {
@@ -149,7 +175,21 @@ async function until(condition, message) {
     if (condition()) return;
     await sleep(10);
   }
-  throw new Error("Timed out: " + message);
+  throw new Error(
+    "Timed out: " +
+      message +
+      " " +
+      JSON.stringify({
+        loaded: window.reviewFixture?.loaded,
+        reviewer: window.reviewFixture?.reviewer,
+        error: window.reviewFixture?.error,
+        saveErrors: window.reviewFixture?.saveErrors,
+        pending: window.reviewFixture?.pendingSaves,
+        uncertain: window.reviewFixture?.uncertainSaves,
+        browserErrors: window.reviewBrowserErrors,
+        puts: calls.length,
+      }),
+  );
 }
 const latest = (episode, reviewed = true) =>
   calls.findLast(
@@ -436,6 +476,105 @@ window.runReviewReloadTests = async () => {
     () => window.reviewFixture.file.episodes["7"],
     "healthy save after recovered reads",
   );
+  backend.mode = "hold";
+  await window.reviewFixture.mark(8, "episodes", true);
+  await window.reviewFixture.mark(10, "episodes", true);
+  const eight = reviewSaveKey(8, "Alice"),
+    ten = reviewSaveKey(10, "Alice");
+  await until(
+    () =>
+      window.reviewFixture.uncertainSaves[eight] &&
+      window.reviewFixture.uncertainSaves[ten],
+    "removed reviewer unknown operations",
+  );
+  backend.mode = "normal";
+  backend.profiles = [{ name: "Bob", role: "admin" }];
+  await window.reviewFixture.refresh();
+  await until(
+    () => window.reviewFixture.reviewer === "Bob",
+    "reviewer removed from roster",
+  );
+  const beforeVerification = calls.length;
+  const verify = (episode) => {
+    const operation = latest(episode).payload.operation_id;
+    const row = document.querySelector(
+      `[data-review-operation-id="${operation}"]`,
+    );
+    ensure(row, "no recovery entry for removed reviewer on another episode");
+    const button = row.querySelector("button");
+    ensure(
+      button && !button.disabled,
+      "recovery button cannot verify a removed reviewer",
+    );
+    button.click();
+  };
+  finishCall(latest(8), true);
+  verify(8);
+  await until(
+    () => !window.reviewFixture.uncertainSaves[eight],
+    "removed reviewer independent verification",
+  );
+  ensure(
+    window.reviewFixture.uncertainSaves[ten],
+    "orphan verification cleared a different target",
+  );
+  await until(
+    () =>
+      document
+        .querySelector('[data-review-verification-result="succeeded"]')
+        ?.textContent.includes("Alice"),
+    "orphan success result was not visible",
+  );
+  ensure(
+    calls.length === beforeVerification,
+    "orphan verification replayed a write",
+  );
+  backend.profiles = [];
+  await window.reviewFixture.refresh();
+  await until(() => window.reviewFixture.reviewer === "", "empty roster");
+  backend.mode = "malformed-read";
+  await window.reviewFixture.refresh();
+  await until(
+    () => window.reviewFixture.error,
+    "corrupt roster normal refresh error",
+  );
+  const pendingMessage = window.reviewFixture.saveErrors[ten];
+  verify(10);
+  await until(
+    () => window.reviewFixture.saveErrors[ten] !== pendingMessage,
+    "pending receipt verification finished",
+  );
+  ensure(
+    window.reviewFixture.uncertainSaves[ten],
+    "empty roster accepted a pending receipt",
+  );
+  finishCall(latest(10), false);
+  verify(10);
+  await until(
+    () => !window.reviewFixture.uncertainSaves[ten],
+    "empty roster recovery",
+  );
+  await until(
+    () =>
+      document
+        .querySelector('[data-review-verification-result="failed"]')
+        ?.textContent.includes("Alice"),
+    "orphan terminal failure disappeared without a visible result",
+  );
+  ensure(
+    calls.length === beforeVerification,
+    "empty roster verification replayed a write",
+  );
+  ensure(
+    window.reviewFixture.error,
+    "proof-only verification incorrectly cleared a metadata error",
+  );
+  backend.mode = "normal";
+  await window.reviewFixture.refresh();
+  await until(
+    () => !window.reviewFixture.error,
+    "roster configuration repaired",
+  );
   ensure(
     window.reviewBrowserErrors.length === 0,
     "browser errors after reload: " + window.reviewBrowserErrors.join("; "),
@@ -447,6 +586,11 @@ window.runReviewReloadTests = async () => {
       "malformed metadata preserves previous UI state and recovers",
       "manual verification interrupts hanging automatic refresh",
       "late commit after reload can be verified and later saves continue",
+      "removed reviewers and other episodes retain independent recovery controls",
+      "targeted recovery preserves other guards without replaying writes",
+      "an empty roster does not hide pending-operation verification",
+      "orphan verification reports success and terminal failure while pending stays protected",
+      "proof-only verification works during roster failure without hiding metadata errors",
     ],
   };
 };

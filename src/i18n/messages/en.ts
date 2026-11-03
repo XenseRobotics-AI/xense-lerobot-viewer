@@ -331,6 +331,12 @@ export const en = {
   "review.title": "Human inspection",
   "review.loading": "Loading inspection records…",
   "review.verifySave": "Refresh and verify",
+  "review.otherVerifications": "Other unconfirmed saves ({count})",
+  "review.verificationTarget": "Episode {episode} · {reviewer}",
+  "review.verificationSucceeded":
+    "Episode {episode} · {reviewer}: operation confirmed. Current records have been refreshed.",
+  "review.verificationFailed":
+    "Episode {episode} · {reviewer}: the request ended with an error. Current records have been refreshed.",
   "review.saveNotSent":
     "This mark was still queued when the page was left and was not sent. Verify the current state before submitting it again.",
   "review.recoveryUnavailable":

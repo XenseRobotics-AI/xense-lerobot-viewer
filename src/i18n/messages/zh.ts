@@ -321,6 +321,12 @@ export const zh: Record<MessageKey, string> = {
   "review.title": "人工质检",
   "review.loading": "正在加载质检记录…",
   "review.verifySave": "刷新核对",
+  "review.otherVerifications": "其他待核对操作（{count}）",
+  "review.verificationTarget": "质检员 {reviewer} · Episode {episode}",
+  "review.verificationSucceeded":
+    "Episode {episode} · {reviewer}：操作已确认，当前记录已刷新。",
+  "review.verificationFailed":
+    "Episode {episode} · {reviewer}：请求已结束但发生错误，当前记录已刷新。",
   "review.saveNotSent":
     "离开页面时此标记尚未发送，已取消排队；请核对当前状态后重新提交。",
   "review.recoveryUnavailable":

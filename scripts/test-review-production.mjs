@@ -2,6 +2,7 @@
 import {
   saveReviewWithDeadline,
   ReviewSaveUnknownError,
+  ReviewRejectedError,
   clientReviewDiagnostics,
 } from "../src/utils/reviewDiagnosticsClient.ts";
 import fs from "node:fs/promises";
@@ -170,6 +171,53 @@ try {
   checks.push("real unmark confirmed by receipt rather than empty file alone");
   const finalMark = payload(true, 1);
   await put(finalMark);
+  const rosterFile = path.join(root, ".xense-viewer", "reviewers.json");
+  const savedRoster = await fs.readFile(rosterFile, "utf8");
+  const savedReviews = await fs.readFile(reviewFile, "utf8");
+  let rejectedPuts = 0;
+  const verifyRejected = async (body, expectedStatus) => {
+    const fetcher = async (url, init) => {
+      if (init?.method === "PUT") {
+        rejectedPuts++;
+        const response = await fetch(url, init);
+        assert.equal(response.status, expectedStatus);
+        await response.text();
+        throw new TypeError("Lost rejection response");
+      }
+      return fetch(url, init);
+    };
+    const outcome = await saveReviewWithDeadline(
+      base + route,
+      {
+        ...body,
+        diagnostics: clientReviewDiagnostics(
+          body.reviewed ? "not_ready" : "unmark",
+        ),
+      },
+      { fetcher },
+    ).catch((error) => error);
+    assert.ok(outcome instanceof ReviewRejectedError);
+    assert.equal(await fs.readFile(reviewFile, "utf8"), savedReviews);
+    const evidence = await (
+      await fetch(base + route + "?verify=1&operation_id=" + body.operation_id)
+    ).json();
+    assert.equal(evidence.operation.state, "failed");
+  };
+  await fs.writeFile(rosterFile, JSON.stringify(["Second Fixture"]));
+  await verifyRejected(payload(false, 1), 400);
+  assert.equal(rejectedPuts, 1);
+  checks.push(
+    "a lost rejection for a removed reviewer is terminal and preserves existing reviews",
+  );
+  await fs.writeFile(rosterFile, "{broken configuration");
+  await verifyRejected(payload(true, 0), 500);
+  assert.equal(rejectedPuts, 2);
+  assert.equal((await fetch(base + route)).status, 500);
+  assert.equal((await fetch(base + route + "?verify=1")).status, 400);
+  checks.push(
+    "proof-only verification survives corrupt rosters while ordinary reads still report configuration errors",
+  );
+  await fs.writeFile(rosterFile, savedRoster);
   await Bun.sleep(1400);
   const health = await (await fetch(base + "/api/review-diagnostics")).json();
   assert.equal(health.dropped, 0);
@@ -334,6 +382,7 @@ try {
     ),
   );
 } catch (error) {
+  console.error("Completed checks:", checks);
   console.error(output);
   throw error;
 } finally {

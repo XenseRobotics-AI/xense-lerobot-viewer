@@ -80,6 +80,9 @@ export async function GET(req: NextRequest, ctx: Context): Promise<Response> {
     const operationId = req.nextUrl.searchParams.get("operation_id");
     if (operationId !== null && !isReviewOperationId(operationId))
       throw new ReviewStoreError("Invalid operation_id", 400);
+    const verificationOnly = req.nextUrl.searchParams.get("verify") === "1";
+    if (verificationOnly && !operationId)
+      throw new ReviewStoreError("Verification requires operation_id", 400);
     if (req.nextUrl.searchParams.get("download") === "1")
       return Response.json(await readReviewCollection(browsePath), {
         headers: {
@@ -87,7 +90,6 @@ export async function GET(req: NextRequest, ctx: Context): Promise<Response> {
           "Content-Disposition": 'attachment; filename="episode-reviews.json"',
         },
       });
-    const profiles = await readReviewerProfiles(browsePath);
     const operation = operationId
       ? reviewOperationReceipts().get(
           reviewOperationScope(browsePath, key),
@@ -95,6 +97,10 @@ export async function GET(req: NextRequest, ctx: Context): Promise<Response> {
         )
       : undefined;
     const file = await readEpisodeReviews(browsePath, root);
+    // Evidence must remain readable if the roster changes after a save.
+    if (verificationOnly)
+      return Response.json({ file, operation }, { headers });
+    const profiles = await readReviewerProfiles(browsePath);
     return Response.json(
       {
         profiles,
@@ -180,15 +186,7 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
     const { root, browsePath, key } = await scope(req, ctx);
     event.dataset_id = reviewDiagnosticIdentity(root);
     event.request_phase = "profile";
-    const profile = (await readReviewerProfiles(browsePath)).find(
-      (entry) => entry.name === update.reviewer,
-    );
-    if (!profile)
-      throw new ReviewStoreError(
-        "Select a preset inspector from the dropdown",
-        400,
-      );
-    event.request_phase = "store";
+    // Register first so roster failures become terminal, verifiable outcomes.
     if (update.operation_id) {
       const registration = reviewOperationReceipts().begin(
         reviewOperationScope(browsePath, key),
@@ -225,6 +223,15 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
         );
       }
     }
+    const profile = (await readReviewerProfiles(browsePath)).find(
+      (entry) => entry.name === update.reviewer,
+    );
+    if (!profile)
+      throw new ReviewStoreError(
+        "Select a preset inspector from the dropdown",
+        400,
+      );
+    event.request_phase = "store";
     const file = await updateEpisodeReview(
       browsePath,
       root,

@@ -20,6 +20,7 @@ import {
   reportReviewSaveResult,
   saveReviewWithDeadline,
   readEpisodeReviewState,
+  readReviewOperationState,
   ReviewSaveUnknownError,
   ReviewRejectedError,
 } from "@/utils/reviewDiagnosticsClient";
@@ -83,33 +84,42 @@ function useReviewState(repoId: string, browsePath: string) {
       const id = ++sequence.current;
       try {
         const target = verifyKey ? uncertain.current.get(verifyKey) : undefined;
-        const result = await readEpisodeReviewState(endpoint, {
-          signal: controller.signal,
-          operationId: target?.operation_id,
-        });
+        const metadata = target
+          ? undefined
+          : await readEpisodeReviewState(endpoint, {
+              signal: controller.signal,
+            });
+        const result = target
+          ? await readReviewOperationState(endpoint, {
+              signal: controller.signal,
+              operationId: target.operation_id,
+            })
+          : metadata!;
         const next = result.file;
         if (id !== sequence.current) return;
-        setReviewers((previous) =>
-          JSON.stringify(previous) === JSON.stringify(result.reviewers)
-            ? previous
-            : result.reviewers,
-        );
-        setProfiles((previous) =>
-          JSON.stringify(previous) === JSON.stringify(result.profiles)
-            ? previous
-            : result.profiles,
-        );
-        setStoragePath(result.storage_path);
-        setReviewerState((previous) =>
-          result.reviewers.includes(previous)
-            ? previous
-            : (result.reviewers[0] ?? ""),
-        );
+        if (metadata) {
+          setReviewers((previous) =>
+            JSON.stringify(previous) === JSON.stringify(metadata.reviewers)
+              ? previous
+              : metadata.reviewers,
+          );
+          setProfiles((previous) =>
+            JSON.stringify(previous) === JSON.stringify(metadata.profiles)
+              ? previous
+              : metadata.profiles,
+          );
+          setStoragePath(metadata.storage_path);
+          setReviewerState((previous) =>
+            metadata.reviewers.includes(previous)
+              ? previous
+              : (metadata.reviewers[0] ?? ""),
+          );
+          setLoaded(true);
+          setError(null);
+        }
         setFile((previous) =>
           JSON.stringify(previous) === JSON.stringify(next) ? previous : next,
         );
-        setLoaded(true);
-        setError(null);
         if (verifyKey && target) {
           const resolution = reviewOperationResolution(
             next,
@@ -153,6 +163,11 @@ function useReviewState(repoId: string, browsePath: string) {
                 .message,
             }));
           }
+          return {
+            episode: target.episode_index,
+            reviewer: target.reviewer,
+            resolution,
+          };
         }
       } catch (error) {
         if (!controller.signal.aborted && id === sequence.current)
@@ -383,6 +398,12 @@ function useReviewState(repoId: string, browsePath: string) {
     loaded,
     pendingSaves,
     uncertainSaves,
+    pendingVerifications: [...uncertain.current].map(([key, target]) => ({
+      key,
+      episode: target.episode_index,
+      reviewer: target.reviewer,
+      operationId: target.operation_id,
+    })),
     saveErrors,
     error,
     recoveryWarning,

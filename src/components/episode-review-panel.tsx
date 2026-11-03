@@ -41,6 +41,7 @@ export default function EpisodeReviewPanel({
     loaded,
     pendingSaves,
     uncertainSaves,
+    pendingVerifications,
     saveErrors,
     error: loadError,
     recoveryWarning,
@@ -51,6 +52,33 @@ export default function EpisodeReviewPanel({
   const saving = !!pendingSaves[key];
   const error = loadError ?? saveErrors[key];
   const pendingCount = Object.keys(pendingSaves).length;
+  const otherVerifications = pendingVerifications.filter(
+    (target) => target.key !== key,
+  );
+  const [verifying, setVerifying] = useState(false);
+  const [verificationResult, setVerificationResult] = useState<{
+    episode: number;
+    reviewer: string;
+    failed: boolean;
+  } | null>(null);
+  const verifyPending = async (targetKey: string) => {
+    setVerificationResult(null);
+    setVerifying(true);
+    try {
+      const result = await refresh(targetKey);
+      if (
+        result &&
+        (result.resolution === "succeeded" || result.resolution === "failed")
+      )
+        setVerificationResult({
+          episode: result.episode,
+          reviewer: result.reviewer,
+          failed: result.resolution === "failed",
+        });
+    } finally {
+      setVerifying(false);
+    }
+  };
   const inputId = useId();
   const [, setStayTick] = useState(0);
   const reviews = file.episodes[String(episodeId)] ?? [];
@@ -191,6 +219,70 @@ export default function EpisodeReviewPanel({
           {recoveryWarning}
         </p>
       )}
+      {otherVerifications.length > 0 && (
+        <details
+          open
+          className="mt-2 rounded border border-amber-400/25 p-2 text-amber-200"
+        >
+          <summary className="cursor-pointer">
+            {t("review.otherVerifications", {
+              count: otherVerifications.length,
+            })}
+          </summary>
+          <ul className="mt-2 max-h-48 space-y-2 overflow-y-auto">
+            {otherVerifications.map((target) => (
+              <li
+                key={target.operationId}
+                data-review-operation-id={target.operationId}
+                className="min-w-0 rounded border border-white/10 p-2"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="min-w-0 break-words">
+                    {t("review.verificationTarget", {
+                      episode: target.episode,
+                      reviewer: target.reviewer,
+                    })}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={pendingCount > 0 || verifying}
+                    onClick={() => void verifyPending(target.key)}
+                    className="shrink-0 underline disabled:opacity-40"
+                  >
+                    {t("review.verifySave")}
+                  </button>
+                </div>
+                <p className="mt-1 break-all text-[10px] text-slate-400">
+                  {saveErrors[target.key] ?? target.operationId}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {verificationResult && (
+        <p
+          role="status"
+          data-review-verification-result={
+            verificationResult.failed ? "failed" : "succeeded"
+          }
+          className={
+            verificationResult.failed
+              ? "mt-2 break-words text-red-300"
+              : "mt-2 break-words text-emerald-300"
+          }
+        >
+          {t(
+            verificationResult.failed
+              ? "review.verificationFailed"
+              : "review.verificationSucceeded",
+            {
+              episode: verificationResult.episode,
+              reviewer: verificationResult.reviewer,
+            },
+          )}
+        </p>
+      )}
       <details className="mt-2 text-[10px] text-slate-400">
         <summary className="cursor-pointer hover:text-slate-200">
           {t("review.details", { count: reviews.length })}
@@ -260,10 +352,10 @@ export default function EpisodeReviewPanel({
           {t("review.error")} <span className="break-all">{error}</span>{" "}
           <button
             type="button"
-            disabled={saving}
+            disabled={saving || pendingCount > 0 || verifying}
             onClick={() => {
-              if (loadError || uncertainSaves[key])
-                void refresh(uncertainSaves[key] ? key : undefined);
+              if (uncertainSaves[key]) void verifyPending(key);
+              else if (loadError) void refresh();
               else saveMark(!mine);
             }}
             className="underline"
