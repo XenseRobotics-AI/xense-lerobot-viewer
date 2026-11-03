@@ -1,4 +1,5 @@
 import { reviewTimestamp } from "@/utils/reviewTime";
+import { isReviewOperationId } from "./review-diagnostics.types";
 
 export const REVIEW_FILENAME = "episode-reviews.json";
 export const MAX_REVIEWER_LENGTH = 80;
@@ -30,6 +31,7 @@ export type EpisodeStaySnapshot = {
 };
 
 export interface EpisodeReview {
+  operation_id?: string;
   reviewer: string;
   reviewed_at: string;
   role?: ReviewerRole;
@@ -59,6 +61,7 @@ export interface EpisodeReviewsResponse {
 }
 
 export interface ReviewUpdate {
+  operation_id?: string;
   episode_index: number;
   reviewer: string;
   source: ReviewSource;
@@ -73,6 +76,8 @@ export function parseReviewUpdate(input: unknown): ReviewUpdate {
     throw new Error("A review object is required");
   }
   const raw = input as Record<string, unknown>;
+  if (raw.operation_id !== undefined && !isReviewOperationId(raw.operation_id))
+    throw new Error("Invalid review operation_id");
   if (
     typeof raw.episode_index !== "number" ||
     !Number.isSafeInteger(raw.episode_index) ||
@@ -117,6 +122,9 @@ export function parseReviewUpdate(input: unknown): ReviewUpdate {
   }
   return {
     episode_index: raw.episode_index,
+    ...(isReviewOperationId(raw.operation_id)
+      ? { operation_id: raw.operation_id }
+      : {}),
     reviewer: raw.reviewer.trim(),
     source: raw.source,
     reviewed: raw.reviewed,
@@ -179,6 +187,9 @@ export function parseReviewsFile(input: unknown): EpisodeReviewsFile {
       reviewers.add(validated.reviewer);
       return {
         reviewer: validated.reviewer,
+        ...(validated.operation_id
+          ? { operation_id: validated.operation_id }
+          : {}),
         source: validated.source,
         reviewed_at: reviewTimestamp(entry.reviewed_at),
         ...(entry.role ? { role: entry.role as ReviewerRole } : {}),

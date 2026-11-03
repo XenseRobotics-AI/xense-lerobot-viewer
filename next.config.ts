@@ -1,7 +1,32 @@
 import type { NextConfig } from "next";
-import packageJson from "./package.json";
+import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 
+function reviewBuildVersion(): string {
+  const provided =
+    process.env.REVIEW_BUILD_ID ??
+    process.env.VERCEL_GIT_COMMIT_SHA ??
+    process.env.GITHUB_SHA;
+  if (provided) return provided.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80);
+  try {
+    const sha = execFileSync("git", ["rev-parse", "--short=12", "HEAD"], {
+      encoding: "utf8",
+      timeout: 1000,
+    }).trim();
+    const dirty = execFileSync(
+      "git",
+      ["status", "--porcelain", "--untracked-files=no"],
+      { encoding: "utf8", timeout: 1000 },
+    ).trim();
+    return sha + (dirty ? "-dirty" : "");
+  } catch {
+    return "unknown";
+  }
+}
+
+const reviewBuild = reviewBuildVersion();
 const nextConfig: NextConfig = {
+  env: { NEXT_PUBLIC_REVIEW_BUILD: reviewBuild },
   typescript: {
     ignoreBuildErrors: true,
   },
@@ -47,7 +72,8 @@ const nextConfig: NextConfig = {
   experimental: {
     optimizePackageImports: ["react-icons", "recharts"],
   },
-  generateBuildId: () => packageJson.version,
+  generateBuildId: () =>
+    reviewBuild === "unknown" ? randomUUID() : reviewBuild,
 };
 
 export default nextConfig;

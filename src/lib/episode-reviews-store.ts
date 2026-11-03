@@ -1,4 +1,8 @@
 import { reviewTimestamp } from "@/utils/reviewTime";
+import type {
+  ReviewStoreStage,
+  ReviewStoreTrace,
+} from "@/types/review-diagnostics.types";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -135,7 +139,25 @@ export async function updateEpisodeReview(
   browsePath: string,
   datasetPath: string,
   input: ReviewUpdate,
+  trace?: ReviewStoreTrace,
 ): Promise<EpisodeReviewsFile> {
+  const phase = async <T>(
+    stage: ReviewStoreStage,
+    work: () => Promise<T>,
+  ): Promise<T> => {
+    const started = performance.now();
+    if (trace) trace.phase = stage;
+    try {
+      return await work();
+    } catch (error) {
+      if (trace && !trace.failed_phase) trace.failed_phase = stage;
+      throw error;
+    } finally {
+      if (trace)
+        trace.timings[stage] =
+          Math.round((performance.now() - started) * 100) / 100;
+    }
+  };
   const update = parseReviewUpdate(input);
   if (input.role !== undefined && !REVIEWER_ROLES.includes(input.role))
     throw new ReviewStoreError("Invalid reviewer role", 400);
@@ -143,7 +165,7 @@ export async function updateEpisodeReview(
   const target = await reviewPath(browsePath, true);
   let lock;
   try {
-    lock = await acquireReviewWriteLock(target);
+    lock = await phase("lock_wait", () => acquireReviewWriteLock(target));
   } catch (error) {
     if (error instanceof ReviewWriteLockError)
       throw new ReviewStoreError(error.message, error.status);
@@ -151,7 +173,7 @@ export async function updateEpisodeReview(
   }
   const tmp = `${target}.tmp-${randomUUID()}`;
   try {
-    const collection = await readFile(target);
+    const collection = await phase("read", () => readFile(target));
     const file = collection.datasets[datasetKey] ?? {
       version: 1,
       episodes: {},
@@ -168,14 +190,19 @@ export async function updateEpisodeReview(
         !existingRecord ||
         existingRecord.stay_ms !== undefined ||
         update.stay_ms === undefined
-      )
+      ) {
+        if (trace) trace.unchanged = true;
         return file;
+      }
       file.episodes[key] = records.map((entry) =>
         entry.reviewer === update.reviewer
           ? {
               ...entry,
               stay_ms: update.stay_ms,
               episode_duration_ms: update.episode_duration_ms,
+              ...(update.operation_id
+                ? { operation_id: update.operation_id }
+                : {}),
             }
           : entry,
       );
@@ -183,12 +210,17 @@ export async function updateEpisodeReview(
       file.updated_at = now;
       collection.datasets[datasetKey] = file;
       collection.updated_at = now;
-      await fs.writeFile(tmp, JSON.stringify(collection, null, 2) + "\n", {
-        encoding: "utf8",
-        flag: "wx",
+      await phase("write", () =>
+        fs.writeFile(tmp, JSON.stringify(collection, null, 2) + "\n", {
+          encoding: "utf8",
+          flag: "wx",
+        }),
+      );
+      await phase("commit", async () => {
+        lock.assertHeld();
+        await fs.rename(tmp, target);
+        if (trace) trace.committed = true;
       });
-      lock.assertHeld();
-      await fs.rename(tmp, target);
       return file;
     }
     const now = reviewTimestamp();
@@ -198,6 +230,7 @@ export async function updateEpisodeReview(
         reviewer: update.reviewer,
         reviewed_at: now,
         source: update.source,
+        ...(update.operation_id ? { operation_id: update.operation_id } : {}),
         ...(input.role ? { role: input.role } : {}),
         ...(update.stay_ms !== undefined
           ? {
@@ -211,14 +244,21 @@ export async function updateEpisodeReview(
     file.updated_at = now;
     collection.datasets[datasetKey] = file;
     collection.updated_at = now;
-    await fs.writeFile(tmp, JSON.stringify(collection, null, 2) + "\n", {
-      encoding: "utf8",
-      flag: "wx",
+    await phase("write", () =>
+      fs.writeFile(tmp, JSON.stringify(collection, null, 2) + "\n", {
+        encoding: "utf8",
+        flag: "wx",
+      }),
+    );
+    await phase("commit", async () => {
+      lock.assertHeld();
+      await fs.rename(tmp, target);
+      if (trace) trace.committed = true;
     });
-    lock.assertHeld();
-    await fs.rename(tmp, target);
     return file;
   } finally {
-    await fs.rm(tmp, { force: true }).finally(() => lock.release());
+    await phase("cleanup", () =>
+      fs.rm(tmp, { force: true }).finally(() => lock.release()),
+    );
   }
 }

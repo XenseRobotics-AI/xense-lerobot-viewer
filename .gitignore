@@ -53,6 +53,7 @@ __pycache__/
 # Local runtime data, including personal reviewer rosters and inspection records.
 # Usually under a browsed dataset directory outside this repository.
 .xense-viewer/
+.xense-diagnostics/
 
 # Local Python env for scripts/ (see scripts/requirements.txt)
 .venv/

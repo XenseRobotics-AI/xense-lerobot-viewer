@@ -320,6 +320,9 @@ export const zh: Record<MessageKey, string> = {
   "review.undoShort": "撤销标记",
   "review.title": "人工质检",
   "review.loading": "正在加载质检记录…",
+  "review.verifySave": "刷新核对",
+  "review.saveUnknown":
+    "保存结果尚未确认，请刷新核对后再操作；不要直接重复提交。操作编号",
   "review.checked": "已检查",
   "review.unchecked": "未检查",
   "review.reviewer": "质检员",

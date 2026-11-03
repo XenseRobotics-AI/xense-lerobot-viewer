@@ -1183,6 +1183,8 @@ function EpisodeViewerInner({
                   disabled={episodeTransitioning || !!episodeError}
                   episodeDurationMs={episodeStay.episodeDurationMs}
                   readStayMs={episodeStay.readStayMs}
+                  readStaySnapshot={episodeStay.readStaySnapshot}
+                  readDiagnostics={episodeStay.readDiagnostics}
                 />
               ) : null
             }

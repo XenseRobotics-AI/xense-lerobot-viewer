@@ -1,0 +1,228 @@
+import { describe, expect, test } from "bun:test";
+import {
+  clientReviewDiagnostics,
+  createReviewId,
+  ReviewTimerProbe,
+  saveReviewWithDeadline,
+  ReviewSaveUnknownError,
+} from "../reviewDiagnosticsClient";
+import { ReviewSaveQueue } from "../reviewSaveQueue";
+import { isReviewOperationId } from "@/types/review-diagnostics.types";
+
+const payload = (reviewed = true) => ({
+  episode_index: 2,
+  reviewer: "Alice",
+  source: "episodes" as const,
+  reviewed,
+  operation_id: createReviewId(),
+  diagnostics: clientReviewDiagnostics(reviewed ? "present" : "unmark"),
+});
+const file = (operation_id?: string) => ({
+  version: 1,
+  episodes: {
+    "2": [
+      {
+        reviewer: "Alice",
+        source: "episodes",
+        reviewed_at: "2026-11-03T08:00:00+08:00",
+        ...(operation_id ? { operation_id } : {}),
+      },
+    ],
+  },
+});
+const hang = () => new Promise<Response>(() => {});
+const options = { timeoutMs: 5, reconcileMs: 5 };
+
+describe("review timer diagnostic summary", () => {
+  test("correlation IDs are valid and sessions remain stable", () => {
+    expect(isReviewOperationId(createReviewId())).toBe(true);
+    expect(createReviewId()).not.toBe(createReviewId());
+    expect(clientReviewDiagnostics("present").session_id).toBe(
+      clientReviewDiagnostics("not_ready").session_id,
+    );
+  });
+  test("tracks readiness, visibility and storage failures without event history", () => {
+    const probe = new ReviewTimerProbe();
+    probe.transition("surface_not_ready");
+    probe.transition("tracking");
+    probe.transition("tracking");
+    probe.transition("hidden");
+    probe.transition("tracking");
+    probe.storageFailure("read");
+    probe.storageFailure("write");
+    probe.restored();
+    expect(probe.read()).toEqual({
+      state: "tracking",
+      starts: 2,
+      pauses: 1,
+      storage_read_failures: 1,
+      storage_write_failures: 1,
+      restored: true,
+    });
+    const copy = probe.read();
+    copy.starts = 99;
+    expect(probe.read().starts).toBe(2);
+  });
+  test("counters saturate rather than accumulating unbounded data", () => {
+    const probe = new ReviewTimerProbe();
+    for (let i = 0; i < 70000; i++) probe.storageFailure("write");
+    expect(probe.read().storage_write_failures).toBe(65535);
+  });
+});
+
+describe("review write deadline and reconciliation", () => {
+  test("normal save performs one PUT and no extra diagnostic request", async () => {
+    const body = payload();
+    let calls = 0,
+      reports = 0;
+    const fetcher = (async (_url, init) => {
+      calls++;
+      expect(init?.method).toBe("PUT");
+      return Response.json(file(body.operation_id));
+    }) as typeof fetch;
+    const result = await saveReviewWithDeadline("/reviews", body, {
+      fetcher,
+      report: () => {
+        reports++;
+      },
+    });
+    expect(result.episodes["2"][0].operation_id).toBe(body.operation_id);
+    expect(calls).toBe(1);
+    expect(reports).toBe(0);
+  });
+  test("response loss after commit is confirmed only by the exact operation ID", async () => {
+    const body = payload();
+    const methods: (string | undefined)[] = [];
+    let result = "";
+    const fetcher = (async (_url, init) => {
+      methods.push(init?.method);
+      return init?.method === "PUT"
+        ? hang()
+        : Response.json({ file: file(body.operation_id) });
+    }) as typeof fetch;
+    await saveReviewWithDeadline("/reviews", body, {
+      ...options,
+      fetcher,
+      report: (event) => {
+        result = event.result;
+      },
+    });
+    expect(methods).toEqual(["PUT", undefined]);
+    expect(result).toBe("timeout_confirmed");
+  });
+  test("a matching old reviewer entry cannot prove that this operation committed", async () => {
+    const body = payload();
+    let puts = 0;
+    const fetcher = (async (_url, init) => {
+      if (init?.method === "PUT") {
+        puts++;
+        return hang();
+      }
+      return Response.json({ file: file(createReviewId()) });
+    }) as typeof fetch;
+    await expect(
+      saveReviewWithDeadline("/reviews", body, { ...options, fetcher }),
+    ).rejects.toBeInstanceOf(ReviewSaveUnknownError);
+    expect(puts).toBe(1);
+  });
+  test("unmark absence cannot be mistaken for an acknowledged deletion", async () => {
+    const fetcher = (async (_url, init) =>
+      init?.method === "PUT"
+        ? hang()
+        : Response.json({
+            file: { version: 1, episodes: {} },
+          })) as typeof fetch;
+    await expect(
+      saveReviewWithDeadline("/reviews", payload(false), {
+        ...options,
+        fetcher,
+      }),
+    ).rejects.toBeInstanceOf(ReviewSaveUnknownError);
+  });
+  test("network errors and post-commit 500 responses can be reconciled", async () => {
+    for (const response of ["network", "server"]) {
+      const body = payload();
+      const fetcher = (async (_url, init) => {
+        if (init?.method === "PUT") {
+          if (response === "network") throw new TypeError("disconnected");
+          return new Response(null, { status: 500 });
+        }
+        return Response.json({ file: file(body.operation_id) });
+      }) as typeof fetch;
+      expect(
+        (
+          await saveReviewWithDeadline("/reviews", body, {
+            ...options,
+            fetcher,
+          })
+        ).episodes["2"][0].operation_id,
+      ).toBe(body.operation_id);
+    }
+  });
+  test("a definite validation rejection is not retried or read back", async () => {
+    let calls = 0;
+    const fetcher = (async () => {
+      calls++;
+      return Response.json({ error: "Select inspector" }, { status: 400 });
+    }) as typeof fetch;
+    await expect(
+      saveReviewWithDeadline("/reviews", payload(), { ...options, fetcher }),
+    ).rejects.toThrow("Select inspector");
+    expect(calls).toBe(1);
+  });
+  test("deadline includes a hanging response body and a hanging readback", async () => {
+    const signals: AbortSignal[] = [];
+    const fetcher = (async (_url, init) => {
+      signals.push(init!.signal as AbortSignal);
+      return { ok: true, json: () => new Promise(() => {}) } as Response;
+    }) as typeof fetch;
+    await expect(
+      saveReviewWithDeadline("/reviews", payload(), { ...options, fetcher }),
+    ).rejects.toBeInstanceOf(ReviewSaveUnknownError);
+    expect(signals).toHaveLength(2);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+  test("a timed-out item does not block the next captured target in the save queue", async () => {
+    const queue = new ReviewSaveQueue();
+    const firstBody = payload(),
+      secondBody = { ...payload(), episode_index: 3 };
+    const targets: number[] = [];
+    const first = queue.enqueue("first", async () => {
+      await saveReviewWithDeadline("/reviews", firstBody, {
+        ...options,
+        fetcher: hang as typeof fetch,
+      });
+    });
+    const firstOutcome = first.catch((error: unknown) => error);
+    const second = queue.enqueue("second", async () => {
+      await saveReviewWithDeadline("/reviews", secondBody, {
+        fetcher: (async (_url, init) => {
+          targets.push(JSON.parse(init!.body as string).episode_index);
+          return Response.json({ version: 1, episodes: {} });
+        }) as typeof fetch,
+      });
+    });
+    expect(await firstOutcome).toBeInstanceOf(ReviewSaveUnknownError);
+    await second;
+    expect(targets).toEqual([3]);
+    expect(queue.size).toBe(0);
+  });
+  test("diagnostic reporter exceptions cannot invalidate confirmed writes", async () => {
+    const body = payload();
+    const fetcher = (async (_url, init) =>
+      init?.method === "PUT"
+        ? hang()
+        : Response.json({ file: file(body.operation_id) })) as typeof fetch;
+    expect(
+      (
+        await saveReviewWithDeadline("/reviews", body, {
+          ...options,
+          fetcher,
+          report: () => {
+            throw new Error("log failed");
+          },
+        })
+      ).episodes["2"][0].operation_id,
+    ).toBe(body.operation_id);
+  });
+});

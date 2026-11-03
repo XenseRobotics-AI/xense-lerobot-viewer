@@ -29,6 +29,8 @@ import {
 
 import { GET as collectionGET } from "@/app/api/local-datasets/reviews/route";
 import { reviewCollectionCsv } from "../episode-reviews-export";
+import { ReviewDiagnosticWriter } from "../review-diagnostics";
+import type { ReviewStoreTrace } from "@/types/review-diagnostics.types";
 
 let tmp: string;
 let defaultRoot: string;
@@ -108,6 +110,147 @@ async function roster(names: unknown) {
 }
 
 describe("collection review persistence", () => {
+  test("operation IDs survive readback without replacing idempotent original marks", async () => {
+    const operation_id = crypto.randomUUID();
+    const trace: ReviewStoreTrace = { timings: {} };
+    await updateEpisodeReview(
+      browse,
+      datasetA,
+      { ...mark, operation_id, stay_ms: 0, episode_duration_ms: 1000 },
+      trace,
+    );
+    expect(trace.committed).toBe(true);
+    for (const stage of [
+      "lock_wait",
+      "read",
+      "write",
+      "commit",
+      "cleanup",
+    ] as const)
+      expect(trace.timings[stage]).toBeGreaterThanOrEqual(0);
+    const saved = (await readEpisodeReviews(browse, datasetA)).episodes["0"][0];
+    expect(saved.operation_id).toBe(operation_id);
+    expect(saved.stay_ms).toBe(0);
+    const duplicate: ReviewStoreTrace = { timings: {} };
+    const again = await updateEpisodeReview(
+      browse,
+      datasetA,
+      { ...mark, operation_id: crypto.randomUUID() },
+      duplicate,
+    );
+    expect(again.episodes["0"][0]).toEqual(saved);
+    expect(duplicate.unchanged).toBe(true);
+    expect(duplicate.committed).toBeUndefined();
+    expect(() =>
+      parseReviewUpdate({ ...mark, operation_id: "unsafe\nidentifier" }),
+    ).toThrow();
+  });
+
+  test("corrupt store diagnostics retain the failed read phase and release the lock", async () => {
+    const target = reviewsFilePath(browse);
+    await fs.writeFile(target, "invalid JSON");
+    const trace: ReviewStoreTrace = { timings: {} };
+    await expect(
+      updateEpisodeReview(browse, datasetA, mark, trace),
+    ).rejects.toThrow();
+    expect(trace.failed_phase).toBe("read");
+    expect(trace.timings.cleanup).toBeGreaterThanOrEqual(0);
+    expect(await fs.readFile(target, "utf8")).toBe("invalid JSON");
+  });
+
+  test("route records sanitized stages while independent diagnostic disk failures never fail saves", async () => {
+    const globalState = globalThis as typeof globalThis & {
+      __reviewDiagnostics?: { writer: ReviewDiagnosticWriter; secret: string };
+    };
+    const previous = globalState.__reviewDiagnostics;
+    const batches: string[] = [];
+    const writer = new ReviewDiagnosticWriter(async (lines) => {
+      batches.push(lines);
+      throw new Error("disk full");
+    });
+    globalState.__reviewDiagnostics = { writer, secret: crypto.randomUUID() };
+    try {
+      const operation_id = crypto.randomUUID();
+      const response = await PUT(
+        request("PUT", {
+          ...mark,
+          operation_id,
+          diagnostics: {
+            version: 1,
+            session_id: crypto.randomUUID(),
+            client_build: "fixture-build",
+            snapshot: "not_ready",
+            secret: "private-payload",
+          },
+        }),
+        context(),
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("x-review-request-id")).toMatch(
+        /^[a-f0-9-]{36}$/,
+      );
+      await writer.flush();
+      const entries = batches
+        .join("")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(entries.map((entry) => entry.event)).toEqual([
+        "received",
+        "completed",
+      ]);
+      expect(entries[1]).toMatchObject({
+        operation_id,
+        status: 200,
+        snapshot: "missing",
+        diagnostics_status: "valid",
+        store: { committed: true },
+      });
+      const logs = batches.join("");
+      expect(logs).not.toContain("Alice");
+      expect(logs).not.toContain(browse);
+      expect(logs).not.toContain("private-payload");
+      expect(writer.status().write_failures).toBe(1);
+      const raw = await fs.readFile(reviewsFilePath(browse), "utf8");
+      expect(raw).not.toContain("diagnostics");
+      expect(raw).toContain(operation_id);
+      expect(
+        (await readEpisodeReviews(browse, datasetA)).episodes["0"][0].stay_ms,
+      ).toBeUndefined();
+    } finally {
+      globalState.__reviewDiagnostics = previous;
+    }
+  });
+
+  test("legacy requests and invalid diagnostic extensions still save, oversized bodies do not", async () => {
+    expect((await PUT(request("PUT", mark), context())).status).toBe(200);
+    expect(
+      (
+        await PUT(
+          request("PUT", {
+            ...mark,
+            episode_index: 1,
+            diagnostics: { version: 999 },
+          }),
+          context(),
+        )
+      ).status,
+    ).toBe(200);
+    const tooLarge = await PUT(
+      request("PUT", {
+        ...mark,
+        episode_index: 2,
+        arbitrary: "x".repeat(9000),
+      }),
+      context(),
+    );
+    expect(tooLarge.status).toBe(413);
+    expect(tooLarge.headers.has("x-review-request-id")).toBe(true);
+    expect(
+      (await readEpisodeReviews(browse, datasetA)).episodes["2"],
+    ).toBeUndefined();
+  });
+
   test("reads empty state without creating a file or dataset sidecar", async () => {
     expect((await readEpisodeReviews(browse, datasetA)).episodes).toEqual({});
     expect(await fs.exists(reviewsFilePath(browse))).toBe(false);

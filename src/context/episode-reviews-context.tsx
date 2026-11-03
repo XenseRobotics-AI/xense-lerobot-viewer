@@ -14,6 +14,14 @@ import {
 import { getLocalDatasetFileBase } from "@/utils/datasetRoute";
 import { ReviewSaveQueue, reviewSaveKey } from "@/utils/reviewSaveQueue";
 import {
+  clientReviewDiagnostics,
+  createReviewId,
+  reportReviewSaveResult,
+  saveReviewWithDeadline,
+  ReviewSaveUnknownError,
+} from "@/utils/reviewDiagnosticsClient";
+import type { ReviewTimerDiagnostics } from "@/types/review-diagnostics.types";
+import {
   MAX_REVIEWER_LENGTH,
   parseReviewsFile,
   type EpisodeReviewsFile,
@@ -38,6 +46,10 @@ function useReviewState(repoId: string, browsePath: string) {
   const [loaded, setLoaded] = useState(false);
   const [pendingSaves, setPendingSaves] = useState<Record<string, boolean>>({});
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
+  const uncertain = useRef(new Set<string>());
+  const [uncertainSaves, setUncertainSaves] = useState<Record<string, boolean>>(
+    {},
+  );
   const [error, setError] = useState<string | null>(null);
   const sequence = useRef(0);
   const queue = useRef(new ReviewSaveQueue()).current;
@@ -47,51 +59,64 @@ function useReviewState(repoId: string, browsePath: string) {
   const endpoint =
     endpointBase + "?browsePath=" + encodeURIComponent(browsePath);
 
-  const refresh = useCallback(async () => {
-    if (queue.size || requestRef.current || document.hidden) return;
-    const controller = new AbortController();
-    requestRef.current = controller;
-    const id = ++sequence.current;
-    try {
-      const response = await fetch(endpoint, {
-        cache: "no-store",
-        signal: controller.signal,
-      });
-      if (!response.ok)
-        throw new Error(
-          (await response.json()).error ?? String(response.status),
+  const refresh = useCallback(
+    async (confirmUncertain = false) => {
+      if (queue.size || requestRef.current || document.hidden) return;
+      const controller = new AbortController();
+      requestRef.current = controller;
+      const id = ++sequence.current;
+      try {
+        const response = await fetch(endpoint, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok)
+          throw new Error(
+            (await response.json()).error ?? String(response.status),
+          );
+        const result = (await response.json()) as EpisodeReviewsResponse;
+        const next = parseReviewsFile(result.file);
+        if (id !== sequence.current) return;
+        setReviewers((previous) =>
+          JSON.stringify(previous) === JSON.stringify(result.reviewers)
+            ? previous
+            : result.reviewers,
         );
-      const result = (await response.json()) as EpisodeReviewsResponse;
-      const next = parseReviewsFile(result.file);
-      if (id !== sequence.current) return;
-      setReviewers((previous) =>
-        JSON.stringify(previous) === JSON.stringify(result.reviewers)
-          ? previous
-          : result.reviewers,
-      );
-      setProfiles((previous) =>
-        JSON.stringify(previous) === JSON.stringify(result.profiles)
-          ? previous
-          : result.profiles,
-      );
-      setStoragePath(result.storage_path);
-      setReviewerState((previous) =>
-        result.reviewers.includes(previous)
-          ? previous
-          : (result.reviewers[0] ?? ""),
-      );
-      setFile((previous) =>
-        JSON.stringify(previous) === JSON.stringify(next) ? previous : next,
-      );
-      setLoaded(true);
-      setError(null);
-    } catch (error) {
-      if (!controller.signal.aborted && id === sequence.current)
-        setError(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (requestRef.current === controller) requestRef.current = null;
-    }
-  }, [endpoint, queue]);
+        setProfiles((previous) =>
+          JSON.stringify(previous) === JSON.stringify(result.profiles)
+            ? previous
+            : result.profiles,
+        );
+        setStoragePath(result.storage_path);
+        setReviewerState((previous) =>
+          result.reviewers.includes(previous)
+            ? previous
+            : (result.reviewers[0] ?? ""),
+        );
+        setFile((previous) =>
+          JSON.stringify(previous) === JSON.stringify(next) ? previous : next,
+        );
+        setLoaded(true);
+        setError(null);
+        if (confirmUncertain && uncertain.current.size) {
+          const keys = new Set(uncertain.current);
+          uncertain.current.clear();
+          setUncertainSaves({});
+          setSaveErrors((previous) =>
+            Object.fromEntries(
+              Object.entries(previous).filter(([key]) => !keys.has(key)),
+            ),
+          );
+        }
+      } catch (error) {
+        if (!controller.signal.aborted && id === sequence.current)
+          setError(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (requestRef.current === controller) requestRef.current = null;
+      }
+    },
+    [endpoint, queue],
+  );
 
   const invalidateRequests = useCallback(() => {
     sequence.current += 1;
@@ -155,13 +180,26 @@ function useReviewState(repoId: string, browsePath: string) {
     source: ReviewSource,
     reviewed: boolean,
     stay?: EpisodeStaySnapshot,
+    timerDiagnostics?: ReviewTimerDiagnostics,
   ) => {
     if (!loaded || !reviewers.includes(reviewer) || error) return;
     const key = reviewSaveKey(episodeIndex, reviewer);
-    if (queue.has(key)) return;
+    if (queue.has(key) || uncertain.current.has(key)) return;
+    const enqueuedAt = performance.now();
     // Capture the target before queueing; switching episodes/persons/entry
     // points must never retarget a pending write to the currently visible one.
     const payload = {
+      operation_id: createReviewId(),
+      diagnostics: clientReviewDiagnostics(
+        !reviewed
+          ? "unmark"
+          : stay
+            ? "present"
+            : timerDiagnostics
+              ? "not_ready"
+              : "unknown",
+        timerDiagnostics,
+      ),
       episode_index: episodeIndex,
       reviewer: reviewer.trim(),
       source,
@@ -182,27 +220,25 @@ function useReviewState(repoId: string, browsePath: string) {
     });
     try {
       await queue.enqueue(key, async () => {
-        const response = await fetch(endpoint, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-          // View changes do not cancel a confirmed write. Small review bodies
-          // can also finish in flight when the document itself navigates away.
-          keepalive: true,
+        payload.diagnostics.queue_ms = Math.min(
+          86400000,
+          Math.max(0, Math.round(performance.now() - enqueuedAt)),
+        );
+        const next = await saveReviewWithDeadline(endpoint, payload, {
+          report: reportReviewSaveResult,
         });
-        if (!response.ok)
-          throw new Error(
-            (await response.json()).error ?? String(response.status),
-          );
-        const raw = await response.json();
         if (mounted.current) {
-          const next = parseReviewsFile(raw);
           // Updating sidebar badges/filtering is lower priority than a click
           // that selects another episode or seeks the currently playing video.
           startTransition(() => setFile(next));
         }
       });
     } catch (error) {
+      if (error instanceof ReviewSaveUnknownError) {
+        uncertain.current.add(key);
+        if (mounted.current)
+          setUncertainSaves((previous) => ({ ...previous, [key]: true }));
+      }
       if (mounted.current)
         setSaveErrors((previous) => ({
           ...previous,
@@ -227,6 +263,7 @@ function useReviewState(repoId: string, browsePath: string) {
     setReviewer,
     loaded,
     pendingSaves,
+    uncertainSaves,
     saveErrors,
     error,
     refresh,

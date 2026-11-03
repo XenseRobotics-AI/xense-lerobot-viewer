@@ -330,6 +330,9 @@ export const en = {
   "review.undoShort": "Undo mark",
   "review.title": "Human inspection",
   "review.loading": "Loading inspection records…",
+  "review.verifySave": "Refresh and verify",
+  "review.saveUnknown":
+    "Save outcome is unknown. Refresh and verify before acting; do not resubmit blindly. Operation",
   "review.checked": "Inspected",
   "review.unchecked": "Not inspected",
   "review.reviewer": "Inspector",

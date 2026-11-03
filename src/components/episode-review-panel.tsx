@@ -5,6 +5,7 @@ import { useEffect, useId, useState } from "react";
 import { useEpisodeReviews } from "@/context/episode-reviews-context";
 import { reviewSaveKey } from "@/utils/reviewSaveQueue";
 import { useLocale } from "@/context/locale-context";
+import type { ReviewTimerDiagnostics } from "@/types/review-diagnostics.types";
 import {
   REVIEWER_ROLES,
   reviewStatus,
@@ -18,12 +19,16 @@ export default function EpisodeReviewPanel({
   disabled,
   episodeDurationMs,
   readStayMs,
+  readStaySnapshot,
+  readDiagnostics,
 }: {
   episodeId: number;
   source: ReviewSource;
   disabled: boolean;
   episodeDurationMs: number;
   readStayMs: () => number;
+  readStaySnapshot: () => EpisodeStaySnapshot | undefined;
+  readDiagnostics: () => ReviewTimerDiagnostics;
 }) {
   const { t, locale } = useLocale();
   const {
@@ -35,6 +40,7 @@ export default function EpisodeReviewPanel({
     setReviewer,
     loaded,
     pendingSaves,
+    uncertainSaves,
     saveErrors,
     error: loadError,
     refresh,
@@ -74,13 +80,8 @@ export default function EpisodeReviewPanel({
     };
   }, []);
   const saveMark = (reviewed: boolean) => {
-    const stay: EpisodeStaySnapshot | undefined = reviewed
-      ? {
-          stay_ms: Math.min(Math.floor(readStayMs()), episodeDurationMs * 2),
-          episode_duration_ms: episodeDurationMs,
-        }
-      : undefined;
-    void mark(episodeId, source, reviewed, stay);
+    const stay = reviewed ? readStaySnapshot() : undefined;
+    void mark(episodeId, source, reviewed, stay, readDiagnostics());
   };
   return (
     <section
@@ -148,6 +149,7 @@ export default function EpisodeReviewPanel({
           disabled={
             disabled ||
             saving ||
+            !!uncertainSaves[key] ||
             !loaded ||
             !reviewers.includes(reviewer) ||
             !!loadError
@@ -254,12 +256,18 @@ export default function EpisodeReviewPanel({
             type="button"
             disabled={saving}
             onClick={() => {
-              if (loadError) void refresh();
+              if (loadError || uncertainSaves[key]) void refresh(true);
               else saveMark(!mine);
             }}
             className="underline"
           >
-            {t(loadError ? "review.retry" : "review.retrySave")}
+            {t(
+              uncertainSaves[key]
+                ? "review.verifySave"
+                : loadError
+                  ? "review.retry"
+                  : "review.retrySave",
+            )}
           </button>
         </div>
       )}
