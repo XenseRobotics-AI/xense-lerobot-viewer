@@ -158,14 +158,19 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
     recordReviewDiagnostic({
       ...event,
       event: "completed",
-      status: error instanceof ReviewBodyError ? 413 : 400,
-      error_code: "INVALID_REQUEST",
+      status: error instanceof ReviewBodyError ? error.status : 400,
+      error_code:
+        error instanceof ReviewBodyError && error.status !== 413
+          ? error.status === 408
+            ? "REQUEST_TIMEOUT"
+            : "REQUEST_CANCELLED"
+          : "INVALID_REQUEST",
       duration_ms: Math.round(performance.now() - started),
     });
     return finish(
       Response.json(
         { error: error instanceof Error ? error.message : "Invalid JSON body" },
-        { status: error instanceof ReviewBodyError ? 413 : 400 },
+        { status: error instanceof ReviewBodyError ? error.status : 400 },
       ),
     );
   }

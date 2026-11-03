@@ -1,11 +1,14 @@
 // Real Chromium checks for React review state and stay-time lifecycle.
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
-const temp = await fs.mkdtemp(path.join(repo, ".tmp-review-lifecycle-"));
+const temp = await fs.mkdtemp(
+  path.join(os.tmpdir(), "xense-review-lifecycle-"),
+);
 let server, browser, socket;
 try {
   const chrome =
@@ -141,8 +144,88 @@ try {
   );
   assert.ok(!result.exceptionDetails, JSON.stringify(result.exceptionDetails));
   assert.equal(result.result.value.result, "passed");
-  console.log(JSON.stringify(result.result.value, null, 2));
+  const old = await call(
+    "Runtime.evaluate",
+    { expression: "window.reviewFixtureInstance", returnByValue: true },
+    sessionId,
+  );
+  await call("Page.reload", {}, sessionId);
+  let reloaded = false;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try {
+      const value = await call(
+        "Runtime.evaluate",
+        {
+          expression:
+            "!!window.reviewFixtureInstance && window.reviewFixtureInstance!==" +
+            JSON.stringify(old.result.value) +
+            " && typeof window.runReviewReloadTests==='function'",
+          returnByValue: true,
+        },
+        sessionId,
+      );
+      if (value.result?.value) {
+        reloaded = true;
+        break;
+      }
+    } catch {
+      /* The old execution context may have just been destroyed. */
+    }
+    await Bun.sleep(50);
+  }
+  assert.ok(reloaded, "Browser fixture failed to reload");
+  const recovery = await call(
+    "Runtime.evaluate",
+    {
+      expression: "window.runReviewReloadTests()",
+      awaitPromise: true,
+      returnByValue: true,
+    },
+    sessionId,
+  );
+  assert.ok(
+    !recovery.exceptionDetails,
+    JSON.stringify(recovery.exceptionDetails),
+  );
+  assert.equal(recovery.result.value.result, "passed");
+  console.log(
+    JSON.stringify(
+      {
+        ...result.result.value,
+        checks: [
+          ...result.result.value.checks,
+          ...recovery.result.value.checks,
+        ],
+      },
+      null,
+      2,
+    ),
+  );
 } finally {
+  if (socket?.readyState === WebSocket.OPEN) {
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 3000);
+      socket.addEventListener(
+        "close",
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        { once: true },
+      );
+      try {
+        socket.send(
+          JSON.stringify({
+            id: Number.MAX_SAFE_INTEGER,
+            method: "Browser.close",
+          }),
+        );
+      } catch {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+  }
   socket?.close();
   server?.stop(true);
   if (browser) {

@@ -13,6 +13,7 @@ import {
 } from "react";
 import { getLocalDatasetFileBase } from "@/utils/datasetRoute";
 import { ReviewSaveQueue, reviewSaveKey } from "@/utils/reviewSaveQueue";
+import { reviewPendingOperations } from "@/utils/reviewPendingOperations";
 import {
   clientReviewDiagnostics,
   createReviewId,
@@ -56,6 +57,8 @@ function useReviewState(repoId: string, browsePath: string) {
     {},
   );
   const [error, setError] = useState<string | null>(null);
+  const [recoveryWarning, setRecoveryWarning] = useState<string | null>(null);
+  const recoveryScope = JSON.stringify([repoId, browsePath]);
   const sequence = useRef(0);
   const queue = useRef(new ReviewSaveQueue()).current;
   const mounted = useRef(false);
@@ -66,6 +69,10 @@ function useReviewState(repoId: string, browsePath: string) {
 
   const refresh = useCallback(
     async (verifyKey?: string) => {
+      if (reviewPendingOperations().damaged) {
+        setError(tStandalone("review.recoveryDamaged"));
+        return;
+      }
       if (queue.size || document.hidden) return;
       if (requestRef.current) {
         if (!verifyKey) return;
@@ -110,6 +117,13 @@ function useReviewState(repoId: string, browsePath: string) {
             result.operation,
           );
           if (resolution === "succeeded" || resolution === "failed") {
+            const recovery = reviewPendingOperations();
+            recovery.resolve(recoveryScope, target);
+            setRecoveryWarning(
+              recovery.persistent
+                ? null
+                : tStandalone("review.recoveryUnavailable"),
+            );
             uncertain.current.delete(verifyKey);
             setUncertainSaves((previous) => {
               const value = { ...previous };
@@ -147,7 +161,7 @@ function useReviewState(repoId: string, browsePath: string) {
         if (requestRef.current === controller) requestRef.current = null;
       }
     },
-    [endpoint, queue],
+    [endpoint, queue, recoveryScope],
   );
 
   const invalidateRequests = useCallback(() => {
@@ -158,6 +172,35 @@ function useReviewState(repoId: string, browsePath: string) {
 
   useEffect(() => {
     mounted.current = true;
+    const recovery = reviewPendingOperations();
+    if (recovery.damaged) {
+      setError(tStandalone("review.recoveryDamaged"));
+      return () => {
+        mounted.current = false;
+      };
+    }
+    const restored = recovery.list(recoveryScope);
+    for (const target of restored)
+      uncertain.current.set(
+        reviewSaveKey(target.episode_index, target.reviewer),
+        target,
+      );
+    setUncertainSaves(
+      Object.fromEntries(
+        [...uncertain.current.keys()].map((key) => [key, true]),
+      ),
+    );
+    setSaveErrors(
+      Object.fromEntries(
+        [...uncertain.current].map(([key, target]) => [
+          key,
+          new ReviewSaveUnknownError(target.operation_id).message,
+        ]),
+      ),
+    );
+    setRecoveryWarning(
+      recovery.persistent ? null : tStandalone("review.recoveryUnavailable"),
+    );
     const readName = () => {
       try {
         setReviewerState(
@@ -192,7 +235,7 @@ function useReviewState(repoId: string, browsePath: string) {
       window.removeEventListener("focus", focus);
       window.removeEventListener("storage", storage);
     };
-  }, [refresh, invalidateRequests]);
+  }, [refresh, invalidateRequests, recoveryScope]);
 
   useEffect(() => {
     if (!reviewer || !reviewers.includes(reviewer)) return;
@@ -216,7 +259,13 @@ function useReviewState(repoId: string, browsePath: string) {
   ) => {
     if (!loaded || !reviewers.includes(reviewer) || error) return;
     const key = reviewSaveKey(episodeIndex, reviewer);
-    if (queue.has(key) || uncertain.current.has(key)) return;
+    const recovery = reviewPendingOperations();
+    if (
+      queue.has(key) ||
+      uncertain.current.has(key) ||
+      recovery.has(recoveryScope, episodeIndex, reviewer)
+    )
+      return;
     const enqueuedAt = performance.now();
     // Capture the target before queueing; switching episodes/persons/entry
     // points must never retarget a pending write to the currently visible one.
@@ -243,6 +292,26 @@ function useReviewState(repoId: string, browsePath: string) {
           }
         : {}),
     };
+    let reservation;
+    try {
+      reservation = recovery.begin(recoveryScope, payload);
+    } catch (error) {
+      setSaveErrors((previous) => ({
+        ...previous,
+        [key]: error instanceof Error ? error.message : String(error),
+      }));
+      return;
+    }
+    if (reservation !== "started") {
+      setSaveErrors((previous) => ({
+        ...previous,
+        [key]: tStandalone("review.recoveryFull"),
+      }));
+      return;
+    }
+    setRecoveryWarning(
+      recovery.persistent ? null : tStandalone("review.recoveryUnavailable"),
+    );
     invalidateRequests();
     setPendingSaves((previous) => ({ ...previous, [key]: true }));
     setSaveErrors((previous) => {
@@ -252,6 +321,14 @@ function useReviewState(repoId: string, browsePath: string) {
     });
     try {
       await queue.enqueue(key, async () => {
+        if (!recovery.dispatch(recoveryScope, payload))
+          throw new ReviewRejectedError(tStandalone("review.saveNotSent"));
+        if (mounted.current)
+          setRecoveryWarning(
+            recovery.persistent
+              ? null
+              : tStandalone("review.recoveryUnavailable"),
+          );
         payload.diagnostics.queue_ms = Math.min(
           86400000,
           Math.max(0, Math.round(performance.now() - enqueuedAt)),
@@ -259,13 +336,21 @@ function useReviewState(repoId: string, browsePath: string) {
         const next = await saveReviewWithDeadline(endpoint, payload, {
           report: reportReviewSaveResult,
         });
+        recovery.resolve(recoveryScope, payload);
         if (mounted.current) {
+          setRecoveryWarning(
+            recovery.persistent
+              ? null
+              : tStandalone("review.recoveryUnavailable"),
+          );
           // Updating sidebar badges/filtering is lower priority than a click
           // that selects another episode or seeks the currently playing video.
           startTransition(() => setFile(next));
         }
       });
     } catch (error) {
+      if (!(error instanceof ReviewSaveUnknownError))
+        recovery.resolve(recoveryScope, payload);
       if (error instanceof ReviewRejectedError && error.file && mounted.current)
         setFile(error.file);
       if (error instanceof ReviewSaveUnknownError) {
@@ -300,6 +385,7 @@ function useReviewState(repoId: string, browsePath: string) {
     uncertainSaves,
     saveErrors,
     error,
+    recoveryWarning,
     refresh,
     mark,
     endpoint,

@@ -43,6 +43,7 @@ export default function EpisodeReviewPanel({
     uncertainSaves,
     saveErrors,
     error: loadError,
+    recoveryWarning,
     refresh,
     mark,
   } = useEpisodeReviews();
@@ -185,6 +186,11 @@ export default function EpisodeReviewPanel({
           </span>
         )}
       </div>
+      {recoveryWarning && (
+        <p role="status" className="mt-2 text-amber-300">
+          {recoveryWarning}
+        </p>
+      )}
       <details className="mt-2 text-[10px] text-slate-400">
         <summary className="cursor-pointer hover:text-slate-200">
           {t("review.details", { count: reviews.length })}

@@ -176,6 +176,10 @@ describe("review write deadline and reconciliation", () => {
           fetcher: (async () =>
             Response.json({
               file: { version: 1, episodes: {} },
+              reviewers: [],
+              profiles: [],
+              storage_path: "/fixture/reviews.json",
+              dataset_key: ".",
             })) as typeof fetch,
         })
       ).file.episodes,

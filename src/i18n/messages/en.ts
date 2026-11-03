@@ -331,6 +331,14 @@ export const en = {
   "review.title": "Human inspection",
   "review.loading": "Loading inspection records…",
   "review.verifySave": "Refresh and verify",
+  "review.saveNotSent":
+    "This mark was still queued when the page was left and was not sent. Verify the current state before submitting it again.",
+  "review.recoveryUnavailable":
+    "The browser cannot retain pending operations. This page remains guarded; verify outstanding saves before reloading or closing it.",
+  "review.recoveryDamaged":
+    "Local recovery data is damaged, so new saves are blocked. Keep this page and session data; ask an administrator to verify server operations before recovery.",
+  "review.recoveryFull":
+    "The pending operation limit is reached. Verify existing operations before submitting new marks.",
   "review.refreshTimeout":
     "Inspection records timed out. Check the connection and refresh to verify.",
   "review.saveStillPending":

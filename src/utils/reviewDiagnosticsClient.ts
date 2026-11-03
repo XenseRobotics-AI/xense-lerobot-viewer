@@ -5,10 +5,13 @@ import {
   type TimerState,
 } from "@/types/review-diagnostics.types";
 import {
+  MAX_REVIEWER_LENGTH,
+  REVIEWER_ROLES,
   parseReviewsFile,
   type EpisodeReviewsFile,
   type EpisodeReviewsResponse,
   type ReviewUpdate,
+  type ReviewerProfile,
 } from "@/types/episode-review.types";
 import { tStandalone } from "@/i18n/standalone";
 import {
@@ -131,7 +134,7 @@ async function deadline<T>(
   }
 }
 
-export async function readEpisodeReviewState(
+async function readReviewResponse(
   endpoint: string,
   options: {
     fetcher?: typeof fetch;
@@ -139,7 +142,7 @@ export async function readEpisodeReviewState(
     signal?: AbortSignal;
     operationId?: string;
   } = {},
-): Promise<EpisodeReviewsResponse> {
+): Promise<Record<string, unknown>> {
   const url = options.operationId
     ? endpoint +
       (endpoint.includes("?") ? "&" : "?") +
@@ -158,16 +161,63 @@ export async function readEpisodeReviewState(
           typeof raw?.error === "string" ? raw.error : String(response.status),
         );
       }
-      const raw = (await response.json()) as EpisodeReviewsResponse;
-      return {
-        ...raw,
-        file: parseReviewsFile(raw?.file),
-        operation: parseReviewOperationReceipt(raw?.operation),
-      };
+      const raw: unknown = await response.json();
+      if (!raw || typeof raw !== "object" || Array.isArray(raw))
+        throw new Error("Invalid review response");
+      return raw as Record<string, unknown>;
     },
     options.timeoutMs ?? 10000,
     options.signal,
   );
+}
+
+/** Validate everything consumed by React before updating any provider state. */
+export async function readEpisodeReviewState(
+  endpoint: string,
+  options: NonNullable<Parameters<typeof readReviewResponse>[1]> = {},
+): Promise<EpisodeReviewsResponse> {
+  const raw = await readReviewResponse(endpoint, options);
+  const validName = (name: unknown): name is string =>
+    typeof name === "string" &&
+    !!name &&
+    name === name.trim() &&
+    name.length <= MAX_REVIEWER_LENGTH &&
+    !/[\u0000-\u001f\u007f]/.test(name);
+  if (
+    !Array.isArray(raw.reviewers) ||
+    !raw.reviewers.every(validName) ||
+    new Set(raw.reviewers).size !== raw.reviewers.length ||
+    !Array.isArray(raw.profiles) ||
+    raw.profiles.length !== raw.reviewers.length ||
+    typeof raw.storage_path !== "string" ||
+    !raw.storage_path ||
+    typeof raw.dataset_key !== "string" ||
+    !raw.dataset_key
+  )
+    throw new Error("Invalid review response metadata");
+  const reviewers = raw.reviewers as string[];
+  const names = new Set<string>();
+  const profiles = raw.profiles.map((input: unknown): ReviewerProfile => {
+    const profile = input as Partial<ReviewerProfile> | null;
+    if (
+      !profile ||
+      !validName(profile.name) ||
+      !reviewers.includes(profile.name) ||
+      names.has(profile.name) ||
+      !REVIEWER_ROLES.includes(profile.role!)
+    )
+      throw new Error("Invalid review response roster");
+    names.add(profile.name);
+    return { name: profile.name, role: profile.role! };
+  });
+  return {
+    file: parseReviewsFile(raw.file),
+    reviewers,
+    profiles,
+    storage_path: raw.storage_path,
+    dataset_key: raw.dataset_key,
+    operation: parseReviewOperationReceipt(raw.operation),
+  };
 }
 
 export async function saveReviewWithDeadline(
@@ -241,11 +291,13 @@ export async function saveReviewWithDeadline(
     // A lost response cannot establish that the write failed. Read once, never
     // replay PUT. An absent record cannot prove that an unmark was committed.
     try {
-      const { file, operation } = await readEpisodeReviewState(endpoint, {
+      const raw = await readReviewResponse(endpoint, {
         fetcher,
         timeoutMs: options.reconcileMs ?? 5000,
         operationId: payload.operation_id,
       });
+      const file = parseReviewsFile(raw.file);
+      const operation = parseReviewOperationReceipt(raw.operation);
       const resolution = reviewOperationResolution(file, payload, operation);
       if (resolution === "succeeded") {
         report("timeout_confirmed");

@@ -55,6 +55,8 @@ try {
     import {ReplayPlaybackDriver} from ${modulePath("components/replay-playback-driver.tsx")};
     import {useDocumentVisible} from ${modulePath("hooks/use-document-visible.ts")};
     import PlaybackBar from ${modulePath("components/playback-bar.tsx")};
+    import {THRESHOLDS} from ${modulePath("utils/constants.ts")};
+    window.replaySyncTolerance=THRESHOLDS.VIDEO_SYNC_TOLERANCE;
     const params=new URLSearchParams(location.search);
     const segmented = params.has('episodes');
     const cameras=Number(params.get('cameras'))||2;
@@ -95,6 +97,7 @@ try {
       const frameRef=useRef(9),smoothTimeRef=useRef(null);
       const timeAtRow=useCallback(row=>row/30,[]);
       const time=timeAtRow(frame);
+      window.replayPlaying=mediaActive&&playing;
       const setTime=time=>{frameRef.current=Math.round(time*30);setFrame(frameRef.current)};
       window.setActive=setActive;
       window.isActive=active;
@@ -162,11 +165,12 @@ try {
           video{width:240px;height:180px} [data-video-frame-state]{position:relative}</style>
         <div id="root"></div><script>
           window.metrics={seeks:[],loads:0,phases:[],errors:[]};
+          window.seekDetails=[];
           const proto=HTMLMediaElement.prototype;
           const current=Object.getOwnPropertyDescriptor(proto,'currentTime');
           Object.defineProperty(proto,'currentTime',{configurable:true,
             get(){return current.get.call(this)},
-            set(value){metrics.seeks.push(value);current.set.call(this,value)}});
+            set(value){metrics.seeks.push(value);seekDetails.push({target:value,before:current.get.call(this),paused:this.paused,playing:window.replayPlaying});current.set.call(this,value)}});
           const load=proto.load; proto.load=function(){metrics.loads++;return load.call(this)};
           new MutationObserver(records=>{for(const r of records){
             metrics.phases.push([r.oldValue,r.target.dataset.videoFrameState]);
@@ -219,7 +223,9 @@ try {
     const message = JSON.parse(String(event.data));
     if (!message.id) return;
     const task = pending.get(message.id);
+    if (!task) return;
     pending.delete(message.id);
+    clearTimeout(task.timer);
     message.error
       ? task.reject(Error(JSON.stringify(message.error)))
       : task.resolve(message.result);
@@ -227,7 +233,11 @@ try {
   const call = (method, params = {}, sessionId) =>
     new Promise((resolve, reject) => {
       const id = ++sequence;
-      pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error("Browser command timed out: " + method));
+      }, 15000);
+      pending.set(id, { resolve, reject, timer });
       socket.send(
         JSON.stringify({
           id,
@@ -266,18 +276,54 @@ try {
         JSON.stringify(await evaluate("window.metrics")),
     );
   };
-  const reset = "window.metrics={seeks:[],loads:0,phases:[],errors:[]}";
+  const reset =
+    "window.metrics={seeks:[],loads:0,phases:[],errors:[]};window.seekDetails=[]";
   const ready =
     "document.querySelectorAll('[data-video-frame-state=ready]').length===window.cameraCount";
   const mediaPaused = (value) =>
     `[...document.querySelectorAll('video')].length===window.cameraCount && [...document.querySelectorAll('video')].every(v=>v.paused===${value})`;
-  const assertUnchanged = async (label) => {
+  const assertUnchanged = async (label, allowPlayingDrift = false) => {
+    await until(ready);
     const metrics = await evaluate("window.metrics");
-    assert.deepEqual(
-      metrics,
-      { seeks: [], loads: 0, phases: [], errors: [] },
-      label + ": " + JSON.stringify(metrics),
-    );
+    if (allowPlayingDrift && metrics.seeks.length) {
+      const details = await evaluate("window.seekDetails");
+      const tolerance = await evaluate("window.replaySyncTolerance");
+      assert.equal(details.length, metrics.seeks.length);
+      for (const detail of details) {
+        assert.ok(
+          detail.playing && !detail.paused,
+          label + ": seek while paused: " + JSON.stringify(detail),
+        );
+        assert.ok(
+          Math.abs(detail.target - detail.before) > tolerance,
+          label + ": unnecessary decoder seek: " + JSON.stringify(detail),
+        );
+      }
+      assert.equal(metrics.loads, 0, label + ": unexpected media reload");
+      assert.deepEqual(metrics.errors, []);
+      assert.ok(
+        metrics.phases.length <= 2 * details.length,
+        label + ": unrelated frame resets",
+      );
+      for (const [from, to] of metrics.phases)
+        assert.ok(
+          (from === "ready" && to === "loading") ||
+            (from === "loading" && to === "ready"),
+          label + ": invalid frame phase",
+        );
+      console.log(
+        label +
+          ": validated " +
+          details.length +
+          " genuine playing drift corrections",
+      );
+    } else {
+      assert.deepEqual(
+        metrics,
+        { seeks: [], loads: 0, phases: [], errors: [] },
+        label + ": " + JSON.stringify(metrics),
+      );
+    }
     assert.equal(await evaluate(ready), true, label + ": frames ready");
     assert.equal(
       await evaluate(
@@ -343,8 +389,23 @@ try {
       await until(mediaPaused(true));
       await Bun.sleep(8);
     }
-    await assertUnchanged(label + " " + cycles + " play/pause cycles");
+    await assertUnchanged(
+      label + " " + cycles + " play/pause cycles",
+      mode === "replay",
+    );
+    await evaluate(reset);
     if (mode === "replay") {
+      // Continuous playback intentionally corrects material drift; paused
+      // clocks and sub-threshold offsets must still never cause a decoder seek.
+      await evaluate("window.toggle()");
+      await until(mediaPaused(false));
+      await Bun.sleep(100);
+      await evaluate("document.querySelector('video').currentTime+=1;" + reset);
+      await until("window.metrics.seeks.length>0 && " + ready);
+      await evaluate("window.toggle()");
+      await until(mediaPaused(true));
+      await assertUnchanged(label + " intentional drift recovery", true);
+      await evaluate(reset);
       for (let i = 0; i < 40; i++) {
         await evaluate("window.setActive(false)");
         await until("window.isActive===false");
@@ -408,12 +469,39 @@ try {
         : "window.toggle()",
     );
     await until(mediaPaused(true));
-    await assertUnchanged(label + " visibility changes during playback");
+    await assertUnchanged(
+      label + " visibility changes during playback",
+      mode === "replay",
+    );
     console.log(
       `${label}: pause race, explicit seek, ${cycles} play/pause cycles and visibility changes passed`,
     );
   }
 } finally {
+  if (socket?.readyState === WebSocket.OPEN) {
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 3000);
+      socket.addEventListener(
+        "close",
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        { once: true },
+      );
+      try {
+        socket.send(
+          JSON.stringify({
+            id: Number.MAX_SAFE_INTEGER,
+            method: "Browser.close",
+          }),
+        );
+      } catch {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+  }
   socket?.close();
   server?.stop(true);
   if (browser) {

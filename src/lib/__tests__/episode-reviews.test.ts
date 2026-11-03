@@ -115,6 +115,34 @@ async function roster(names: unknown) {
 }
 
 describe("collection review persistence", () => {
+  test("aborted uploads do not create a receipt or mutate reviews and a fresh request still succeeds", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const operation_id = crypto.randomUUID();
+    const rejected = await PUT(
+      new NextRequest(
+        "http://localhost/api/reviews?browsePath=" + encodeURIComponent(browse),
+        {
+          method: "PUT",
+          body: JSON.stringify({ ...mark, operation_id }),
+          signal: controller.signal,
+        },
+      ),
+      context(),
+    );
+    expect(rejected.status).toBe(499);
+    const read = await (
+      await GET(
+        request("GET", undefined, "&operation_id=" + operation_id),
+        context(),
+      )
+    ).json();
+    expect(read.operation).toBeUndefined();
+    expect(read.file.episodes).toEqual({});
+    expect(
+      (await PUT(request("PUT", { ...mark, operation_id }), context())).status,
+    ).toBe(200);
+  });
   test("real route receipts close lost responses for marking and unmarking without business history", async () => {
     const endpoint =
       "http://localhost/api/reviews?browsePath=" + encodeURIComponent(browse);

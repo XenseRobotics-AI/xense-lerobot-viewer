@@ -7,6 +7,9 @@ import {
 import { useEpisodeStayTime } from "../../src/hooks/use-episode-stay-time";
 import { makeLocalRepoId } from "../../src/utils/datasetRoute";
 import { reviewSaveKey } from "../../src/utils/reviewSaveQueue";
+import { REVIEW_PENDING_STORAGE_KEY } from "../../src/utils/reviewPendingOperations";
+
+window.reviewFixtureInstance = crypto.randomUUID();
 
 const states = new Map();
 const calls = [];
@@ -70,13 +73,17 @@ window.fetch = async (input, init = {}) => {
     complete(state, payload, true);
     return Response.json(state.file);
   }
+  if (backend.mode === "hang-read") {
+    backend.hangingReads = (backend.hangingReads ?? 0) + 1;
+    return new Promise(() => {});
+  }
   return Response.json({
     file: state.file,
     profiles: [
       { name: "Alice", role: "inspector" },
       { name: "Bob", role: "admin" },
     ],
-    reviewers: ["Alice", "Bob"],
+    reviewers: backend.mode === "malformed-read" ? undefined : ["Alice", "Bob"],
     storage_path: "/fixture/reviews.json",
     dataset_key: ".",
     operation: state.operations.get(url.searchParams.get("operation_id")),
@@ -290,6 +297,59 @@ window.runReviewLifecycleTests = async () => {
   );
   checks.push("missing receipt stays unknown");
 
+  const scopeBeforeReturn = window.reviewFixture.endpoint;
+  window.switchReviewScope("/fixture-other");
+  await until(
+    () =>
+      window.reviewFixture.loaded &&
+      window.reviewFixture.endpoint !== scopeBeforeReturn,
+    "leave uncertain scope",
+  );
+  window.switchReviewScope("/fixture-a");
+  await until(
+    () =>
+      window.reviewFixture.loaded &&
+      window.reviewFixture.endpoint === scopeBeforeReturn,
+    "return to uncertain scope",
+  );
+  ensure(
+    window.reviewFixture.uncertainSaves[four],
+    "returning to a scope lost its uncertain operation guard",
+  );
+  const callsBeforeReturn = calls.length;
+  await window.reviewFixture.mark(4, "episodes", true);
+  ensure(
+    calls.length === callsBeforeReturn,
+    "returning to a scope resubmitted an unknown operation",
+  );
+  checks.push("return navigation preserves unresolved operation guards");
+
+  backend.mode = "deferred";
+  const dispatchedSave = window.reviewFixture.mark(11, "episodes", true);
+  await until(
+    () => backend.deferred.length > 0,
+    "dispatched save before page exit",
+  );
+  const queuedSave = window.reviewFixture.mark(12, "episodes", true);
+  window.dispatchEvent(new Event("pagehide"));
+  backend.deferred.shift()();
+  await Promise.all([dispatchedSave, queuedSave]);
+  await until(
+    () => window.reviewFixture.saveErrors[reviewSaveKey(12, "Alice")],
+    "unsent queue cancellation message",
+  );
+  ensure(!latest(12), "unsent mark was dispatched after leaving the page");
+  ensure(
+    !JSON.parse(
+      sessionStorage.getItem(REVIEW_PENDING_STORAGE_KEY),
+    ).entries.some((entry) => entry.operation.episode_index === 12),
+    "unsent mark became an unrecoverable unknown",
+  );
+  window.dispatchEvent(new Event("pageshow"));
+  checks.push(
+    "page exit cancels unsent queue entries without losing dispatched operations",
+  );
+
   backend.mode = "deferred";
   const saving = window.reviewFixture.mark(6, "episodes", true);
   await until(() => backend.deferred.length > 0, "captured old-scope save");
@@ -318,4 +378,75 @@ window.runReviewLifecycleTests = async () => {
   );
   checks.push("captured target and late response after scope navigation");
   return { result: "passed", checks, put_requests: calls.length };
+};
+
+window.runReviewReloadTests = async () => {
+  await until(() => window.reviewFixture?.loaded, "reloaded provider");
+  const key = reviewSaveKey(4, "Alice");
+  ensure(
+    window.reviewFixture.uncertainSaves[key],
+    "full reload lost its unknown operation guard",
+  );
+  await window.reviewFixture.refresh(key);
+  ensure(
+    window.reviewFixture.uncertainSaves[key],
+    "reload inferred success from an empty backend",
+  );
+  await window.reviewFixture.mark(4, "episodes", false);
+  ensure(calls.length === 0, "reload replayed an unresolved operation");
+
+  backend.mode = "malformed-read";
+  await window.reviewFixture.refresh();
+  await until(() => window.reviewFixture.error, "malformed metadata surfaced");
+  ensure(
+    window.reviewFixture.reviewers.length === 2,
+    "malformed response corrupted the previous roster",
+  );
+  backend.mode = "normal";
+  await window.reviewFixture.refresh();
+  await until(() => !window.reviewFixture.error, "valid metadata recovery");
+
+  backend.mode = "hang-read";
+  const automatic = window.reviewFixture.refresh();
+  await until(() => backend.hangingReads > 0, "hanging automatic refresh");
+  backend.mode = "normal";
+  await window.reviewFixture.refresh(key);
+  await automatic;
+  ensure(
+    window.reviewFixture.uncertainSaves[key],
+    "interrupted refresh released an unknown operation",
+  );
+
+  const recovered = JSON.parse(
+    sessionStorage.getItem(REVIEW_PENDING_STORAGE_KEY),
+  ).entries.find((entry) => entry.operation.episode_index === 4);
+  ensure(recovered, "recovery evidence disappeared");
+  complete(
+    getState(new URL(window.reviewFixture.endpoint, location.href).pathname),
+    recovered.operation,
+    true,
+  );
+  await window.reviewFixture.refresh(key);
+  await until(
+    () => !window.reviewFixture.uncertainSaves[key],
+    "late commit after reload",
+  );
+  await window.reviewFixture.mark(7, "episodes", true);
+  await until(
+    () => window.reviewFixture.file.episodes["7"],
+    "healthy save after recovered reads",
+  );
+  ensure(
+    window.reviewBrowserErrors.length === 0,
+    "browser errors after reload: " + window.reviewBrowserErrors.join("; "),
+  );
+  return {
+    result: "passed",
+    checks: [
+      "full reload retains guards without replay",
+      "malformed metadata preserves previous UI state and recovers",
+      "manual verification interrupts hanging automatic refresh",
+      "late commit after reload can be verified and later saves continue",
+    ],
+  };
 };

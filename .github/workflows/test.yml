@@ -12,6 +12,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -30,3 +31,24 @@ jobs:
 
       - name: Run tests
         run: bun test
+
+      - name: Browser review recovery
+        run: bun run test:review-save
+
+      - name: Browser playback regression
+        run: bun run test:video-playback
+
+      - name: Python regression
+        run: |
+          if compgen -G "scripts/test_*.py" > /dev/null; then
+            python3 -m unittest discover -s scripts -p 'test_*.py'
+          fi
+          if compgen -G "scripts/mail-smoke-test/test_*.py" > /dev/null; then
+            python3 -m unittest discover -s scripts/mail-smoke-test -p 'test_*.py'
+          fi
+
+      - name: Build production
+        run: bun run build
+
+      - name: Production review fault checks
+        run: bun run test:review-production

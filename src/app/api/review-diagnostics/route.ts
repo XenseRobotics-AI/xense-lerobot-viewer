@@ -70,7 +70,7 @@ export async function POST(req: Request): Promise<Response> {
     return new Response(null, { status: 204, headers });
   } catch (error) {
     return new Response(null, {
-      status: error instanceof ReviewBodyError ? 413 : 400,
+      status: error instanceof ReviewBodyError ? error.status : 400,
       headers,
     });
   }

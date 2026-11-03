@@ -4,3 +4,7 @@ node_modules/
 # Editor-local state, including the C++ extension's multi-GB IntelliSense
 # database — prettier tries to read it and dies on "Invalid string length".
 .vscode/
+
+# Isolated browser regression fixtures may exist while checks run in parallel.
+.tmp-playback-test-*/
+.tmp-review-lifecycle-*/
