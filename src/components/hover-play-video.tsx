@@ -2,6 +2,8 @@
 
 import React, { useEffect, useRef, useState } from "react";
 
+import { useDocumentVisible } from "@/hooks/use-document-visible";
+
 type HoverPlayVideoProps = {
   src: string;
   className?: string;
@@ -27,29 +29,48 @@ export default function HoverPlayVideo({
   className = "",
   maxPreviewSeconds = 15,
 }: HoverPlayVideoProps) {
+  const visible = useDocumentVisible();
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  // Once true, the src/metadata is attached and stays attached.
+  const hoveredRef = useRef(false);
+  // Detach previews that leave the viewport so slow storage isn't busy serving
+  // cards the operator has already scrolled past.
   const [active, setActive] = useState(false);
+
+  useEffect(() => {
+    if (!visible) {
+      hoveredRef.current = false;
+      videoRef.current?.pause();
+    }
+  }, [visible]);
 
   // Lazy-load when the card scrolls near the viewport.
   useEffect(() => {
     const el = videoRef.current;
-    if (!el || active) return;
+    if (!el) return;
     if (typeof IntersectionObserver === "undefined") {
       setActive(true);
       return;
     }
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries.some((e) => e.isIntersecting)) {
-          setActive(true);
-          observer.disconnect();
-        }
+        setActive(entries.some((e) => e.isIntersecting));
       },
       { rootMargin: "200px" },
     );
     observer.observe(el);
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    if (!active) {
+      el.pause();
+      el.removeAttribute("src");
+      el.load();
+    } else if (hoveredRef.current) {
+      void el.play().catch(() => undefined);
+    }
   }, [active]);
 
   // Hover-to-play, wired to the enclosing card element.
@@ -59,10 +80,12 @@ export default function HoverPlayVideo({
     const card = el.closest("[data-hover-card]") ?? el.parentElement;
     if (!card) return;
     const onEnter = () => {
+      hoveredRef.current = true;
       setActive(true);
       void el.play().catch(() => undefined);
     };
     const onLeave = () => {
+      hoveredRef.current = false;
       el.pause();
       el.currentTime = 0;
     };
@@ -71,6 +94,9 @@ export default function HoverPlayVideo({
     return () => {
       card.removeEventListener("mouseenter", onEnter);
       card.removeEventListener("mouseleave", onLeave);
+      el.pause();
+      el.removeAttribute("src");
+      el.load();
     };
   }, []);
 

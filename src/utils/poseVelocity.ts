@@ -258,6 +258,17 @@ function hasComponents(
   return components.every((component) => Boolean(series.keys[component]));
 }
 
+/** Whether a full-rate flattened source is needed before display sampling. */
+export function hasPoseVelocitySeries(firstRow: FlatPoseChartRow): boolean {
+  return (
+    discoverPoseSeries([firstRow]).some(
+      (series) =>
+        hasComponents(series, LINEAR_COMPONENTS) ||
+        hasComponents(series, ROTATION_COMPONENTS),
+    ) || discoverGripperSeries([firstRow]).length > 0
+  );
+}
+
 function displayTimestamp(
   row: FlatPoseChartRow,
   index: number,

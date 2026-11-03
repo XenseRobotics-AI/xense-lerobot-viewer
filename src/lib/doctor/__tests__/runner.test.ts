@@ -6,6 +6,19 @@ import { runTypeScriptDoctor } from "../runner";
 import type { DoctorProgress } from "@/types/doctor.types";
 
 describe("Doctor runner progress", () => {
+  it("does not begin loading an already cancelled diagnostic", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const progress: DoctorProgress[] = [];
+    await expect(
+      runTypeScriptDoctor("/missing-dataset", {
+        maxEpisodes: 1,
+        signal: controller.signal,
+        onProgress: (event) => progress.push(event),
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(progress).toHaveLength(0);
+  });
   it("reports loading, each selected check, and completion", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-progress-"));
     try {

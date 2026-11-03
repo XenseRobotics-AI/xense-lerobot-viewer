@@ -15,6 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # next dev/start uses node even when launched with bun. Keep the stream
+      # subprocess regressions on the version that exposed the abort race.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18.19.1"
+
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest

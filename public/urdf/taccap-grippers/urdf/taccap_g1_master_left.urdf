@@ -1,0 +1,101 @@
+<?xml version="1.0"?>
+<robot name="taccap_g1_master_left">
+  <!-- Root on the shell rear outer surface (centre on the tool axis), 23.5 mm above the higher fingertip holding plane; +Z tool axis, +Y left finger. All link frames share these axes; meshes keep their native CAD frame via visual origins (finger hinges along +X). EEF: centre of the closed fingertips' most distal face (mesh-derived, shared with the slave). -->
+  <material name="left_shell">
+    <color rgba="0.58 0.64 0.72 1" />
+  </material>
+  <material name="left_finger">
+    <color rgba="0.20 0.83 0.94 1" />
+  </material>
+  <link name="left_base_link">
+    <visual name="left_body_visual">
+      <origin xyz="0.02065 0 0.024785" rpy="0 -1.5707963267948966 0" />
+      <geometry>
+        <mesh filename="../meshes/left/base_link.STL" />
+      </geometry>
+      <material name="left_shell" />
+    </visual>
+    <visual name="left_body_aux_visual">
+      <origin xyz="0.0364999715519367 0 0.189421788170065" rpy="1.5707963267948966 0 -1.5707963267948966" />
+      <geometry>
+        <mesh filename="../meshes/left/link4.STL" />
+      </geometry>
+      <material name="left_shell" />
+    </visual>
+  </link>
+  <link name="left_right_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -1.5707963267948966 0" />
+      <geometry>
+        <mesh filename="../meshes/left/link1.STL" />
+      </geometry>
+      <material name="left_finger" />
+    </visual>
+  </link>
+  <joint name="left_right_joint" type="revolute">
+    <origin xyz="0.01464997155193993 -0.0199448287448794 0.0369999972236626" rpy="0 0 0" />
+    <parent link="left_base_link" />
+    <child link="left_right_link" />
+    <axis xyz="1 0 0" />
+    <limit lower="0" upper="0.5047492196767601" effort="1" velocity="1" />
+  </joint>
+  <link name="left_left_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -1.5707963267948966 0" />
+      <geometry>
+        <mesh filename="../meshes/left/link2.STL" />
+      </geometry>
+      <material name="left_finger" />
+    </visual>
+  </link>
+  <joint name="left_left_joint" type="revolute">
+    <origin xyz="0.01465 0.019955 0.037" rpy="0 0 0" />
+    <parent link="left_base_link" />
+    <child link="left_left_link" />
+    <axis xyz="1 0 0" />
+    <limit lower="-0.5047492196767601" upper="0" effort="1" velocity="1" />
+    <mimic joint="left_right_joint" multiplier="-1" offset="0" />
+  </joint>
+  <link name="left_pico_link">
+    <visual>
+      <geometry>
+        <mesh filename="../meshes/left/link3.STL" />
+      </geometry>
+      <material name="left_shell" />
+    </visual>
+  </link>
+  <joint name="left_pico_joint" type="fixed">
+    <origin xyz="-0.032054 -0.023651 0.014053" rpy="2.8750023051296245 0.8599287316238766 -1.9703474638774119" />
+    <parent link="left_base_link" />
+    <child link="left_pico_link" />
+  </joint>
+  <link name="left_eef_link" />
+  <joint name="left_eef_joint" type="fixed">
+    <origin xyz="0.036575 0 0.1894217" rpy="0 0 0" />
+    <parent link="left_base_link" />
+    <child link="left_eef_link" />
+  </joint>
+  <!-- Wrist camera: on the dome-window axis, 19.95 mm behind the window ring (same point as the
+       slave camera). Same axes as the flange: +Z optical axis, +Y left finger. -->
+  <link name="left_camera_link" />
+  <joint name="left_camera_joint" type="fixed">
+    <origin xyz="-0.02285 0 0.04975" rpy="0 0 0" />
+    <parent link="left_base_link" />
+    <child link="left_camera_link" />
+  </joint>
+  <!-- Optical frame (REP-103): +Z optical axis, +X image right, +Y image down toward the fingers. -->
+  <link name="left_camera_optical_link" />
+  <joint name="left_camera_optical_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 -1.5707963267948966" />
+    <parent link="left_camera_link" />
+    <child link="left_camera_optical_link" />
+  </joint>
+  <!-- Massless frame matching the follower (slave) taccap_base_link, i.e. the slave mounting
+       face: 11.5 mm behind the master rear surface, same axes. Not a physical part. -->
+  <link name="left_follower_link" />
+  <joint name="left_follower_joint" type="fixed">
+    <origin xyz="0 0 -0.0115" rpy="0 0 0" />
+    <parent link="left_base_link" />
+    <child link="left_follower_link" />
+  </joint>
+</robot>

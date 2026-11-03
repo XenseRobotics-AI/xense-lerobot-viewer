@@ -32,8 +32,8 @@ export default async function RootLayout({
   const locale = await getServerLocale();
 
   return (
-    <html lang={htmlLang(locale)} className={inter.variable}>
-      <body>
+    <html lang={htmlLang(locale)}>
+      <body className={inter.variable}>
         <ChunkErrorReload />
         <LocaleProvider initialLocale={locale}>{children}</LocaleProvider>
       </body>

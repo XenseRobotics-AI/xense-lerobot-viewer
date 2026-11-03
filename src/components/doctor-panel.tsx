@@ -485,7 +485,7 @@ export default function DoctorPanel({
           ),
         );
       } catch (runError) {
-        if (isAbortError(runError)) return;
+        if (controller.signal.aborted || isAbortError(runError)) return;
         setError(
           runError instanceof Error ? runError.message : String(runError),
         );

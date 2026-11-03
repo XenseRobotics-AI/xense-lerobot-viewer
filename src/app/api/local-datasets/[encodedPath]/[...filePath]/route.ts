@@ -1,8 +1,7 @@
 import { NextRequest } from "next/server";
-import { createReadStream } from "node:fs";
 import path from "node:path";
-import { Readable } from "node:stream";
 import { statDatasetFile } from "@/lib/local-dataset-paths";
+import { createFileResponse } from "@/lib/file-response";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,6 +22,7 @@ function normalizeRange(
   rangeHeader: string,
   fileSize: number,
 ): { start: number; end: number } | null {
+  if (fileSize === 0) return null;
   const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
   if (!match) return null;
 
@@ -64,27 +64,21 @@ function buildCommonHeaders(filePath: string, size: number): Headers {
   return headers;
 }
 
-function fileStream(
-  filePath: string,
-  options?: { start?: number; end?: number },
-): BodyInit {
-  return Readable.toWeb(
-    createReadStream(filePath, options),
-  ) as unknown as BodyInit;
-}
-
 export async function GET(
   req: NextRequest,
   ctx: { params: Promise<{ encodedPath: string; filePath: string[] }> },
 ) {
+  if (req.signal.aborted) return new Response(null, { status: 499 });
   const { encodedPath, filePath } = await ctx.params;
+  if (req.signal.aborted) return new Response(null, { status: 499 });
   const file = await statDatasetFile(encodedPath, filePath);
+  if (req.signal.aborted) return new Response(null, { status: 499 });
   if (!file) return new Response("Not found", { status: 404 });
 
   const rangeHeader = req.headers.get("range");
   if (!rangeHeader) {
     const headers = buildCommonHeaders(file.absolutePath, file.size);
-    return new Response(fileStream(file.absolutePath), {
+    return createFileResponse(file.absolutePath, req.signal, {
       status: 200,
       headers,
     });
@@ -100,31 +94,32 @@ export async function GET(
     });
   }
 
-  const contentLength = range.end - range.start + 1;
-  const headers = buildCommonHeaders(file.absolutePath, contentLength);
+  const headers = buildCommonHeaders(
+    file.absolutePath,
+    range.end - range.start + 1,
+  );
   headers.set(
     "content-range",
     `bytes ${range.start}-${range.end}/${file.size}`,
   );
 
-  return new Response(
-    fileStream(file.absolutePath, {
-      start: range.start,
-      end: range.end,
-    }),
-    {
-      status: 206,
-      headers,
-    },
+  return createFileResponse(
+    file.absolutePath,
+    req.signal,
+    { status: 206, headers },
+    range,
   );
 }
 
 export async function HEAD(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ encodedPath: string; filePath: string[] }> },
 ) {
+  if (req.signal.aborted) return new Response(null, { status: 499 });
   const { encodedPath, filePath } = await ctx.params;
+  if (req.signal.aborted) return new Response(null, { status: 499 });
   const file = await statDatasetFile(encodedPath, filePath);
+  if (req.signal.aborted) return new Response(null, { status: 499 });
   if (!file) return new Response(null, { status: 404 });
 
   return new Response(null, {

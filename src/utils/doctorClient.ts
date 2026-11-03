@@ -8,6 +8,7 @@ import type {
   DoctorStreamEvent,
 } from "@/types/doctor.types";
 import { tStandalone } from "@/i18n/standalone";
+import { consumeResponseLines } from "@/utils/responseLines";
 
 export interface RunDoctorOptions {
   maxEpisodes: number | null;
@@ -70,9 +71,6 @@ export async function runDatasetDoctor(
     throw new Error(tStandalone("err.doctorNoStream"));
   }
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   let result: DoctorRunResponse | null = null;
 
   const processEvent = (event: DoctorStreamEvent | null) => {
@@ -82,15 +80,9 @@ export async function runDatasetDoctor(
     else if (event.type === "error") throw new Error(event.error);
   };
 
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) processEvent(parseStreamLine(line));
-    if (done) break;
-  }
-  processEvent(parseStreamLine(buffer));
+  await consumeResponseLines(response.body, (line) =>
+    processEvent(parseStreamLine(line)),
+  );
 
   if (!result) throw new Error(tStandalone("err.doctorNoResult"));
   return result;

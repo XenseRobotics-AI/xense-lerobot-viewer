@@ -1,11 +1,13 @@
 import {
   asyncBufferFromUrl,
-  cachedAsyncBuffer,
   parquetRead,
   parquetReadObjects,
+  parquetMetadataAsync,
+  type FileMetaData,
   type AsyncBuffer,
 } from "hyparquet";
 import { parseLocalDatasetFileApiUrl } from "@/utils/datasetRoute";
+import { ParquetBufferCache } from "./parquetBufferCache";
 
 export interface DatasetMetadata {
   codebase_version: string;
@@ -47,21 +49,20 @@ export async function fetchJson<T>(
       ? setTimeout(() => controller.abort(), options.timeoutMs)
       : null;
 
-  let res: Response;
   try {
-    res = await fetch(url, {
+    const res = await fetch(url, {
       cache: "no-store",
       signal: controller?.signal,
     });
+    if (!res.ok) {
+      throw new Error(
+        `Failed to fetch JSON ${url}: ${res.status} ${res.statusText}`,
+      );
+    }
+    return (await res.json()) as T;
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
   }
-  if (!res.ok) {
-    throw new Error(
-      `Failed to fetch JSON ${url}: ${res.status} ${res.statusText}`,
-    );
-  }
-  return res.json() as Promise<T>;
 }
 
 export function formatStringWithVars(
@@ -73,8 +74,8 @@ export function formatStringWithVars(
 
 // Fetch and parse the Parquet file
 type ParquetFile = ArrayBuffer | AsyncBuffer;
+const parquetMetadataCache = new WeakMap<ParquetFile, Promise<FileMetaData>>();
 
-const parquetFileCache = new Map<string, AsyncBuffer>();
 async function serverLocalFileModules() {
   // NEXT_RUNTIME is replaced at build time. Keep filesystem imports inside
   // this branch so the client bundle never includes Node-only modules. The
@@ -91,19 +92,56 @@ async function serverLocalFileModules() {
   return null;
 }
 
-export async function fetchParquetFile(url: string): Promise<ParquetFile> {
-  const cached = parquetFileCache.get(url);
+function readMetadata(file: ParquetFile): Promise<FileMetaData> {
+  const cached = parquetMetadataCache.get(file);
   if (cached) return cached;
+  const result = parquetMetadataAsync(file).catch((error: unknown) => {
+    if (parquetMetadataCache.get(file) === result)
+      parquetMetadataCache.delete(file);
+    throw error;
+  });
+  parquetMetadataCache.set(file, result);
+  return result;
+}
 
-  const file =
-    (await openServerLocalDatasetParquet(url)) ??
-    (await asyncBufferFromUrl({
+const parquetFileCache = new ParquetBufferCache({
+  open: async (url) => {
+    const local = await openServerLocalDatasetParquet(url);
+    if (local) return local;
+    const { byteLength } = await asyncBufferFromUrl({
       url,
       requestInit: { cache: "no-store" },
-    }));
-  const wrapped = cachedAsyncBuffer(file);
-  parquetFileCache.set(url, wrapped);
-  return wrapped;
+    });
+    return {
+      byteLength,
+      // Do not retain a hidden whole-file fallback inside asyncBufferFromUrl.
+      async slice(start, end = byteLength) {
+        const res = await fetch(url, {
+          cache: "no-store",
+          headers: { Range: "bytes=" + start + "-" + (end - 1) },
+        });
+        if (!res.ok)
+          throw new Error("Failed to fetch parquet range: " + res.status);
+        const data = await res.arrayBuffer();
+        if (res.status === 200) {
+          if (data.byteLength !== byteLength)
+            throw new Error("Invalid parquet full-file response");
+          return data.slice(start, end);
+        }
+        if (res.status !== 206 || data.byteLength !== end - start)
+          throw new Error("Invalid parquet range response");
+        return data;
+      },
+    };
+  },
+});
+
+export function pruneParquetCache(): void {
+  parquetFileCache.prune();
+}
+
+export async function fetchParquetFile(url: string): Promise<ParquetFile> {
+  return parquetFileCache.get(url);
 }
 
 async function readServerLocalDatasetText(url: string): Promise<string | null> {
@@ -176,21 +214,18 @@ export async function readParquetColumn(
   columns: string[],
   options?: { rowStart?: number; rowEnd?: number },
 ): Promise<unknown[][]> {
-  return new Promise((resolve, reject) => {
-    try {
-      parquetRead({
-        file: fileBuffer,
-        columns: columns.length > 0 ? columns : undefined,
-        rowStart: options?.rowStart,
-        rowEnd: options?.rowEnd,
-        onComplete: (data: unknown[][]) => {
-          resolve(data);
-        },
-      });
-    } catch (error) {
-      reject(error);
-    }
+  let rows: unknown[][] = [];
+  await parquetRead({
+    file: fileBuffer,
+    metadata: await readMetadata(fileBuffer),
+    columns: columns.length > 0 ? columns : undefined,
+    rowStart: options?.rowStart,
+    rowEnd: options?.rowEnd,
+    onComplete: (data: unknown[][]) => {
+      rows = data;
+    },
   });
+  return rows;
 }
 
 export async function readParquetAsObjects(
@@ -200,6 +235,7 @@ export async function readParquetAsObjects(
 ): Promise<Record<string, unknown>[]> {
   return parquetReadObjects({
     file: fileBuffer,
+    metadata: await readMetadata(fileBuffer),
     columns: columns.length > 0 ? columns : undefined,
     rowStart: options?.rowStart,
     rowEnd: options?.rowEnd,

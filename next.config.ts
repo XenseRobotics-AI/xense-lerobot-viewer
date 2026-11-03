@@ -9,6 +9,11 @@ const nextConfig: NextConfig = {
     ignoreDuringBuilds: true,
   },
   transpilePackages: ["three"],
+  // Escaped underscore folders produce under-encoded chunk URLs during Next 15
+  // dev client navigation. Keep the public URL and use a plain internal route.
+  async rewrites() {
+    return [{ source: "/_local/:path*", destination: "/viewer/:path*" }];
+  },
   /**
    * Origins allowed to pull `/_next/*` from the dev server.
    *

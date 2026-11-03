@@ -162,6 +162,24 @@ describe("discoverLocalDatasets with a switched path", () => {
     expect(decodeLocalDatasetPath(result.datasets[0].encodedPath)).toBe(only);
   });
 
+  test("concurrent refreshes share a scan and later refreshes still see new datasets", async () => {
+    const root = await tempTree();
+    process.env.LOCAL_DATASET_ROOT = root;
+    await dataset(path.join(root, "one"));
+    const [first, second] = await Promise.all([
+      discoverLocalDatasets(),
+      discoverLocalDatasets(),
+    ]);
+    expect(first).toBe(second);
+    await dataset(path.join(root, "two"));
+    const refreshed = await discoverLocalDatasets();
+    expect(refreshed.datasets.map((entry) => entry.relativePath)).toEqual([
+      "one",
+      "two",
+    ]);
+    expect(refreshed).not.toBe(first);
+  });
+
   test("an unknown path falls back to the root; a vanished one is reported", async () => {
     const root = await tempTree();
     await dataset(path.join(root, "Xense", "in-root"));

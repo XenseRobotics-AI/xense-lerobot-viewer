@@ -1,8 +1,13 @@
 "use client";
+import {
+  matchesReviewFilter,
+  type ReviewFilter,
+} from "@/types/episode-review.types";
 
 import Link from "next/link";
 import {
   useState,
+  useMemo,
   useEffect,
   useRef,
   useCallback,
@@ -26,7 +31,15 @@ import {
 import { AnnotationsPanel } from "@/components/annotations-panel";
 import { AnnotationsTimeline } from "@/components/annotations-timeline";
 import { SubtaskPanel } from "@/components/subtask-panel";
+import {
+  EpisodeReviewsProvider,
+  useEpisodeReviewData,
+} from "@/context/episode-reviews-context";
+import EpisodeReviewPanel from "@/components/episode-review-panel";
+import { AutoAnnotationPanel } from "@/components/auto-annotation-panel";
+import { useEpisodeStayTime } from "@/hooks/use-episode-stay-time";
 import Sidebar from "@/components/side-nav";
+import EpisodeListLoading from "@/components/episode-list-loading";
 import LanguageSwitcher from "@/components/language-switcher";
 import { useLocale, useT } from "@/context/locale-context";
 import StatsPanel from "@/components/stats-panel";
@@ -36,6 +49,7 @@ import { hasURDFSupport } from "@/lib/so101-robot";
 import {
   computeColumnMinMax,
   getEpisodeDataSafe,
+  getEpisodeList,
   loadAllEpisodeLengthsV3,
   loadAllEpisodeFrameInfo,
   loadCrossEpisodeActionVariance,
@@ -233,19 +247,38 @@ export default function EpisodeViewer({
   org,
   dataset,
   episodeId,
+  reviewBrowsePath,
 }: {
+  reviewBrowsePath: string;
   org: string;
   dataset: string;
   episodeId: number;
 }) {
   const t = useT();
   const [data, setData] = useState<EpisodeData | null>(null);
+  const [list, setList] = useState<{
+    key: string;
+    repoId: string;
+    episodes: number[];
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [episodeLoading, setEpisodeLoading] = useState(false);
   const [selectedEpisodeId, setSelectedEpisodeId] = useState(episodeId);
   const requestIdRef = useRef(0);
   const loadedDatasetRef = useRef<string | null>(null);
   const datasetKey = `${org}/${dataset}`;
+
+  useEffect(() => {
+    let disposed = false;
+    void getEpisodeList(org, dataset)
+      .then((result) => {
+        if (!disposed) setList({ key: datasetKey, ...result });
+      })
+      .catch(() => undefined); // Foreground loader owns visible errors.
+    return () => {
+      disposed = true;
+    };
+  }, [org, dataset, datasetKey]);
 
   useEffect(() => {
     setSelectedEpisodeId(episodeId);
@@ -343,7 +376,14 @@ export default function EpisodeViewer({
   }
 
   if (!data) {
-    return (
+    return list?.key === datasetKey ? (
+      <EpisodeListLoading
+        repoId={list.repoId}
+        episodes={list.episodes}
+        episodeId={selectedEpisodeId}
+        onEpisodeSelect={selectEpisode}
+      />
+    ) : (
       <div className="relative h-screen bg-[var(--bg)]">
         <Loading />
       </div>
@@ -352,20 +392,25 @@ export default function EpisodeViewer({
 
   return (
     <TimeProvider duration={data!.duration} resetKey={data!.episodeId}>
-      <FlaggedEpisodesProvider>
-        <AnnotationsProvider>
-          <EpisodeBootstrap data={data!} />
-          <EpisodeViewerInner
-            data={data!}
-            org={org}
-            dataset={dataset}
-            episodeLoading={episodeLoading}
-            episodeError={error}
-            selectedEpisodeId={selectedEpisodeId}
-            onEpisodeSelect={selectEpisode}
-          />
-        </AnnotationsProvider>
-      </FlaggedEpisodesProvider>
+      <EpisodeReviewsProvider
+        repoId={data!.datasetInfo.repoId}
+        browsePath={reviewBrowsePath}
+      >
+        <FlaggedEpisodesProvider>
+          <AnnotationsProvider>
+            <EpisodeBootstrap data={data!} />
+            <EpisodeViewerInner
+              data={data!}
+              org={org}
+              dataset={dataset}
+              episodeLoading={episodeLoading}
+              episodeError={error}
+              selectedEpisodeId={selectedEpisodeId}
+              onEpisodeSelect={selectEpisode}
+            />
+          </AnnotationsProvider>
+        </FlaggedEpisodesProvider>
+      </EpisodeReviewsProvider>
     </TimeProvider>
   );
 }
@@ -418,7 +463,19 @@ function EpisodeViewerInner({
     task,
   } = data;
 
-  const [videosReady, setVideosReady] = useState(!videosInfo.length);
+  const [videosReadyEpisodeId, setVideosReadyEpisodeId] = useState<
+    number | null
+  >(videosInfo.length ? null : episodeId);
+  const videosReady = videosReadyEpisodeId === episodeId;
+  const [videoFrameReadyEpisodeId, setVideoFrameReadyEpisodeId] = useState<
+    number | null
+  >(videosInfo.length ? null : episodeId);
+  const videoFrameReady =
+    videosInfo.length === 0 || videoFrameReadyEpisodeId === episodeId;
+  const [urdfReady, setUrdfReady] = useState<{
+    episodeId: number;
+    ready: boolean;
+  }>({ episodeId: -1, ready: false });
   const [chartsReady, setChartsReady] = useState(false);
   const [chartEpisodeId, setChartEpisodeId] = useState<number | null>(null);
   const repoId = org && dataset ? repoIdFromRouteParams(org, dataset) : null;
@@ -501,6 +558,27 @@ function EpisodeViewerInner({
   const [, startEpisodeTransition] = useTransition();
   const episodeTransitioning =
     episodeLoading || selectedEpisodeId !== episodeId;
+  const {
+    file: reviewFile,
+    reviewer,
+    loaded: reviewLoaded,
+  } = useEpisodeReviewData();
+  const episodeStay = useEpisodeStayTime({
+    datasetKey: datasetInfo.repoId,
+    episodeId,
+    reviewer,
+    durationSeconds: data.duration,
+    enabled:
+      !episodeTransitioning && !episodeError && reviewLoaded && !!reviewer,
+    reviewSurfaceReady:
+      activeTab === "episodes"
+        ? videosInfo.length > 0
+          ? videoFrameReady
+          : chartEpisodeId === episodeId && chartsReady
+        : activeTab === "urdf" &&
+          urdfReady.episodeId === episodeId &&
+          urdfReady.ready,
+  });
   // The full-page layer only guards the data transition. Media decoding and
   // Recharts rendering have their own local placeholders, so they no longer
   // hold the entire episode shell behind LOADING.
@@ -536,7 +614,8 @@ function EpisodeViewerInner({
       window.cancelAnimationFrame(chartReadyFrameRef.current);
       chartReadyFrameRef.current = null;
     }
-    setVideosReady(!videosInfo.length);
+    setVideosReadyEpisodeId(videosInfo.length ? null : episodeId);
+    setVideoFrameReadyEpisodeId(videosInfo.length ? null : episodeId);
     setChartsReady(false);
     setChartEpisodeId(null);
   }, [episodeId, videosInfo.length]);
@@ -773,7 +852,7 @@ function EpisodeViewerInner({
   // useState — they don't drive renders.
   const { seek, setIsPlaying } = useTimeControls();
   const handleVideosReady = useCallback(() => {
-    setVideosReady(true);
+    setVideosReadyEpisodeId(episodeId);
     logSwitchTiming(
       switchTimingRef.current,
       "videosLogged",
@@ -781,6 +860,18 @@ function EpisodeViewerInner({
       "videos decoded",
     );
   }, [episodeId]);
+  const handleVisibleVideoFrameReady = useCallback(
+    (ready: boolean) => {
+      setVideoFrameReadyEpisodeId(ready ? episodeId : null);
+    },
+    [episodeId],
+  );
+  const handleUrdfReadyChange = useCallback(
+    (readyEpisodeId: number, ready: boolean) => {
+      setUrdfReady({ episodeId: readyEpisodeId, ready });
+    },
+    [],
+  );
   const handleChartsReady = useCallback(() => {
     // Commit readiness immediately: the two frames below exist only to make
     // the *measurement* honest, and gating the state update behind them would
@@ -853,9 +944,13 @@ function EpisodeViewerInner({
     undefined,
   );
   // Which annotation system the Annotations tab's right pane is showing.
+  // `?ann=` opens a link straight on one editor (e.g. `?tab=annotations&ann=auto`).
   const [annotationEditor, setAnnotationEditor] = useState<
-    "atoms" | "subtasks"
-  >("atoms");
+    "atoms" | "subtasks" | "auto"
+  >(() => {
+    const fromUrl = searchParams.get("ann");
+    return fromUrl === "subtasks" || fromUrl === "auto" ? fromUrl : "atoms";
+  });
 
   const [urdfMounted, setUrdfMounted] = useState(activeTab === "urdf");
 
@@ -863,15 +958,30 @@ function EpisodeViewerInner({
     if (activeTab === "urdf") setUrdfMounted(true);
   }, [activeTab]);
 
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
+  const reviewFilteredEpisodes = useMemo(
+    () =>
+      episodes.filter((episode) =>
+        matchesReviewFilter(
+          reviewFile.episodes[String(episode)] ?? [],
+          reviewFilter,
+          reviewer,
+        ),
+      ),
+    [episodes, reviewFile, reviewFilter, reviewer],
+  );
+
   // Pagination state
   const pageSize = 100;
   const [currentPage, setCurrentPage] = useState(1);
-  const totalPages = Math.ceil(episodes.length / pageSize);
-  const paginatedEpisodes = episodes.slice(
+  const totalPages = Math.max(
+    1,
+    Math.ceil(reviewFilteredEpisodes.length / pageSize),
+  );
+  const paginatedEpisodes = reviewFilteredEpisodes.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize,
   );
-
   // Apply a URL time only after the route and loaded episode agree. Without
   // this guard, a paused `?t=` from the previous episode can issue a second
   // seek while the new media is already decoding its first frame.
@@ -894,12 +1004,19 @@ function EpisodeViewerInner({
 
   // Initialize page based on the current episode. Splitting this out from
   // the keyboard listener effect lets the listener attach exactly once.
+  const pagedEpisodeRef = useRef<number | null>(null);
   useEffect(() => {
-    const episodeIndex = episodes.indexOf(selectedEpisodeId);
+    if (pagedEpisodeRef.current === selectedEpisodeId) return;
+    pagedEpisodeRef.current = selectedEpisodeId;
+    const episodeIndex = reviewFilteredEpisodes.indexOf(selectedEpisodeId);
     if (episodeIndex !== -1) {
       setCurrentPage(Math.floor(episodeIndex / pageSize) + 1);
     }
-  }, [episodes, pageSize, selectedEpisodeId]);
+  }, [reviewFilteredEpisodes, pageSize, selectedEpisodeId]);
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
 
   // Mirror the values the keydown handler needs into a ref. Without this,
   // `useCallback` would produce a new handler whenever `activeTab` /
@@ -1045,8 +1162,38 @@ function EpisodeViewerInner({
           activeTab === "annotations" ||
           activeTab === "urdf") && (
           <Sidebar
+            preload={
+              org && dataset
+                ? {
+                    org,
+                    dataset,
+                    enabled:
+                      !episodeTransitioning &&
+                      !episodeError &&
+                      videosReady &&
+                      (activeTab === "episodes" || activeTab === "urdf"),
+                  }
+                : undefined
+            }
+            reviewPanel={
+              activeTab === "episodes" || activeTab === "urdf" ? (
+                <EpisodeReviewPanel
+                  episodeId={episodeId}
+                  source={activeTab === "urdf" ? "urdf" : "episodes"}
+                  disabled={episodeTransitioning || !!episodeError}
+                  episodeDurationMs={episodeStay.episodeDurationMs}
+                  readStayMs={episodeStay.readStayMs}
+                />
+              ) : null
+            }
             datasetInfo={datasetInfo}
             paginatedEpisodes={paginatedEpisodes}
+            reviewFilter={reviewFilter}
+            onReviewFilterChange={(filter) => {
+              setReviewFilter(filter);
+              setCurrentPage(1);
+            }}
+            reviewFilteredEpisodes={reviewFilteredEpisodes}
             episodeId={selectedEpisodeId}
             totalPages={totalPages}
             currentPage={currentPage}
@@ -1159,10 +1306,12 @@ function EpisodeViewerInner({
               {/* Videos */}
               {videosInfo.length > 0 && (
                 <SimpleVideosPlayer
+                  datasetKey={datasetInfo.repoId}
                   videosInfo={videosInfo}
                   episodeId={episodeId}
                   loading={playerLoading}
                   onVideosReady={handleVideosReady}
+                  onVisibleVideoFrameReady={handleVisibleVideoFrameReady}
                 />
               )}
 
@@ -1245,10 +1394,12 @@ function EpisodeViewerInner({
                 {videosInfo.length > 0 && (
                   <div className="sticky top-0 z-20 bg-[var(--bg)] pb-3 lg:static lg:col-start-1 lg:row-start-1 lg:max-h-[55vh] lg:overflow-y-auto lg:bg-transparent lg:pb-0">
                     <SimpleVideosPlayer
+                      datasetKey={datasetInfo.repoId}
                       videosInfo={videosInfo}
                       episodeId={episodeId}
                       loading={playerLoading}
                       onVideosReady={handleVideosReady}
+                      onVisibleVideoFrameReady={handleVisibleVideoFrameReady}
                       annotationOverlay
                     />
                   </div>
@@ -1285,6 +1436,7 @@ function EpisodeViewerInner({
                       [
                         { id: "atoms", label: t("ann.title") },
                         { id: "subtasks", label: t("subtask.title") },
+                        { id: "auto", label: t("autoAnn.title") },
                       ] as const
                     ).map((entry) => (
                       <button
@@ -1308,13 +1460,18 @@ function EpisodeViewerInner({
                       <AnnotationsPanel
                         cameraKeys={videosInfo.map((v) => v.filename)}
                       />
-                    ) : (
+                    ) : annotationEditor === "subtasks" ? (
                       <SubtaskPanel
                         encodedPath={encodedDatasetPath}
                         episodeId={episodeId}
                         fps={datasetInfo.fps}
                         task={task}
                         frameTimestamps={data.frameTimestamps}
+                      />
+                    ) : (
+                      <AutoAnnotationPanel
+                        encodedPath={encodedDatasetPath}
+                        episodeId={episodeId}
                       />
                     )}
                   </div>
@@ -1422,6 +1579,7 @@ function EpisodeViewerInner({
                 <URDFViewer
                   key={datasetInfo.repoId}
                   data={data}
+                  onReadyChange={handleUrdfReadyChange}
                   active={
                     activeTab === "urdf" && !episodeLoading && !episodeError
                   }

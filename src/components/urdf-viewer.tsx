@@ -19,7 +19,9 @@ import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import type { EpisodeData } from "@/types/episode-data";
+import { useDocumentVisible } from "@/hooks/use-document-visible";
 import UrdfPlaybackBar from "@/components/urdf-playback-bar";
+import { ReplayPlaybackDriver } from "@/components/replay-playback-driver";
 import UrdfValueReadout from "@/components/urdf-value-readout";
 import UrdfVideoOverlay from "@/components/urdf-video-overlay";
 import { useLocale } from "@/context/locale-context";
@@ -399,10 +401,10 @@ type SceneBounds = {
 };
 
 /**
- * Build the Three.js transform whose local frame is the recorded link4 frame.
+ * Build the Three.js transform whose local frame is the recorded TCP frame.
  * Dataset coordinates use Z-up; the scene uses Y-up.
  */
-function tacCapLink4SceneMatrix(frame: TacCapGripperFrame): THREE.Matrix4 {
+function tacCapTcpSceneMatrix(frame: TacCapGripperFrame): THREE.Matrix4 {
   return new THREE.Matrix4().set(
     ...tacCapRecordedTcpSceneMatrix(frame.position, frame.rotation),
   );
@@ -427,7 +429,7 @@ function applyTacCapGripperFrame(
       calibratedTravel,
     ),
   );
-  robot.matrix.copy(tacCapLink4SceneMatrix(frame)).multiply(recordedTcpToRoot);
+  robot.matrix.copy(tacCapTcpSceneMatrix(frame)).multiply(recordedTcpToRoot);
   robot.matrixWorldNeedsUpdate = true;
   robot.updateMatrixWorld(true);
 }
@@ -692,7 +694,7 @@ function tacCapSceneBounds(
 }
 
 function TacCapCameraFit({ bounds }: { bounds: SceneBounds }) {
-  const { camera, controls } = useThree();
+  const { camera, controls, invalidate } = useThree();
 
   useEffect(() => {
     const perspective = camera as THREE.PerspectiveCamera;
@@ -717,7 +719,8 @@ function TacCapCameraFit({ bounds }: { bounds: SceneBounds }) {
     };
     orbit?.target?.copy(bounds.center);
     orbit?.update?.();
-  }, [bounds, camera, controls]);
+    invalidate();
+  }, [bounds, camera, controls, invalidate]);
 
   return null;
 }
@@ -766,13 +769,13 @@ function TacCapGripperModel({
   frame: TacCapGripperFrame | null;
   profile: BundledGripperProfile;
   side: TacCapSide;
-  /** See `PlaybackDriver`: between-row time while playing, else null. */
+  /** See `ReplayPlaybackDriver`: between-row time while playing, else null. */
   smoothTimeRef: React.MutableRefObject<number | null>;
   tcpFrameConvention: TcpFrameConvention;
   track: TacCapGripperTrack | null;
   onReady: (side: TacCapSide) => void;
 }) {
-  const { scene } = useThree();
+  const { scene, invalidate } = useThree();
   const robotRef = useRef<URDFRobot | null>(null);
   // Recorded TCP → model root. The profile's constant assumes the
   // `same-axes-v0` frame; a `mirrored-v1` left hand is turned back into it
@@ -811,6 +814,7 @@ function TacCapGripperModel({
       }
       readyReported = true;
       onReady(side);
+      invalidate();
     };
 
     manager.onLoad = () => {
@@ -825,6 +829,7 @@ function TacCapGripperModel({
           mesh.castShadow = true;
           mesh.receiveShadow = true;
           onLoad(mesh);
+          invalidate();
           if (profile.tintFingersPerSide) {
             tintBundledGripperFinger(mesh, side);
           }
@@ -841,9 +846,9 @@ function TacCapGripperModel({
         robot.matrixAutoUpdate = false;
         robot.updateMatrixWorld(true);
 
-        if (!robot.links[profile.tcpFrameLink]) {
+        if (!robot.links[profile.tcpFrameLink(side)]) {
           console.error(
-            `${side} gripper URDF has no ${profile.tcpFrameLink} frame`,
+            `${side} gripper URDF has no ${profile.tcpFrameLink(side)} frame`,
           );
           return;
         }
@@ -861,7 +866,7 @@ function TacCapGripperModel({
             robot,
             recordedTcpToRootRef.current,
             frameRef.current,
-            profile.driveJoint,
+            profile.driveJoint(side),
             travelRef.current,
           );
         } else {
@@ -885,7 +890,7 @@ function TacCapGripperModel({
       if (robotRef.current === mountedRobot) robotRef.current = null;
       recordedTcpToRootRef.current = null;
     };
-  }, [onReady, profile, scene, side]);
+  }, [onReady, profile, scene, side, invalidate]);
 
   useLayoutEffect(() => {
     const robot = robotRef.current;
@@ -899,10 +904,10 @@ function TacCapGripperModel({
       robot,
       recordedTcpToRoot,
       frame,
-      profile.driveJoint,
+      profile.driveJoint(side),
       calibratedTravel,
     );
-  }, [calibratedTravel, frame, profile.driveJoint, recordedTcpToRoot]);
+  }, [calibratedTravel, frame, profile, recordedTcpToRoot, side]);
 
   // While playing, re-pose every display frame from the continuous time. The
   // row-rate layout effect above still runs; any pose it sets is overwritten
@@ -918,7 +923,7 @@ function TacCapGripperModel({
       robot,
       tcpToRoot,
       sampled,
-      profile.driveJoint,
+      profile.driveJoint(side),
       travelRef.current,
     );
   });
@@ -1588,6 +1593,25 @@ function TacCapGripperScene({
   );
 }
 
+/** Imperative poses must repaint on seeking, even when the render loop is idle. */
+function SceneInvalidation({
+  frame,
+  revision,
+  jointValues,
+  active,
+}: {
+  frame: number;
+  revision: string;
+  jointValues: Record<string, number>;
+  active: boolean;
+}) {
+  const invalidate = useThree((state) => state.invalidate);
+  useEffect(() => {
+    if (active) invalidate();
+  }, [active, frame, revision, jointValues, invalidate]);
+  return null;
+}
+
 // ─── Robot scene (imperative, inside Canvas) ───
 function RobotScene({
   urdfUrl,
@@ -1606,7 +1630,7 @@ function RobotScene({
   trailResetKey: string;
   scale: number;
 }) {
-  const { scene, camera, controls, size } = useThree();
+  const { scene, camera, controls, size, invalidate } = useThree();
   const robotRef = useRef<URDFRobot | null>(null);
   const tipLinksRef = useRef<THREE.Object3D[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -1872,6 +1896,7 @@ function RobotScene({
           if (!isOpenArm) c.receiveShadow = true;
         });
         robot.updateMatrixWorld(true);
+        invalidate();
 
         // Auto-fit camera: URDFs can ship world→base offsets (SO-arm does)
         // that put the robot far from origin, so a fixed camera pose crops
@@ -1977,7 +2002,16 @@ function RobotScene({
       }
       tipLinksRef.current = [];
     };
-  }, [urdfUrl, scale, scene, camera, controls, onJointsLoaded, ensureTrails]);
+  }, [
+    urdfUrl,
+    scale,
+    scene,
+    camera,
+    controls,
+    onJointsLoaded,
+    ensureTrails,
+    invalidate,
+  ]);
 
   const tipWorldPos = useMemo(() => new THREE.Vector3(), []);
 
@@ -2056,95 +2090,24 @@ function RobotScene({
   return null;
 }
 
-// ─── Playback ticker ───
-function PlaybackDriver({
-  playing,
-  rowsPerSecond,
-  replayRevision,
-  totalFrames,
-  frameRef,
-  setFrame,
-  smoothTimeRef,
-  timeAtRow,
-}: {
-  playing: boolean;
-  /** Chart rows to advance per second — see `rowsPerSecond` in URDFViewer. */
-  rowsPerSecond: number;
-  replayRevision: number;
-  totalFrames: number;
-  frameRef: React.MutableRefObject<number>;
-  setFrame: React.Dispatch<React.SetStateAction<number>>;
-  /**
-   * Episode time between two rows, refreshed every display frame while
-   * playing (null when paused). `frame` only steps at the row rate — 30 Hz
-   * for a 30 fps dataset — and the models used to snap to each row, which on
-   * a 60–144 Hz screen reads as stutter however light the scene is. The
-   * models sample their pose from this in R3F's loop instead, so motion is
-   * continuous without re-rendering React at the display rate.
-   */
-  smoothTimeRef: React.MutableRefObject<number | null>;
-  timeAtRow: (row: number) => number;
-}) {
-  const elapsed = useRef(0);
-  const last = useRef(0);
-  useEffect(() => {
-    if (!playing) return;
-    let raf: number;
-    const tick = () => {
-      raf = requestAnimationFrame(tick);
-      const now = performance.now();
-      const dt = (now - last.current) / 1000;
-      last.current = now;
-      if (dt > 0 && dt < 0.5) {
-        elapsed.current += dt;
-        const fd = Math.floor(elapsed.current * rowsPerSecond);
-        if (fd > 0) {
-          elapsed.current -= fd / rowsPerSecond;
-          frameRef.current = (frameRef.current + fd) % totalFrames;
-          setFrame(frameRef.current);
-        }
-        const row = frameRef.current;
-        const t0 = timeAtRow(row);
-        const t1 = row + 1 < totalFrames ? timeAtRow(row + 1) : t0;
-        const alpha = Math.min(Math.max(elapsed.current * rowsPerSecond, 0), 1);
-        smoothTimeRef.current = t0 + (t1 - t0) * alpha;
-      }
-    };
-    last.current = performance.now();
-    elapsed.current = 0;
-    raf = requestAnimationFrame(tick);
-    return () => {
-      cancelAnimationFrame(raf);
-      smoothTimeRef.current = null;
-    };
-  }, [
-    playing,
-    rowsPerSecond,
-    replayRevision,
-    totalFrames,
-    frameRef,
-    setFrame,
-    smoothTimeRef,
-    timeAtRow,
-  ]);
-  return null;
-}
-
 // ═══════════════════════════════════════
 // ─── Main URDF Viewer ───
 // ═══════════════════════════════════════
 export default function URDFViewer({
   data,
   active,
+  onReadyChange,
   playToggleRef,
   seekByRef,
 }: {
   data: EpisodeData;
   active: boolean;
+  onReadyChange?: (episodeId: number, ready: boolean) => void;
   playToggleRef?: React.RefObject<(() => void) | undefined>;
   seekByRef?: React.RefObject<((seconds: number) => void) | undefined>;
 }) {
   const { t, tRich } = useLocale();
+  const visible = useDocumentVisible();
   const { datasetInfo } = data;
   const fps = datasetInfo.fps || 30;
   const gripperProfile = useMemo(
@@ -2334,14 +2297,15 @@ export default function URDFViewer({
   }, [selectedEpisode]);
 
   useEffect(() => {
-    if (!active) setPlaying(false);
-  }, [active]);
+    if (!active || !visible) setPlaying(false);
+  }, [active, visible]);
 
   const handleFrameChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const f = parseInt(e.target.value);
       setFrame(f);
       frameRef.current = f;
+      setReplayRevision((revision) => revision + 1);
     },
     [],
   );
@@ -2377,7 +2341,12 @@ export default function URDFViewer({
   const urdfLoading = isBundledGripper
     ? !tacCapDataUnavailable && !tacCapModelsReady
     : urdfJointNames.length === 0;
-  const playbackDisabled = !active || urdfLoading || trajectoryUnavailable;
+  const playbackDisabled =
+    !active || !visible || urdfLoading || trajectoryUnavailable;
+
+  useEffect(() => {
+    onReadyChange?.(selectedEpisode, !urdfLoading && !trajectoryUnavailable);
+  }, [onReadyChange, selectedEpisode, trajectoryUnavailable, urdfLoading]);
 
   useEffect(() => {
     if (playbackDisabled) setPlaying(false);
@@ -2559,7 +2528,9 @@ export default function URDFViewer({
         )}
         <Canvas
           shadows
-          frameloop={active ? "always" : "never"}
+          frameloop={
+            !active || !visible ? "never" : playing ? "always" : "demand"
+          }
           camera={{
             position: isG1
               ? [1.5, 1.0, 1.5]
@@ -2575,6 +2546,18 @@ export default function URDFViewer({
             toneMappingExposure: 0.9,
           }}
         >
+          <SceneInvalidation
+            frame={frame}
+            revision={[
+              selectedEpisode,
+              replayRevision,
+              trailEnabled,
+              tacCapModelsReady,
+              urdfJointNames.length,
+            ].join(":")}
+            jointValues={jointValues}
+            active={active && visible}
+          />
           <color attach="background" args={["#1a2433"]} />
           {/*
            * Keep the lighting self-contained. Drei's `Environment preset`
@@ -2663,19 +2646,22 @@ export default function URDFViewer({
               isBundledGripper ? [0, 0, 0] : isG1 ? [0, 0.5, 0] : [0, 0.8, 0]
             }
           />
-          <PlaybackDriver
-            playing={playing}
-            rowsPerSecond={rowsPerSecond}
-            replayRevision={replayRevision}
-            totalFrames={totalFrames}
-            frameRef={frameRef}
-            setFrame={setFrame}
-            smoothTimeRef={smoothTimeRef}
-            timeAtRow={timeAtRow}
-          />
         </Canvas>
+        {/* Share the DOM media's commit timing, independently of Canvas. */}
+        <ReplayPlaybackDriver
+          playing={playing && active && visible}
+          rowsPerSecond={rowsPerSecond}
+          replayRevision={replayRevision}
+          totalFrames={totalFrames}
+          frameRef={frameRef}
+          setFrame={setFrame}
+          smoothTimeRef={smoothTimeRef}
+          timeAtRow={timeAtRow}
+        />
         <UrdfVideoOverlay
-          active={active}
+          active={active && visible}
+          datasetKey={datasetInfo.repoId}
+          episodeId={selectedEpisode}
           episodeTimeSeconds={replayTimeSeconds}
           playing={playing}
           replayRevision={replayRevision}

@@ -28,6 +28,8 @@ type TimeControls = {
   seek: (t: number, source?: TimeUpdateSource) => void;
   subscribe: (cb: (t: number) => void) => () => void;
   setIsPlaying: React.Dispatch<React.SetStateAction<boolean>>;
+  /** Latest user intent, including updates React has not committed yet. */
+  playingIntentRef: React.MutableRefObject<boolean>;
   setDuration: React.Dispatch<React.SetStateAction<number>>;
 };
 
@@ -61,7 +63,17 @@ export const TimeProvider: React.FC<{
   resetKey?: string | number;
 }> = ({ children, duration: initialDuration, resetKey }) => {
   const [currentTime, setCurrentTimeState] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [isPlaying, setIsPlayingState] = useState(false);
+  const playingIntentRef = useRef(false);
+  // Boundary events can arrive in the same task as a pause click, before
+  // React commits isPlaying. Resolve functional toggles against the latest
+  // intent too, so rapid keyboard/button commands stay in order.
+  const setIsPlaying = useCallback((next: React.SetStateAction<boolean>) => {
+    const resolved =
+      typeof next === "function" ? next(playingIntentRef.current) : next;
+    playingIntentRef.current = resolved;
+    setIsPlayingState(resolved);
+  }, []);
   const [duration, setDuration] = useState(initialDuration);
   const [externalSeekVersion, setExternalSeekVersion] = useState(0);
   const listeners = useRef<Set<(t: number) => void>>(new Set());
@@ -134,7 +146,7 @@ export const TimeProvider: React.FC<{
     setDuration(initialDuration);
     setExternalSeekVersion((version) => version + 1);
     listeners.current.forEach((fn) => fn(0));
-  }, [initialDuration, resetKey]);
+  }, [initialDuration, resetKey, setIsPlaying]);
 
   const subscribe = useCallback((cb: (t: number) => void) => {
     listeners.current.add(cb);
@@ -155,9 +167,10 @@ export const TimeProvider: React.FC<{
       seek: updateTime,
       subscribe,
       setIsPlaying,
+      playingIntentRef,
       setDuration,
     }),
-    [subscribe, updateTime],
+    [setIsPlaying, subscribe, updateTime],
   );
 
   return (

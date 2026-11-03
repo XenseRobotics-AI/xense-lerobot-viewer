@@ -2,18 +2,7 @@
 
 import React, { useEffect } from "react";
 import { useT } from "@/context/locale-context";
-
-const RELOAD_GUARD_KEY = "__chunk_reload_at";
-const RELOAD_COOLDOWN_MS = 10_000;
-
-function isChunkError(error: Error): boolean {
-  return (
-    error.name === "ChunkLoadError" ||
-    /Loading chunk [^\s]+ failed|Loading CSS chunk [^\s]+ failed/i.test(
-      error.message,
-    )
-  );
-}
+import { claimChunkReload } from "@/utils/chunkRecovery";
 
 export default function Error({
   error,
@@ -27,20 +16,12 @@ export default function Error({
   // boundary during navigation. Recover with a single guarded reload rather
   // than showing a scary error for something a refresh fixes.
   useEffect(() => {
-    if (!isChunkError(error)) return;
-    let last = 0;
     try {
-      last = Number(sessionStorage.getItem(RELOAD_GUARD_KEY) ?? "0");
+      if (claimChunkReload(error, window.sessionStorage))
+        window.location.reload();
     } catch {
-      // ignore
+      /* Render the retry UI if storage is unavailable. */
     }
-    if (Date.now() - last < RELOAD_COOLDOWN_MS) return;
-    try {
-      sessionStorage.setItem(RELOAD_GUARD_KEY, String(Date.now()));
-    } catch {
-      // ignore
-    }
-    window.location.reload();
   }, [error]);
 
   return (

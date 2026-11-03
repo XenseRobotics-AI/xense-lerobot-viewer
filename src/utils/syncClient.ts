@@ -12,6 +12,7 @@
  */
 
 import { tStandalone } from "@/i18n/standalone";
+import { consumeResponseLines } from "@/utils/responseLines";
 
 const SYNC_URL = "/api/local-datasets/sync";
 
@@ -137,9 +138,6 @@ export async function runSync(
   }
   if (!response.body) throw new Error(tStandalone("err.syncNoStream"));
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   let result: SyncResult | null = null;
   let streamError: string | null = null;
 
@@ -165,15 +163,7 @@ export async function runSync(
     }
   };
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? "";
-    for (const line of lines) handle(line);
-  }
-  handle(buffer);
+  await consumeResponseLines(response.body, handle);
 
   if (streamError) throw new Error(streamError);
   if (!result) throw new Error(tStandalone("err.syncNoResult"));

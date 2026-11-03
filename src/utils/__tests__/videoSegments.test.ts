@@ -49,4 +49,22 @@ describe("episode time ↔ media time", () => {
     const media = mediaTimeFromEpisodeTime(segmented, 4.25);
     expect(episodeTimeFromMediaTime(segmented, media)).toBeCloseTo(4.25, 6);
   });
+
+  test("falls back safely when segment metadata is missing or malformed", () => {
+    const malformed: VideoInfo = {
+      ...segmented,
+      segmentStart: Number.NaN,
+      segmentEnd: Number.NaN,
+    };
+    expect(mediaTimeFromEpisodeTime(malformed, 2)).toBe(2);
+    expect(episodeTimeFromMediaTime(malformed, 2)).toBe(2);
+
+    const reversed: VideoInfo = {
+      ...segmented,
+      segmentStart: 20,
+      segmentEnd: 10,
+    };
+    expect(mediaTimeFromEpisodeTime(reversed, 2)).toBe(22);
+    expect(episodeTimeFromMediaTime(reversed, 22)).toBe(2);
+  });
 });

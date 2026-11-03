@@ -20,17 +20,31 @@ export type Matrix4Elements = [
 ];
 
 /**
- * Fixed root → URDF link4 translations measured by the supplied SolidWorks
- * models. The bundled left/right URDFs give link4 the same canonical TCP
- * orientation, so this transform contains translation only.
+ * `<side>_base_link` → `<side>_eef_link` in the bundled master URDFs, copied
+ * from XTac-UMI-Description (`<side>_eef_joint`). Both sides share it: the EEF
+ * is the centre of the closed fingertips' most distal face, on the tool axis
+ * plane, 36.575 mm off it along +X.
  */
 export const TACCAP_ROOT_TO_RECORDED_TCP_TRANSLATION: Record<
   TacCapSide,
   readonly [number, number, number]
 > = {
-  left: [0.164636788170065, 0, -0.0158499715519367],
-  right: [0.164643038155223, 0, -0.01599997155194],
+  left: [0.036575, 0, 0.1894217],
+  right: [0.036575, 0, 0.1894217],
 };
+
+/**
+ * The recorded TCP axes expressed in the URDF root frame, row-major.
+ *
+ * The URDFs put the tool axis on +Z (+Y left finger, +X the finger offset
+ * side); a `same-axes-v0` TCP is X forward, Y left, Z up. So `X_tcp = +Z`,
+ * `Y_tcp = +Y`, `Z_tcp = -X` — the -90° about Y that the description repo
+ * applied to every mesh when it re-rooted these models, which is why the old
+ * SolidWorks frames and this one place the gripper identically.
+ */
+const TACCAP_ROOT_TO_RECORDED_TCP_ROTATION = [
+  0, 0, -1, 0, 1, 0, 1, 0, 0,
+] as const;
 
 /** Dataset (Z-up) to Three.js scene (Y-up) position mapping. */
 export function tacCapDatasetPointToScene(
@@ -40,14 +54,23 @@ export function tacCapDatasetPointToScene(
 }
 
 /**
- * Recorded canonical TCP → model root transform. Its rotation is identity for
- * both sides because both bundled link4 frames share the canonical heading.
+ * Recorded canonical TCP → model root transform: the inverse of
+ * `[R | t]` above, `[Rᵀ | -Rᵀt]`. The root sits 189.4 mm behind the TCP along
+ * its +X and 36.6 mm above it along its +Z.
  */
 export function tacCapRecordedTcpToRootMatrix(
   side: TacCapSide,
 ): Matrix4Elements {
-  const [x, y, z] = TACCAP_ROOT_TO_RECORDED_TCP_TRANSLATION[side];
-  return [1, 0, 0, -x, 0, 1, 0, -y, 0, 0, 1, -z, 0, 0, 0, 1];
+  const t = TACCAP_ROOT_TO_RECORDED_TCP_TRANSLATION[side];
+  const r = TACCAP_ROOT_TO_RECORDED_TCP_ROTATION;
+  const out: number[] = [];
+  for (let row = 0; row < 3; row += 1) {
+    // Row `row` of Rᵀ is column `row` of R.
+    const rt = [r[row], r[3 + row], r[6 + row]];
+    const shift = -(rt[0] * t[0] + rt[1] * t[1] + rt[2] * t[2]);
+    out.push(rt[0], rt[1], rt[2], shift === 0 ? 0 : shift);
+  }
+  return [...out, 0, 0, 0, 1] as Matrix4Elements;
 }
 
 /**

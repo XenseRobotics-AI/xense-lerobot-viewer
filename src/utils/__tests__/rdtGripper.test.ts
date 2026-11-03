@@ -70,13 +70,13 @@ describe("RDT gripper profile", () => {
     // One file for both arms — the URDF's Left_/Right_ are the two jaws.
     expect(profile!.urdf("left")).toBe("/urdf/rdt-gripper/gripper.urdf");
     expect(profile!.urdf("right")).toBe(profile!.urdf("left"));
-    expect(profile!.driveJoint).toBe(DRIVE_JOINT);
+    expect(profile!.driveJoint("left")).toBe(DRIVE_JOINT);
   });
 
   test("its guard link exists in the URDF it loads", () => {
     // The guard only catches loading the wrong file; if it names a link the
     // model does not have, every RDT episode silently renders nothing.
-    expect(URDF).toContain(`<link name="${profile!.tcpFrameLink}">`);
+    expect(URDF).toContain(`<link name="${profile!.tcpFrameLink("left")}">`);
   });
 
   test("places the model root behind the TCP along the approach axis", () => {
@@ -90,7 +90,6 @@ describe("RDT gripper profile", () => {
   });
 
   test("its rotation is a real axis cycle, not the identity", () => {
-    // This is what differs from TacCap, whose root->TCP is translation-only.
     // A determinant other than +1 would mirror or squash the model.
     const m = profile!.rootFromTcp("left");
     const r = [
@@ -119,20 +118,16 @@ describe("RDT gripper profile", () => {
 });
 
 describe("TacCap profile still resolves through the shared path", () => {
-  test("keeps its own asset, joint and translation-only transform", () => {
+  test("keeps its own per-side asset, joint and guard link", () => {
     const profile = bundledGripperProfile("bi_taccap_gripper");
     expect(profile).not.toBeNull();
-    expect(profile!.urdf("left")).toBe(
-      "/urdf/taccap-grippers/left/gripper.urdf",
-    );
-    expect(profile!.urdf("right")).toBe(
-      "/urdf/taccap-grippers/right/gripper.urdf",
-    );
-    expect(profile!.driveJoint).toBe("joint1");
-    const m = profile!.rootFromTcp("left");
-    expect([m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]]).toEqual([
-      1, 0, 0, 0, 1, 0, 0, 0, 1,
-    ]);
+    for (const side of ["left", "right"] as const) {
+      expect(profile!.urdf(side)).toBe(
+        `/urdf/taccap-grippers/urdf/taccap_g1_master_${side}.urdf`,
+      );
+      expect(profile!.driveJoint(side)).toBe(`${side}_right_joint`);
+      expect(profile!.tcpFrameLink(side)).toBe(`${side}_eef_link`);
+    }
   });
 
   test("a robot with no bundled model resolves to null", () => {

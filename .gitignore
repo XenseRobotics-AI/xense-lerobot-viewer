@@ -50,8 +50,8 @@ next-env.d.ts
 __pycache__/
 *.pyc
 
-# Corpus history written by the homepage dashboard (lives under
-# LOCAL_DATASET_ROOT, which is normally outside the repo).
+# Local runtime data, including personal reviewer rosters and inspection records.
+# Usually under a browsed dataset directory outside this repository.
 .xense-viewer/
 
 # Local Python env for scripts/ (see scripts/requirements.txt)

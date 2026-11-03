@@ -8,6 +8,7 @@ import type {
 } from "@/lib/local-datasets-discovery";
 import type { DailyDelta } from "@/utils/corpusHistory";
 import { groupDatasetsByPrefix } from "@/utils/datasetGrouping";
+import ReviewCollectionPanel from "@/components/review-collection-panel";
 import CorpusDashboard from "@/components/corpus-dashboard";
 import DatasetPathSwitcher from "@/components/dataset-path-switcher";
 import InterruptedConversions from "@/components/interrupted-conversions";
@@ -64,6 +65,9 @@ export default function LocalDatasetGrid({
    * rather than opening a page that no longer exists.
    */
   const [query, setQuery] = useState("");
+  const [reviewedEpisodesByDataset, setReviewedEpisodesByDataset] = useState<
+    Record<string, number>
+  >({});
 
   const groups = useMemo(() => groupDatasetsByPrefix(datasets), [datasets]);
 
@@ -123,6 +127,12 @@ export default function LocalDatasetGrid({
         <LanguageSwitcher className="mt-1.5" />
       </header>
 
+      <ReviewCollectionPanel
+        key={browsePath}
+        browsePath={browsePath}
+        onReviewCounts={setReviewedEpisodesByDataset}
+      />
+
       {/* Corpus dashboard. Replaces the old counts line + health pills: the same
           facts, plus where the recorded time comes from, per-source growth, and
           the Hugging Face sync. */}
@@ -178,6 +188,7 @@ export default function LocalDatasetGrid({
         <div id={GRID_ANCHOR_ID} className="scroll-mt-6">
           <DatasetCardGrid
             datasets={datasets}
+            reviewedEpisodesByDataset={reviewedEpisodesByDataset}
             canDelete={isPathInsideRoot(root, browsePath)}
             query={query}
             onQueryChange={setQuery}

@@ -12,9 +12,11 @@ import {
 } from "react";
 import { useT } from "@/context/locale-context";
 import type { VideoInfo } from "@/types";
+import { FirstFrameVideo } from "@/components/first-frame-video";
 import { THRESHOLDS } from "@/utils/constants";
 import { groupUrdfReplayVideos } from "@/utils/urdfReplayVideos";
 import { mediaTimeFromEpisodeTime } from "@/utils/videoSegments";
+import { seekVideoWithFrameGate } from "@/utils/videoFramePresentation";
 
 function fallbackLabel(filename: string): string {
   const tail = filename.split(/[./]/).at(-1) ?? filename;
@@ -27,6 +29,8 @@ function ReplayVideoTile({
   episodeTimeSeconds,
   playing,
   replayRevision,
+  datasetKey,
+  episodeId,
   video,
 }: {
   active: boolean;
@@ -34,12 +38,20 @@ function ReplayVideoTile({
   episodeTimeSeconds: number;
   playing: boolean;
   replayRevision: number;
+  datasetKey: string;
+  episodeId: number;
   video: VideoInfo;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const targetTime = mediaTimeFromEpisodeTime(video, episodeTimeSeconds);
   const targetTimeRef = useRef(targetTime);
   const shouldPlayRef = useRef(active && playing);
+  const previousPlayingRef = useRef(playing);
+  const lastSeekRef = useRef<{
+    datasetKey: string;
+    episodeId: number;
+    revision: number;
+  } | null>(null);
   targetTimeRef.current = targetTime;
   shouldPlayRef.current = active && playing;
 
@@ -47,8 +59,11 @@ function ReplayVideoTile({
     const element = videoRef.current;
     if (!element || element.readyState < HTMLMediaElement.HAVE_METADATA) return;
     const tolerance = force ? 1 / 120 : THRESHOLDS.VIDEO_SYNC_TOLERANCE;
-    if (Math.abs(element.currentTime - targetTimeRef.current) > tolerance) {
-      element.currentTime = targetTimeRef.current;
+    if (
+      Math.abs(element.currentTime - targetTimeRef.current) > tolerance ||
+      element.seeking
+    ) {
+      seekVideoWithFrameGate(element, targetTimeRef.current);
     }
   }, []);
 
@@ -62,12 +77,17 @@ function ReplayVideoTile({
     });
   }, [video.filename]);
 
-  // Paused slider changes are exact seeks. During playback the MP4 runs on its
+  // Explicit seeks use replayRevision below. During playback the MP4 runs on its
   // own media clock and is only corrected when it drifts materially, avoiding
   // eight expensive decoder seeks on every rendered frame.
   useEffect(() => {
-    if (!active) return;
-    syncToReplay(!playing);
+    const wasPlaying = previousPlayingRef.current;
+    previousPlayingRef.current = playing;
+    // Play/pause and late clock samples are never seek commands. In
+    // particular a final frame update can commit AFTER the pause render.
+    // Only explicit seek revisions may move a paused video's decoder.
+    if (!active || !playing || !wasPlaying) return;
+    syncToReplay(false);
     // Seeking away from the native `ended` position does not resume an MP4
     // automatically. Restart it when the 3D frame counter loops to frame 0.
     playFromReplay();
@@ -80,15 +100,33 @@ function ReplayVideoTile({
       element.pause();
       return;
     }
-    syncToReplay(true);
     playFromReplay();
-  }, [active, playFromReplay, playing, syncToReplay]);
+  }, [active, playFromReplay, playing]);
 
   useEffect(() => {
     if (!active) return;
-    syncToReplay(true);
+    const previous = lastSeekRef.current;
+    lastSeekRef.current = { datasetKey, episodeId, revision: replayRevision };
+    // Showing a retained view is not a seek command. A paused video's clock
+    // normally lies between sampled 3D rows; forcing that fractional offset
+    // back to a row would reopen the decoder every time the view is shown.
+    if (
+      !previous ||
+      previous.datasetKey !== datasetKey ||
+      previous.episodeId !== episodeId ||
+      previous.revision !== replayRevision
+    ) {
+      syncToReplay(true);
+    }
     playFromReplay();
-  }, [active, playFromReplay, replayRevision, syncToReplay]);
+  }, [
+    active,
+    datasetKey,
+    episodeId,
+    playFromReplay,
+    replayRevision,
+    syncToReplay,
+  ]);
 
   const handleLoadedMetadata = useCallback(() => {
     syncToReplay(true);
@@ -96,21 +134,19 @@ function ReplayVideoTile({
   }, [playFromReplay, syncToReplay]);
 
   const label = fallbackLabel(video.filename);
+  const attachVideo = useCallback((element: HTMLVideoElement | null) => {
+    videoRef.current = element;
+  }, []);
 
   return (
     <figure className="relative overflow-hidden rounded-md border border-white/15 bg-black/90 shadow-xl">
-      <video
-        ref={videoRef}
-        aria-label={label}
-        className={`block w-full bg-black object-contain ${
-          compact ? "aspect-[7/4]" : "aspect-[4/3]"
-        }`}
-        disablePictureInPicture
-        muted
+      <FirstFrameVideo
+        frameKey={`${datasetKey}:${episodeId}`}
         onLoadedMetadata={handleLoadedMetadata}
-        playsInline
-        preload="metadata"
-        src={video.url}
+        onVideoElement={attachVideo}
+        video={video}
+        targetSeconds={targetTime}
+        compact={compact}
       />
       <figcaption className="absolute left-1 top-1 max-w-[calc(100%-0.5rem)] truncate rounded bg-slate-950/75 px-1.5 py-0.5 text-[9px] font-medium leading-none text-slate-100 shadow backdrop-blur-sm">
         {label}
@@ -121,12 +157,16 @@ function ReplayVideoTile({
 
 function SideVideoGroup({
   active,
+  datasetKey,
+  episodeId,
   episodeTimeSeconds,
   playing,
   replayRevision,
   videos,
 }: {
   active: boolean;
+  datasetKey: string;
+  episodeId: number;
   episodeTimeSeconds: number;
   playing: boolean;
   replayRevision: number;
@@ -137,11 +177,12 @@ function SideVideoGroup({
   return (
     <div className="space-y-1.5">
       <ReplayVideoTile
-        // Episodes in a v3 shard only change the segment window. Keep the
-        // media element alive for the same camera/file and let the tile seek
-        // to the new segment instead of restarting metadata/decode loading.
-        key={`${primary.filename}:${primary.url}`}
+        // Keep the element for this camera as v3 episodes change only the
+        // segment window; the frame gate owns the transition.
+        key={primary.filename}
         active={active}
+        datasetKey={datasetKey}
+        episodeId={episodeId}
         episodeTimeSeconds={episodeTimeSeconds}
         playing={playing}
         replayRevision={replayRevision}
@@ -151,8 +192,10 @@ function SideVideoGroup({
         <div className="grid grid-cols-2 gap-1.5">
           {secondary.map((video) => (
             <ReplayVideoTile
-              key={`${video.filename}:${video.url}`}
+              key={video.filename}
               active={active}
+              datasetKey={datasetKey}
+              episodeId={episodeId}
               compact
               episodeTimeSeconds={episodeTimeSeconds}
               playing={playing}
@@ -390,12 +433,16 @@ function ResizableVideoGroup({
 
 export default function UrdfVideoOverlay({
   active,
+  datasetKey,
+  episodeId,
   episodeTimeSeconds,
   playing,
   replayRevision,
   videos,
 }: {
   active: boolean;
+  datasetKey: string;
+  episodeId: number;
   episodeTimeSeconds: number;
   playing: boolean;
   replayRevision: number;
@@ -410,7 +457,14 @@ export default function UrdfVideoOverlay({
     groups.right.length > 0;
   if (!hasAnyVideo) return null;
 
-  const shared = { active, episodeTimeSeconds, playing, replayRevision };
+  const shared = {
+    active,
+    datasetKey,
+    episodeId,
+    episodeTimeSeconds,
+    playing,
+    replayRevision,
+  };
   const hasSingleHead = groups.center.length === 1;
   const resizeLabels = {
     resetLabel: t("urdf.resetVideoSize"),
@@ -456,11 +510,7 @@ export default function UrdfVideoOverlay({
           resizeEdges={["left", "right"]}
         >
           {groups.center.map((video) => (
-            <ReplayVideoTile
-              key={`${video.filename}:${video.url}`}
-              {...shared}
-              video={video}
-            />
+            <ReplayVideoTile key={video.filename} {...shared} video={video} />
           ))}
         </ResizableVideoGroup>
       )}

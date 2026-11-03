@@ -117,6 +117,7 @@ export async function runTypeScriptDoctor(
   datasetRoot: string,
   options: RunDoctorOptions,
 ): Promise<DoctorRunResponse> {
+  throwIfDoctorAborted(options.signal);
   const startedAt = performance.now();
   reportProgress(options, {
     phase: "loading",
@@ -136,6 +137,7 @@ export async function runTypeScriptDoctor(
         message,
       }),
   });
+  throwIfDoctorAborted(options.signal);
   const selected = options.checks?.length
     ? options.checks
     : [...DOCTOR_CHECK_IDS];
@@ -178,6 +180,7 @@ export async function runTypeScriptDoctor(
     // Let request cancellation and the route timeout run between CPU-bound checks.
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
+  throwIfDoctorAborted(options.signal);
   const info = dataset.info;
   const report: DoctorReport = {
     version: TYPESCRIPT_DOCTOR_VERSION,
