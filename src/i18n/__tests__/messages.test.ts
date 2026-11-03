@@ -106,14 +106,14 @@ describe("zh translation coverage", () => {
     "doctor.checksWord",
     "doctor.distBins",
     "grid.framesSuffix",
+    // ④ + usable/total — symbols and numbers only.
+    "grid.annotationChip",
     "pq.columns",
     "pq.jumpTitle",
     "pq.rowGroups",
     "pq.rows",
     "source.filesDetail",
     "stats.bins_other",
-    "subtask.frame",
-    "subtask.frameOf",
   ].sort();
 
   it("keeps exactly the intended terms in English", () => {

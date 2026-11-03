@@ -1,6 +1,11 @@
 import { cookies } from "next/headers";
 import LocalDatasetGrid from "./local-dataset-grid";
 import { discoverLocalDatasets } from "@/lib/local-datasets-discovery";
+import { withAnnotationSummaries } from "@/lib/auto-annotations";
+import {
+  decodeLocalDatasetPath,
+  resolveServerLocalDatasetPath,
+} from "@/utils/datasetRoute";
 import { BROWSE_PATH_COOKIE } from "@/utils/browsePath";
 import { recordDaySnapshot } from "@/lib/corpus-history-store";
 import { computeCorpusStats } from "@/utils/corpusStats";
@@ -18,8 +23,13 @@ export default async function Home() {
   // known locations server-side (an unknown value falls back to the root).
   const cookieStore = await cookies();
   const requestedPath = cookieStore.get(BROWSE_PATH_COOKIE)?.value;
-  const { root, browsePath, locations, datasets, interrupted, errors } =
-    await discoverLocalDatasets(requestedPath);
+  const discovered = await discoverLocalDatasets(requestedPath);
+  const { root, browsePath, locations, interrupted, errors } = discovered;
+  // TacFlow ④ annotation summaries, from the corpus registry beside each dataset (read-only).
+  const datasets = await withAnnotationSummaries(
+    discovered.datasets,
+    (encoded) => resolveServerLocalDatasetPath(decodeLocalDatasetPath(encoded)),
+  );
 
   // Record today's totals and diff against the last day on record. This is the
   // only write the browse path performs; `recordDaySnapshot` swallows its own

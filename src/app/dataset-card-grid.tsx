@@ -135,6 +135,9 @@ export default function DatasetCardGrid({
   const [bucketFilter, setBucketFilter] = useState<BucketFilter>("all");
   const [dateFilter, setDateFilter] = useState<DateFilter>(DATE_FILTER_ALL);
   const [anomalyOnly, setAnomalyOnly] = useState(false);
+  const [annotationFilter, setAnnotationFilter] = useState<
+    "all" | "annotated" | "findings"
+  >("all");
   const [episodeOverrides, setEpisodeOverrides] = useState<
     Record<string, string>
   >({});
@@ -221,6 +224,16 @@ export default function DatasetCardGrid({
     [datasetsWithLiveTags, dateFilter],
   );
 
+  const annotationCounts = useMemo(
+    () => ({
+      annotated: datasetsWithLiveTags.filter((ds) => ds.annotation).length,
+      findings: datasetsWithLiveTags.filter(
+        (ds) => ds.annotation?.findings.length,
+      ).length,
+    }),
+    [datasetsWithLiveTags],
+  );
+
   // Biggest first (frames, then episodes), so the top-left card is always the
   // most substantial task in the category and the order survives filtering.
   const filtered = useMemo(() => {
@@ -229,6 +242,9 @@ export default function DatasetCardGrid({
       if (!matchesBucket(ds, bucketFilter)) return false;
       if (!matchesDate(ds, dateFilter)) return false;
       if (!matchesAnomalyOnly(ds, anomalyOnly)) return false;
+      if (annotationFilter === "annotated" && !ds.annotation) return false;
+      if (annotationFilter === "findings" && !ds.annotation?.findings.length)
+        return false;
       if (selectedRobot !== "all" && ds.robot_type !== selectedRobot) {
         return false;
       }
@@ -257,6 +273,7 @@ export default function DatasetCardGrid({
     query,
     selectedRobot,
     healthFilter,
+    annotationFilter,
     taskFilter,
     bucketFilter,
     dateFilter,
@@ -466,6 +483,48 @@ export default function DatasetCardGrid({
           ))}
         </div>
       </div>
+
+      {/* ④ annotation filter — only when some dataset under this path has TacFlow annotations */}
+      {annotationCounts.annotated > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-slate-400">{t("grid.annotationLabel")}</span>
+          {(
+            [
+              {
+                key: "all",
+                label: t("grid.filterAll", {
+                  count: datasetsWithLiveTags.length,
+                }),
+              },
+              {
+                key: "annotated",
+                label: t("grid.filterAnnotated", {
+                  count: annotationCounts.annotated,
+                }),
+              },
+              {
+                key: "findings",
+                label: t("grid.filterFindings", {
+                  count: annotationCounts.findings,
+                }),
+              },
+            ] as { key: "all" | "annotated" | "findings"; label: string }[]
+          ).map((opt) => (
+            <button
+              key={opt.key}
+              type="button"
+              onClick={() => setAnnotationFilter(opt.key)}
+              className={`rounded-full px-3 py-1 transition-colors ${
+                annotationFilter === opt.key
+                  ? "bg-cyan-500/20 text-cyan-100"
+                  : "bg-[var(--surface-1)]/60 text-slate-300 hover:text-slate-100"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Corpus facets. Rendered only where they mean something: a category
           whose datasets carry no bucket has nothing to slice by, and showing
@@ -761,6 +820,29 @@ export default function DatasetCardGrid({
                       dim: ds.facets.stateDim,
                       streams: ds.facets.videoStreams,
                     })}
+                  </div>
+                )}
+
+                {/* ④ annotation chip — usable / total, and the findings count when any */}
+                {ds.annotation && (
+                  <div
+                    title={t("grid.annotationChipTitle", {
+                      models: ds.annotation.models.join(", "),
+                      at: (ds.annotation.annotated_at ?? "").slice(0, 10),
+                    })}
+                    className={`absolute right-2 top-16 z-20 rounded-full px-2 py-0.5 text-[10px] font-semibold shadow ${
+                      ds.annotation.findings.length
+                        ? "bg-rose-500/85 text-white"
+                        : "bg-violet-500/80 text-white"
+                    }`}
+                  >
+                    {t("grid.annotationChip", {
+                      usable: ds.annotation.episodes_usable,
+                      total: ds.annotation.episodes_total,
+                    })}
+                    {ds.annotation.findings.length
+                      ? ` · ${tp("grid.annotationFindings", ds.annotation.findings.length)}`
+                      : ""}
                   </div>
                 )}
 

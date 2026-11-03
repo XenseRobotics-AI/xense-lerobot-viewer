@@ -14,6 +14,11 @@ import path from "node:path";
 import {
   AUTO_ANNOTATION_SCHEMA,
   normalizeEpisode,
+  findingKey,
+  normalizeResolutions,
+  summarizeReport,
+  withResolutions,
+  type AutoAnnotationDatasetSummary,
   type AutoAnnotationResponse,
 } from "@/types/auto-annotation.types";
 
@@ -100,6 +105,10 @@ export async function loadAutoAnnotation(
   const entry = report.episodes.find(
     (e: unknown) => isRecord(e) && e.episode_index === episode,
   );
+  const normalized = entry === undefined ? null : normalizeEpisode(entry);
+  const resolutions = normalizeResolutions(
+    isRecord(snapshot) ? snapshot.findings_resolved : null,
+  );
   return {
     status: "ok",
     body: {
@@ -108,7 +117,117 @@ export async function loadAutoAnnotation(
       annotated_at: typeof stage.at === "string" ? stage.at : null,
       episodes_total: Number(report.episodes_total ?? report.episodes.length),
       episodes_usable: Number(report.episodes_usable ?? 0),
-      episode: entry === undefined ? null : normalizeEpisode(entry),
+      episode: normalized && {
+        ...normalized,
+        findings: withResolutions(
+          normalized.episode_index,
+          normalized.findings,
+          resolutions,
+        ),
+      },
     },
   };
+}
+
+/**
+ * The latest annotate report of a dataset, read and schema-checked, with the stage's timestamp; null when there is
+ * none. Shared by the per-episode route and the homepage summary.
+ */
+async function latestReport(datasetDir: string): Promise<{
+  report: Record<string, unknown>;
+  at: string | null;
+  file: string;
+  /** the snapshot's `findings_resolved`, normalised: rulings change without the report changing */
+  resolutions: ReturnType<typeof normalizeResolutions>;
+} | null> {
+  const registry = await findRegistryRoot(datasetDir);
+  if (!registry) return null;
+  const snapshot = await readJson(
+    path.join(registry, "datasets", `${path.basename(datasetDir)}.json`),
+  );
+  const stages =
+    isRecord(snapshot) && isRecord(snapshot.stages) ? snapshot.stages : {};
+  const stage = isRecord(stages[ANNOTATE_STAGE])
+    ? stages[ANNOTATE_STAGE]
+    : null;
+  if (!stage || typeof stage.report !== "string") return null;
+  const file = path.resolve(registry, stage.report);
+  if (!file.startsWith(path.resolve(registry) + path.sep)) return null;
+  const report = await readJson(file);
+  if (
+    !isRecord(report) ||
+    report.schema !== AUTO_ANNOTATION_SCHEMA ||
+    !Array.isArray(report.episodes)
+  )
+    return null;
+  return {
+    report,
+    at: typeof stage.at === "string" ? stage.at : null,
+    file,
+    resolutions: normalizeResolutions(
+      isRecord(snapshot) ? snapshot.findings_resolved : null,
+    ),
+  };
+}
+
+/**
+ * Homepage summaries are cached per report file and its mtime: a full xtac dataset's report is thousands of episodes,
+ * and the homepage renders on every visit. A report is only ever replaced (TacFlow writes a new `annotate-*` folder
+ * and points the snapshot at it), so file + mtime identifies its content.
+ */
+const SUMMARY_CACHE = new Map<
+  string,
+  { mtimeMs: number; summary: AutoAnnotationDatasetSummary }
+>();
+
+/** The homepage's view of a dataset's ④ annotation, or null when it has none. Never throws. */
+export async function loadAnnotationSummary(
+  datasetDir: string,
+): Promise<AutoAnnotationDatasetSummary | null> {
+  try {
+    const found = await latestReport(datasetDir);
+    if (!found) return null;
+    const { mtimeMs } = await fs.stat(found.file);
+    const cached = SUMMARY_CACHE.get(found.file);
+    let summary = cached && cached.mtimeMs === mtimeMs ? cached.summary : null;
+    if (!summary) {
+      summary = summarizeReport(found.report, found.at);
+      SUMMARY_CACHE.set(found.file, { mtimeMs, summary });
+    }
+    // Rulings live in the snapshot, not the report, so they are attached on every read (cheap) rather than cached.
+    return {
+      ...summary,
+      findings: summary.findings.map((f) => ({
+        ...f,
+        resolution:
+          found.resolutions[findingKey(f.episode_index, f.kind, f.category)] ??
+          null,
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Attach `annotation` to each discovered dataset (null when it has none); reads run concurrently. */
+export async function withAnnotationSummaries<
+  T extends { encodedPath: string },
+>(
+  datasets: T[],
+  resolveDir: (encodedPath: string) => string,
+): Promise<(T & { annotation: AutoAnnotationDatasetSummary | null })[]> {
+  return Promise.all(
+    datasets.map(async (ds) => {
+      let dir: string | null = null;
+      try {
+        dir = resolveDir(ds.encodedPath);
+      } catch {
+        dir = null;
+      }
+      return {
+        ...ds,
+        annotation: dir ? await loadAnnotationSummary(dir) : null,
+      };
+    }),
+  );
 }
