@@ -321,6 +321,11 @@ export const zh: Record<MessageKey, string> = {
   "review.title": "人工质检",
   "review.loading": "正在加载质检记录…",
   "review.verifySave": "刷新核对",
+  "review.refreshTimeout": "质检记录读取超时，请检查网络后重新刷新核对",
+  "review.saveStillPending":
+    "服务端仍在处理该操作，暂不能重复提交，请稍后刷新核对。操作编号",
+  "review.saveEndedWithError":
+    "服务端请求已结束但保存报错，请核对当前状态后再操作",
   "review.saveUnknown":
     "保存结果尚未确认，请刷新核对后再操作；不要直接重复提交。操作编号",
   "review.checked": "已检查",

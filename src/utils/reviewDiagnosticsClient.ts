@@ -7,9 +7,14 @@ import {
 import {
   parseReviewsFile,
   type EpisodeReviewsFile,
+  type EpisodeReviewsResponse,
   type ReviewUpdate,
 } from "@/types/episode-review.types";
 import { tStandalone } from "@/i18n/standalone";
+import {
+  parseReviewOperationReceipt,
+  reviewOperationResolution,
+} from "@/types/review-operation.types";
 
 /** Correlation only, never an authorization token; works on LAN HTTP too. */
 export function createReviewId(): string {
@@ -85,26 +90,84 @@ export class ReviewSaveUnknownError extends Error {
     super(tStandalone("review.saveUnknown") + " (" + operationId + ")");
   }
 }
-class ReviewRejectedError extends Error {}
+export class ReviewRejectedError extends Error {
+  constructor(
+    message: string,
+    public readonly file?: EpisodeReviewsFile,
+  ) {
+    super(message);
+  }
+}
 
 /** Deadline covers headers AND body, even if a transport ignores abort. */
 async function deadline<T>(
   work: (signal: AbortSignal) => Promise<T>,
   ms: number,
+  external?: AbortSignal,
 ): Promise<T> {
+  if (external?.aborted)
+    throw new DOMException("Review read cancelled", "AbortError");
   const controller = new AbortController();
+  let cancel!: () => void;
+  const cancelled = new Promise<never>((_, reject) => {
+    cancel = () => {
+      reject(new DOMException("Review read cancelled", "AbortError"));
+      controller.abort();
+    };
+    external?.addEventListener("abort", cancel, { once: true });
+  });
   let timeout!: ReturnType<typeof setTimeout>;
   const expired = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
-      reject(new ReviewDeadlineError());
+      reject(new ReviewDeadlineError(tStandalone("review.refreshTimeout")));
       controller.abort();
     }, ms);
   });
   try {
-    return await Promise.race([work(controller.signal), expired]);
+    return await Promise.race([work(controller.signal), expired, cancelled]);
   } finally {
     clearTimeout(timeout);
+    external?.removeEventListener("abort", cancel);
   }
+}
+
+export async function readEpisodeReviewState(
+  endpoint: string,
+  options: {
+    fetcher?: typeof fetch;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    operationId?: string;
+  } = {},
+): Promise<EpisodeReviewsResponse> {
+  const url = options.operationId
+    ? endpoint +
+      (endpoint.includes("?") ? "&" : "?") +
+      "operation_id=" +
+      encodeURIComponent(options.operationId)
+    : endpoint;
+  return deadline(
+    async (signal) => {
+      const response = await (options.fetcher ?? fetch)(url, {
+        cache: "no-store",
+        signal,
+      });
+      if (!response.ok) {
+        const raw = await response.json().catch(() => null);
+        throw new Error(
+          typeof raw?.error === "string" ? raw.error : String(response.status),
+        );
+      }
+      const raw = (await response.json()) as EpisodeReviewsResponse;
+      return {
+        ...raw,
+        file: parseReviewsFile(raw?.file),
+        operation: parseReviewOperationReceipt(raw?.operation),
+      };
+    },
+    options.timeoutMs ?? 10000,
+    options.signal,
+  );
 }
 
 export async function saveReviewWithDeadline(
@@ -152,13 +215,23 @@ export async function saveReviewWithDeadline(
         signal,
       });
       if (!response.ok) {
-        if (response.status >= 500) throw new Error("Ambiguous server failure");
+        if (
+          response.status >= 500 ||
+          response.status === 408 ||
+          response.status === 499
+        )
+          throw new Error("Ambiguous server failure");
         const raw = await response.json().catch(() => null);
+        if (raw?.code === "OPERATION_UNCONFIRMED")
+          throw new Error("Operation needs verification");
         throw new ReviewRejectedError(
           typeof raw?.error === "string" ? raw.error : String(response.status),
         );
       }
-      return parseReviewsFile(await response.json());
+      const file = parseReviewsFile(await response.json());
+      if (reviewStateMatches(file, payload) !== true)
+        throw new Error("Save response does not match the requested state");
+      return file;
     }, options.timeoutMs ?? 15000);
   } catch (error) {
     if (error instanceof ReviewRejectedError) {
@@ -168,28 +241,42 @@ export async function saveReviewWithDeadline(
     // A lost response cannot establish that the write failed. Read once, never
     // replay PUT. An absent record cannot prove that an unmark was committed.
     try {
-      const file = await deadline(async (signal) => {
-        const response = await fetcher(endpoint, { cache: "no-store", signal });
-        if (!response.ok) throw new Error("Readback failed");
-        return parseReviewsFile((await response.json()).file);
-      }, options.reconcileMs ?? 5000);
-      if (
-        payload.reviewed &&
-        file.episodes[String(payload.episode_index)]?.some(
-          (entry) =>
-            entry.reviewer === payload.reviewer &&
-            entry.operation_id === payload.operation_id,
-        )
-      ) {
+      const { file, operation } = await readEpisodeReviewState(endpoint, {
+        fetcher,
+        timeoutMs: options.reconcileMs ?? 5000,
+        operationId: payload.operation_id,
+      });
+      const resolution = reviewOperationResolution(file, payload, operation);
+      if (resolution === "succeeded") {
         report("timeout_confirmed");
         return file;
       }
-    } catch {
+      if (resolution === "failed")
+        throw new ReviewRejectedError(
+          tStandalone("review.saveEndedWithError"),
+          file,
+        );
+    } catch (error) {
+      if (error instanceof ReviewRejectedError) {
+        report("rejected");
+        throw error;
+      }
       /* Preserve unknown, not a false failure or success. */
     }
     report("unknown");
     throw new ReviewSaveUnknownError(payload.operation_id);
   }
+}
+
+export function reviewStateMatches(
+  file: EpisodeReviewsFile,
+  update: Pick<ReviewUpdate, "episode_index" | "reviewer" | "reviewed">,
+): boolean {
+  const marked =
+    file.episodes[String(update.episode_index)]?.some(
+      (entry) => entry.reviewer === update.reviewer,
+    ) ?? false;
+  return marked === update.reviewed;
 }
 
 /** Only exceptional saves send a separate bounded, best-effort diagnostic. */

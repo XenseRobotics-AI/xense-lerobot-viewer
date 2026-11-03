@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { reviewOperationReceipts } from "@/lib/review-operation-receipts";
 import {
   recordReviewDiagnostic,
   reviewDiagnosticsStatus,
@@ -21,7 +22,11 @@ let windowStart = 0,
 let rateLimited = 0;
 export function GET(): Response {
   return Response.json(
-    { ...reviewDiagnosticsStatus(), client_results_rate_limited: rateLimited },
+    {
+      ...reviewDiagnosticsStatus(),
+      client_results_rate_limited: rateLimited,
+      operations: reviewOperationReceipts().status(),
+    },
     { headers },
   );
 }

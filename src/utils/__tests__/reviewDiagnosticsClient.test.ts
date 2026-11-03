@@ -5,9 +5,15 @@ import {
   ReviewTimerProbe,
   saveReviewWithDeadline,
   ReviewSaveUnknownError,
+  ReviewRejectedError,
+  readEpisodeReviewState,
 } from "../reviewDiagnosticsClient";
 import { ReviewSaveQueue } from "../reviewSaveQueue";
 import { isReviewOperationId } from "@/types/review-diagnostics.types";
+import {
+  parseReviewOperationReceipt,
+  reviewOperationResolution,
+} from "@/types/review-operation.types";
 
 const payload = (reviewed = true) => ({
   episode_index: 2,
@@ -71,6 +77,136 @@ describe("review timer diagnostic summary", () => {
 });
 
 describe("review write deadline and reconciliation", () => {
+  test("a completed exact unmark receipt closes a lost deletion response", async () => {
+    const body = payload(false);
+    const fetcher = (async (url, init) => {
+      if (init?.method === "PUT") throw new Error("response lost");
+      expect(String(url)).toContain("operation_id=" + body.operation_id);
+      return Response.json({
+        file: { version: 1, episodes: {} },
+        operation: { ...body, state: "succeeded" },
+      });
+    }) as typeof fetch;
+    expect(
+      (
+        await saveReviewWithDeadline("/reviews?browsePath=fixture", body, {
+          ...options,
+          fetcher,
+        })
+      ).episodes,
+    ).toEqual({});
+  });
+  test("a pending receipt cannot confirm deletion or release the unknown operation", async () => {
+    const body = payload(false);
+    const fetcher = (async (_url, init) =>
+      init?.method === "PUT"
+        ? hang()
+        : Response.json({
+            file: { version: 1, episodes: {} },
+            operation: { ...body, state: "pending" },
+          })) as typeof fetch;
+    await expect(
+      saveReviewWithDeadline("/reviews", body, { ...options, fetcher }),
+    ).rejects.toBeInstanceOf(ReviewSaveUnknownError);
+  });
+  test("a failed terminal receipt is an ended request, not a pending save", async () => {
+    const body = payload();
+    const fetcher = (async (_url, init) =>
+      init?.method === "PUT"
+        ? new Response(null, { status: 500 })
+        : Response.json({
+            file: { version: 1, episodes: {} },
+            operation: { ...body, state: "failed" },
+          })) as typeof fetch;
+    await expect(
+      saveReviewWithDeadline("/reviews", body, { ...options, fetcher }),
+    ).rejects.toBeInstanceOf(ReviewRejectedError);
+  });
+  test("readback resolution is scoped to operation, person, episode and action", () => {
+    const target = payload(false),
+      empty = { version: 1 as const, episodes: {} };
+    const receipt = {
+      operation_id: target.operation_id,
+      episode_index: target.episode_index,
+      reviewer: target.reviewer,
+      reviewed: false,
+      state: "succeeded" as const,
+    };
+    expect(reviewOperationResolution(empty, target, receipt)).toBe("succeeded");
+    for (const mismatch of [
+      { operation_id: createReviewId() },
+      { episode_index: 3 },
+      { reviewer: "Bob" },
+      { reviewed: true },
+    ])
+      expect(
+        reviewOperationResolution(empty, target, { ...receipt, ...mismatch }),
+      ).toBe("unknown");
+    expect(reviewOperationResolution(empty, payload(false), receipt)).toBe(
+      "unknown",
+    );
+    expect(
+      parseReviewOperationReceipt({ ...receipt, state: "arbitrary" }),
+    ).toBeUndefined();
+    expect(
+      parseReviewOperationReceipt({ ...receipt, reviewer: "x".repeat(81) }),
+    ).toBeUndefined();
+  });
+  test("read deadlines include hanging bodies and an external abort releases the request", async () => {
+    const fetcher = (async () =>
+      ({
+        ok: true,
+        json: () => new Promise(() => {}),
+      }) as Response) as typeof fetch;
+    await expect(
+      readEpisodeReviewState("/reviews", { fetcher, timeoutMs: 5 }),
+    ).rejects.toThrow();
+    const controller = new AbortController();
+    const pending = readEpisodeReviewState("/reviews", {
+      fetcher,
+      timeoutMs: 10000,
+      signal: controller.signal,
+    });
+    const outcome = pending.catch((error: unknown) => error);
+    controller.abort();
+    expect(((await outcome) as Error).name).toBe("AbortError");
+    expect(
+      (
+        await readEpisodeReviewState("/reviews", {
+          fetcher: (async () =>
+            Response.json({
+              file: { version: 1, episodes: {} },
+            })) as typeof fetch,
+        })
+      ).file.episodes,
+    ).toEqual({});
+  });
+  test("a 200 response with the wrong mark state is not an acknowledgment", async () => {
+    let calls = 0;
+    const fetcher = (async (_url, init) => {
+      calls++;
+      return Response.json(
+        init?.method === "PUT"
+          ? { version: 1, episodes: {} }
+          : { file: { version: 1, episodes: {} } },
+      );
+    }) as typeof fetch;
+    await expect(
+      saveReviewWithDeadline("/reviews", payload(), { ...options, fetcher }),
+    ).rejects.toBeInstanceOf(ReviewSaveUnknownError);
+    expect(calls).toBe(2);
+  });
+  test("an unacknowledged 408 must be reconciled rather than treated as a rejection", async () => {
+    const body = payload();
+    const fetcher = (async (_url, init) =>
+      init?.method === "PUT"
+        ? new Response(null, { status: 408 })
+        : Response.json({ file: file(body.operation_id) })) as typeof fetch;
+    expect(
+      (await saveReviewWithDeadline("/reviews", body, { ...options, fetcher }))
+        .episodes["2"][0].operation_id,
+    ).toBe(body.operation_id);
+  });
   test("normal save performs one PUT and no extra diagnostic request", async () => {
     const body = payload();
     let calls = 0,
@@ -198,7 +334,10 @@ describe("review write deadline and reconciliation", () => {
       await saveReviewWithDeadline("/reviews", secondBody, {
         fetcher: (async (_url, init) => {
           targets.push(JSON.parse(init!.body as string).episode_index);
-          return Response.json({ version: 1, episodes: {} });
+          return Response.json({
+            version: 1,
+            episodes: { "3": file(secondBody.operation_id).episodes["2"] },
+          });
         }) as typeof fetch,
       });
     });

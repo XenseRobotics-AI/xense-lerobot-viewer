@@ -18,14 +18,19 @@ import {
   createReviewId,
   reportReviewSaveResult,
   saveReviewWithDeadline,
+  readEpisodeReviewState,
   ReviewSaveUnknownError,
+  ReviewRejectedError,
 } from "@/utils/reviewDiagnosticsClient";
 import type { ReviewTimerDiagnostics } from "@/types/review-diagnostics.types";
 import {
+  reviewOperationResolution,
+  type PendingReviewOperation,
+} from "@/types/review-operation.types";
+import { tStandalone } from "@/i18n/standalone";
+import {
   MAX_REVIEWER_LENGTH,
-  parseReviewsFile,
   type EpisodeReviewsFile,
-  type EpisodeReviewsResponse,
   type ReviewSource,
   type EpisodeStaySnapshot,
   type ReviewerProfile,
@@ -46,7 +51,7 @@ function useReviewState(repoId: string, browsePath: string) {
   const [loaded, setLoaded] = useState(false);
   const [pendingSaves, setPendingSaves] = useState<Record<string, boolean>>({});
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
-  const uncertain = useRef(new Set<string>());
+  const uncertain = useRef(new Map<string, PendingReviewOperation>());
   const [uncertainSaves, setUncertainSaves] = useState<Record<string, boolean>>(
     {},
   );
@@ -60,22 +65,22 @@ function useReviewState(repoId: string, browsePath: string) {
     endpointBase + "?browsePath=" + encodeURIComponent(browsePath);
 
   const refresh = useCallback(
-    async (confirmUncertain = false) => {
-      if (queue.size || requestRef.current || document.hidden) return;
+    async (verifyKey?: string) => {
+      if (queue.size || document.hidden) return;
+      if (requestRef.current) {
+        if (!verifyKey) return;
+        requestRef.current.abort();
+      }
       const controller = new AbortController();
       requestRef.current = controller;
       const id = ++sequence.current;
       try {
-        const response = await fetch(endpoint, {
-          cache: "no-store",
+        const target = verifyKey ? uncertain.current.get(verifyKey) : undefined;
+        const result = await readEpisodeReviewState(endpoint, {
           signal: controller.signal,
+          operationId: target?.operation_id,
         });
-        if (!response.ok)
-          throw new Error(
-            (await response.json()).error ?? String(response.status),
-          );
-        const result = (await response.json()) as EpisodeReviewsResponse;
-        const next = parseReviewsFile(result.file);
+        const next = result.file;
         if (id !== sequence.current) return;
         setReviewers((previous) =>
           JSON.stringify(previous) === JSON.stringify(result.reviewers)
@@ -98,15 +103,42 @@ function useReviewState(repoId: string, browsePath: string) {
         );
         setLoaded(true);
         setError(null);
-        if (confirmUncertain && uncertain.current.size) {
-          const keys = new Set(uncertain.current);
-          uncertain.current.clear();
-          setUncertainSaves({});
-          setSaveErrors((previous) =>
-            Object.fromEntries(
-              Object.entries(previous).filter(([key]) => !keys.has(key)),
-            ),
+        if (verifyKey && target) {
+          const resolution = reviewOperationResolution(
+            next,
+            target,
+            result.operation,
           );
+          if (resolution === "succeeded" || resolution === "failed") {
+            uncertain.current.delete(verifyKey);
+            setUncertainSaves((previous) => {
+              const value = { ...previous };
+              delete value[verifyKey];
+              return value;
+            });
+            setSaveErrors((previous) => {
+              const value = { ...previous };
+              if (resolution === "failed")
+                value[verifyKey] = tStandalone("review.saveEndedWithError");
+              else delete value[verifyKey];
+              return value;
+            });
+          } else if (resolution === "pending") {
+            setSaveErrors((previous) => ({
+              ...previous,
+              [verifyKey]:
+                tStandalone("review.saveStillPending") +
+                " (" +
+                target.operation_id +
+                ")",
+            }));
+          } else {
+            setSaveErrors((previous) => ({
+              ...previous,
+              [verifyKey]: new ReviewSaveUnknownError(target.operation_id)
+                .message,
+            }));
+          }
         }
       } catch (error) {
         if (!controller.signal.aborted && id === sequence.current)
@@ -234,8 +266,10 @@ function useReviewState(repoId: string, browsePath: string) {
         }
       });
     } catch (error) {
+      if (error instanceof ReviewRejectedError && error.file && mounted.current)
+        setFile(error.file);
       if (error instanceof ReviewSaveUnknownError) {
-        uncertain.current.add(key);
+        uncertain.current.set(key, payload);
         if (mounted.current)
           setUncertainSaves((previous) => ({ ...previous, [key]: true }));
       }

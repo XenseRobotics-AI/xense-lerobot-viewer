@@ -331,6 +331,12 @@ export const en = {
   "review.title": "Human inspection",
   "review.loading": "Loading inspection records…",
   "review.verifySave": "Refresh and verify",
+  "review.refreshTimeout":
+    "Inspection records timed out. Check the connection and refresh to verify.",
+  "review.saveStillPending":
+    "The server is still processing this operation. Do not resubmit; refresh to verify later. Operation",
+  "review.saveEndedWithError":
+    "The server request ended with a save error. Verify the current state before acting.",
   "review.saveUnknown":
     "Save outcome is unknown. Refresh and verify before acting; do not resubmit blindly. Operation",
   "review.checked": "Inspected",

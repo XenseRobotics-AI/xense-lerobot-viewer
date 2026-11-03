@@ -14,6 +14,7 @@
     "type-check:watch": "tsc --noEmit --watch",
     "test": "bun test",
     "test:video-playback": "bun scripts/test-video-playback.mjs",
+    "test:review-save": "bun scripts/test-review-save-lifecycle.mjs",
     "validate": "bun run type-check && bun run lint && bun run format:check && bun test"
   },
   "dependencies": {

@@ -31,6 +31,11 @@ import { GET as collectionGET } from "@/app/api/local-datasets/reviews/route";
 import { reviewCollectionCsv } from "../episode-reviews-export";
 import { ReviewDiagnosticWriter } from "../review-diagnostics";
 import type { ReviewStoreTrace } from "@/types/review-diagnostics.types";
+import {
+  saveReviewWithDeadline,
+  clientReviewDiagnostics,
+} from "@/utils/reviewDiagnosticsClient";
+import { acquireReviewWriteLock } from "../review-write-lock";
 
 let tmp: string;
 let defaultRoot: string;
@@ -110,6 +115,156 @@ async function roster(names: unknown) {
 }
 
 describe("collection review persistence", () => {
+  test("real route receipts close lost responses for marking and unmarking without business history", async () => {
+    const endpoint =
+      "http://localhost/api/reviews?browsePath=" + encodeURIComponent(browse);
+    const fetcher = (async (url, init) => {
+      const req = new NextRequest(String(url), init);
+      if (init?.method === "PUT") {
+        const result = await PUT(req, context());
+        expect(result.status).toBe(200);
+        throw new Error("Response lost after commit");
+      }
+      return GET(req, context());
+    }) as typeof fetch;
+    for (const reviewed of [true, false]) {
+      const operation_id = crypto.randomUUID();
+      const result = await saveReviewWithDeadline(
+        endpoint,
+        {
+          ...mark,
+          reviewed,
+          operation_id,
+          diagnostics: clientReviewDiagnostics(
+            reviewed ? "not_ready" : "unmark",
+          ),
+        },
+        { fetcher },
+      );
+      expect(
+        result.episodes["0"]?.some((entry) => entry.reviewer === "Alice") ??
+          false,
+      ).toBe(reviewed);
+      const verified = await (
+        await GET(
+          request("GET", undefined, "&operation_id=" + operation_id),
+          context(),
+        )
+      ).json();
+      expect(verified.operation).toMatchObject({
+        operation_id,
+        reviewed,
+        state: "succeeded",
+      });
+      expect(verified.file).toEqual(result);
+    }
+    const raw = await fs.readFile(reviewsFilePath(browse), "utf8");
+    expect(raw).not.toContain('"operation"');
+    expect(raw).not.toContain('"receipt"');
+  });
+
+  test("pending receipt stays pending through verification and duplicate PUTs cannot overtake the owner", async () => {
+    const operation_id = crypto.randomUUID(),
+      payload = { ...mark, operation_id };
+    const lease = await acquireReviewWriteLock(reviewsFilePath(browse));
+    const writing = PUT(request("PUT", payload), context());
+    try {
+      let receipt;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        receipt = (
+          await (
+            await GET(
+              request("GET", undefined, "&operation_id=" + operation_id),
+              context(),
+            )
+          ).json()
+        ).operation;
+        if (receipt) break;
+        await Bun.sleep(5);
+      }
+      expect(receipt?.state).toBe("pending");
+      const duplicate = await PUT(request("PUT", payload), context());
+      expect(duplicate.status).toBe(409);
+      expect((await duplicate.json()).code).toBe("OPERATION_UNCONFIRMED");
+      expect(
+        (await readEpisodeReviews(browse, datasetA)).episodes["0"],
+      ).toBeUndefined();
+    } finally {
+      await lease.release();
+    }
+    expect((await writing).status).toBe(200);
+    const before = await fs.readFile(reviewsFilePath(browse), "utf8");
+    expect((await PUT(request("PUT", payload), context())).status).toBe(200);
+    expect(await fs.readFile(reviewsFilePath(browse), "utf8")).toBe(before);
+    const conflict = await PUT(
+      request("PUT", { ...payload, reviewed: false }),
+      context(),
+    );
+    expect(conflict.status).toBe(409);
+    expect((await conflict.json()).code).toBe("OPERATION_CONFLICT");
+    expect(
+      (
+        await (
+          await GET(
+            request("GET", undefined, "&operation_id=" + operation_id),
+            context(datasetB),
+          )
+        ).json()
+      ).operation,
+    ).toBeUndefined();
+  });
+
+  test("idempotent legacy marks gain only a temporary acknowledgment, preserving the first record", async () => {
+    const original = await updateEpisodeReview(browse, datasetA, mark);
+    const operation_id = crypto.randomUUID();
+    expect(
+      (await PUT(request("PUT", { ...mark, operation_id }), context())).status,
+    ).toBe(200);
+    const result = await (
+      await GET(
+        request("GET", undefined, "&operation_id=" + operation_id),
+        context(),
+      )
+    ).json();
+    expect(result.file).toEqual(original);
+    expect(result.file.episodes["0"][0].operation_id).toBeUndefined();
+    expect(result.operation.state).toBe("succeeded");
+    expect(
+      (await GET(request("GET", undefined, "&operation_id=invalid"), context()))
+        .status,
+    ).toBe(400);
+  });
+
+  test("a failed request becomes terminal and can be verified after the underlying file is repaired", async () => {
+    await fs.writeFile(reviewsFilePath(browse), "damaged JSON");
+    const operation_id = crypto.randomUUID();
+    expect(
+      (await PUT(request("PUT", { ...mark, operation_id }), context())).status,
+    ).toBe(500);
+    expect(await fs.readFile(reviewsFilePath(browse), "utf8")).toBe(
+      "damaged JSON",
+    );
+    await fs.writeFile(
+      reviewsFilePath(browse),
+      JSON.stringify({ version: 1, datasets: {} }),
+    );
+    const result = await (
+      await GET(
+        request("GET", undefined, "&operation_id=" + operation_id),
+        context(),
+      )
+    ).json();
+    expect(result.operation.state).toBe("failed");
+    expect(result.file.episodes).toEqual({});
+    expect(
+      (
+        await PUT(
+          request("PUT", { ...mark, operation_id: crypto.randomUUID() }),
+          context(),
+        )
+      ).status,
+    ).toBe(200);
+  });
   test("operation IDs survive readback without replacing idempotent original marks", async () => {
     const operation_id = crypto.randomUUID();
     const trace: ReviewStoreTrace = { timings: {} };

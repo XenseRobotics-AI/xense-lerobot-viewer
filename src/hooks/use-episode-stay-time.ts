@@ -6,6 +6,7 @@ import type { TimerState } from "@/types/review-diagnostics.types";
 import {
   EpisodeStayTimer,
   parseStoredEpisodeStayMs,
+  persistEpisodeStay,
   shouldTrackEpisodeStay,
 } from "@/utils/episodeStayTimer";
 
@@ -33,12 +34,17 @@ export function useEpisodeStayTime({
   const durationMs = Number.isSafeInteger(reportedDurationMs * 2)
     ? reportedDurationMs
     : 0;
-  const key = JSON.stringify([datasetKey, reviewer, episodeId]);
+  const { key, probe } = useMemo(
+    () => ({
+      key: JSON.stringify([datasetKey, reviewer, episodeId]),
+      probe: new ReviewTimerProbe(),
+    }),
+    [datasetKey, reviewer, episodeId],
+  );
   const storageKey = `xense-episode-stay:${key}`;
-  const probe = useMemo(() => new ReviewTimerProbe(), [key]);
   const readStaySnapshot = useCallback(() => {
-    const snapshot = timer.read(key, performance.now());
-    return durationMs > 0 && snapshot.episode_duration_ms === durationMs
+    const snapshot = timer.readInitialized(key, performance.now());
+    return durationMs > 0 && snapshot?.episode_duration_ms === durationMs
       ? snapshot
       : undefined;
   }, [durationMs, key, timer]);
@@ -51,15 +57,10 @@ export function useEpisodeStayTime({
     const persistAndPause = (state: TimerState = "disabled") => {
       probe.transition(state);
       const now = performance.now();
-      timer.pause(now);
-      try {
-        sessionStorage.setItem(
-          storageKey,
-          JSON.stringify(timer.read(key, now)),
-        );
-      } catch {
-        probe.storageFailure("write");
-      }
+      const result = persistEpisodeStay(timer, key, now, (snapshot) =>
+        sessionStorage.setItem(storageKey, JSON.stringify(snapshot)),
+      );
+      if (result === "failed") probe.storageFailure("write");
     };
     const resume = () => {
       if (
@@ -103,8 +104,13 @@ export function useEpisodeStayTime({
     };
     resume();
     document.addEventListener("visibilitychange", onVisibilityChange);
+    const pageHide = () => persistAndPause("hidden");
+    window.addEventListener("pagehide", pageHide);
+    window.addEventListener("pageshow", resume);
     return () => {
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pagehide", pageHide);
+      window.removeEventListener("pageshow", resume);
       persistAndPause();
     };
   }, [

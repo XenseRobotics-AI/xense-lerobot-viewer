@@ -256,7 +256,8 @@ export default function EpisodeReviewPanel({
             type="button"
             disabled={saving}
             onClick={() => {
-              if (loadError || uncertainSaves[key]) void refresh(true);
+              if (loadError || uncertainSaves[key])
+                void refresh(uncertainSaves[key] ? key : undefined);
               else saveMark(!mine);
             }}
             className="underline"

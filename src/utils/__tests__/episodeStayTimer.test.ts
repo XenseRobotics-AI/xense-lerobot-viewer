@@ -2,10 +2,49 @@ import { describe, expect, test } from "bun:test";
 import {
   EpisodeStayTimer,
   parseStoredEpisodeStayMs,
+  persistEpisodeStay,
   shouldTrackEpisodeStay,
 } from "../episodeStayTimer";
 
 describe("EpisodeStayTimer", () => {
+  test("loading a previous visit does not overwrite stored stay with an uninitialized zero", () => {
+    const timer = new EpisodeStayTimer();
+    let stored = JSON.stringify({ stay_ms: 4000, episode_duration_ms: 10000 });
+    expect(
+      persistEpisodeStay(timer, "visit", 10, (value) => {
+        stored = JSON.stringify(value);
+      }),
+    ).toBe("uninitialized");
+    expect(timer.readInitialized("visit", 10)).toBeUndefined();
+    expect(parseStoredEpisodeStayMs(stored)).toBe(4000);
+    timer.start("visit", 10000, 20, parseStoredEpisodeStayMs(stored));
+    expect(
+      persistEpisodeStay(timer, "visit", 1020, (value) => {
+        stored = JSON.stringify(value);
+      }),
+    ).toBe("saved");
+    expect(parseStoredEpisodeStayMs(stored)).toBe(5000);
+    timer.start("visit", 10000, 8000, parseStoredEpisodeStayMs(stored));
+    expect(timer.readInitialized("visit", 9000)?.stay_ms).toBe(6000);
+  });
+  test("unvisited episodes cannot overwrite another key and failed persistence retains memory", () => {
+    const timer = new EpisodeStayTimer();
+    timer.start("Alice:0", 10000, 0);
+    expect(
+      persistEpisodeStay(timer, "Alice:0", 500, () => {
+        throw new Error("QuotaExceeded");
+      }),
+    ).toBe("failed");
+    expect(timer.readInitialized("Alice:0", 900)?.stay_ms).toBe(500);
+    let called = false;
+    expect(
+      persistEpisodeStay(timer, "Bob:0", 1000, () => {
+        called = true;
+      }),
+    ).toBe("uninitialized");
+    expect(called).toBe(false);
+    expect(timer.readInitialized("Bob:0", 1000)).toBeUndefined();
+  });
   test("accumulates only active time and resumes the same episode", () => {
     const timer = new EpisodeStayTimer();
     timer.start("episode-3:Alice", 10_000, 100);

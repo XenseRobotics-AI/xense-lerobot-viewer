@@ -1,5 +1,6 @@
 import { reviewTimestamp } from "@/utils/reviewTime";
 import { isReviewOperationId } from "./review-diagnostics.types";
+import type { ReviewOperationReceipt } from "./review-operation.types";
 
 export const REVIEW_FILENAME = "episode-reviews.json";
 export const MAX_REVIEWER_LENGTH = 80;
@@ -53,6 +54,7 @@ export interface ReviewCollectionFile {
 }
 
 export interface EpisodeReviewsResponse {
+  operation?: ReviewOperationReceipt;
   file: EpisodeReviewsFile;
   reviewers: string[];
   profiles: ReviewerProfile[];

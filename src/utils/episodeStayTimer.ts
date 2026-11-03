@@ -93,4 +93,26 @@ export class EpisodeStayTimer {
       ),
     };
   }
+
+  readInitialized(key: string, now: number): EpisodeStaySnapshot | undefined {
+    return this.totals.has(key) ? this.read(key, now) : undefined;
+  }
+}
+
+/** Do not overwrite a previous visit while this visit is still loading. */
+export function persistEpisodeStay(
+  timer: EpisodeStayTimer,
+  key: string,
+  now: number,
+  save: (snapshot: EpisodeStaySnapshot) => void,
+): "uninitialized" | "saved" | "failed" {
+  timer.pause(now);
+  const snapshot = timer.readInitialized(key, now);
+  if (!snapshot) return "uninitialized";
+  try {
+    save(snapshot);
+    return "saved";
+  } catch {
+    return "failed";
+  }
 }

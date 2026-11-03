@@ -1,4 +1,8 @@
 import { NextRequest } from "next/server";
+import {
+  reviewOperationReceipts,
+  reviewOperationScope,
+} from "@/lib/review-operation-receipts";
 import { randomUUID } from "node:crypto";
 import {
   recordReviewDiagnostic,
@@ -73,6 +77,9 @@ async function scope(req: NextRequest, ctx: Context) {
 export async function GET(req: NextRequest, ctx: Context): Promise<Response> {
   try {
     const { root, browsePath, key } = await scope(req, ctx);
+    const operationId = req.nextUrl.searchParams.get("operation_id");
+    if (operationId !== null && !isReviewOperationId(operationId))
+      throw new ReviewStoreError("Invalid operation_id", 400);
     if (req.nextUrl.searchParams.get("download") === "1")
       return Response.json(await readReviewCollection(browsePath), {
         headers: {
@@ -81,13 +88,21 @@ export async function GET(req: NextRequest, ctx: Context): Promise<Response> {
         },
       });
     const profiles = await readReviewerProfiles(browsePath);
+    const operation = operationId
+      ? reviewOperationReceipts().get(
+          reviewOperationScope(browsePath, key),
+          operationId,
+        )
+      : undefined;
+    const file = await readEpisodeReviews(browsePath, root);
     return Response.json(
       {
         profiles,
-        file: await readEpisodeReviews(browsePath, root),
+        file,
         reviewers: profiles.map((profile) => profile.name),
         storage_path: reviewsFilePath(browsePath),
         dataset_key: key,
+        ...(operationId ? { operation } : {}),
       },
       { headers },
     );
@@ -111,6 +126,7 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
     "X-Review-Build": REVIEW_BUILD,
   };
   let status = 500;
+  let finishOperation: ((state: "succeeded" | "failed") => void) | undefined;
   const finish = (response: Response) => {
     status = response.status;
     for (const [key, value] of Object.entries(responseHeaders))
@@ -156,7 +172,7 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
   recordReviewDiagnostic(event);
   try {
     event.request_phase = "scope";
-    const { root, browsePath } = await scope(req, ctx);
+    const { root, browsePath, key } = await scope(req, ctx);
     event.dataset_id = reviewDiagnosticIdentity(root);
     event.request_phase = "profile";
     const profile = (await readReviewerProfiles(browsePath)).find(
@@ -168,6 +184,42 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
         400,
       );
     event.request_phase = "store";
+    if (update.operation_id) {
+      const registration = reviewOperationReceipts().begin(
+        reviewOperationScope(browsePath, key),
+        { ...update, operation_id: update.operation_id },
+      );
+      if (registration.state === "started")
+        finishOperation = registration.finish;
+      else if (registration.state === "conflict")
+        return finish(
+          Response.json(
+            {
+              error: "operation_id already belongs to another action",
+              code: "OPERATION_CONFLICT",
+            },
+            { status: 409 },
+          ),
+        );
+      else if (registration.state === "duplicate") {
+        if (registration.receipt.state === "succeeded")
+          return finish(
+            Response.json(await readEpisodeReviews(browsePath, root), {
+              headers,
+            }),
+          );
+        return finish(
+          Response.json(
+            {
+              error:
+                "Operation is pending or ended with an error; verify its outcome",
+              code: "OPERATION_UNCONFIRMED",
+            },
+            { status: 409 },
+          ),
+        );
+      }
+    }
     const file = await updateEpisodeReview(
       browsePath,
       root,
@@ -180,6 +232,7 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
     event.error_code = reviewErrorCode(error);
     return finish(failure(error));
   } finally {
+    finishOperation?.(status < 400 || trace.committed ? "succeeded" : "failed");
     recordReviewDiagnostic({
       ...event,
       event: "completed",
