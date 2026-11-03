@@ -244,6 +244,74 @@ describe("video frame presentation", () => {
     presentation.dispose();
   });
 
+  test("does not reissue a settled seek for late paused clocks or media events", () => {
+    const { video, states, presentation, load, readyAt } = setup();
+    load("/camera.mp4", "dataset-a:episode-3");
+    readyAt();
+    video.presentFrame();
+    seekVideoWithFrameGate(video, 2);
+    video.finishSeek();
+    video.currentTime = 2.0089;
+    video.seeking = false;
+    presentation.update("/camera.mp4", "dataset-a:episode-3", 2, false);
+    for (const event of ["loadeddata", "canplay", "seeked", "playing"])
+      video.dispatchEvent(new Event(event));
+    expect(video.currentTime).toBe(2.0089);
+    expect(video.seeking).toBe(false);
+    video.presentFrame();
+    expect(states.at(-1)?.phase).toBe("ready");
+    presentation.dispose();
+  });
+
+  test("retains a pending command before metadata despite clock samples", () => {
+    const { video, states, presentation, load } = setup();
+    load("/camera.mp4", "dataset-a:episode-3", 2);
+    presentation.update("/camera.mp4", "dataset-a:episode-3", 9, false);
+    video.readyState = 2;
+    video.dispatchEvent(new Event("loadedmetadata"));
+    expect(video.currentTime).toBe(2);
+    video.finishSeek();
+    video.presentFrame();
+    expect(states.at(-1)?.phase).toBe("ready");
+    presentation.dispose();
+  });
+
+  test("applies the newest explicit command after an earlier seek settles", () => {
+    const { video, states, presentation, load, readyAt } = setup();
+    load("/camera.mp4", "dataset-a:episode-3");
+    readyAt();
+    video.presentFrame();
+    seekVideoWithFrameGate(video, 2);
+    seekVideoWithFrameGate(video, 3);
+    expect(video.currentTime).toBe(2);
+    video.finishSeek();
+    expect(video.currentTime).toBe(3);
+    expect(video.seeking).toBe(true);
+    video.finishSeek();
+    video.presentFrame();
+    expect(states.at(-1)?.phase).toBe("ready");
+    presentation.dispose();
+  });
+
+  test("presents a naturally advanced frame after playback pauses during decode", () => {
+    const { video, states, presentation, load, readyAt } = setup();
+    load("/camera.mp4", "dataset-a:episode-3");
+    readyAt();
+    video.presentFrame();
+    seekVideoWithFrameGate(video, 2);
+    video.finishSeek();
+    video.paused = false;
+    video.currentTime = 2.5;
+    video.seeking = false;
+    presentation.update("/camera.mp4", "dataset-a:episode-3", 2.5, false);
+    video.pause();
+    presentation.update("/camera.mp4", "dataset-a:episode-3", 1.9, false);
+    expect(video.currentTime).toBe(2.5);
+    video.presentFrame();
+    expect(states.at(-1)?.phase).toBe("ready");
+    presentation.dispose();
+  });
+
   test("clock updates between fallback frames do not postpone presentation", () => {
     const { video, states, presentation, load, readyAt } = setup();
     Object.defineProperty(video, "requestVideoFrameCallback", {

@@ -31,6 +31,8 @@ export class VideoFramePresentation {
   private source?: string;
   private identity?: string;
   private targetSeconds = 0;
+  private seekTargetSeconds?: number;
+  private hasPlayedSinceSeek = false;
   private generation = 0;
   private suspended = false;
   private pending = true;
@@ -72,6 +74,7 @@ export class VideoFramePresentation {
       if (!this.suspended) this.begin(nextTarget);
       this.suspended = true;
       this.targetSeconds = nextTarget;
+      this.seekTargetSeconds = nextTarget;
       return;
     }
 
@@ -100,7 +103,8 @@ export class VideoFramePresentation {
     }
 
     if (this.state.phase === "error") return;
-    this.targetSeconds = nextTarget;
+    // Clock observations do not replace a pending explicit decoder command.
+    if (!this.pending) this.targetSeconds = nextTarget;
     if (this.pending) {
       this.seekToTarget();
       this.scheduleFrameCheck(this.generation);
@@ -157,16 +161,28 @@ export class VideoFramePresentation {
     this.generation++;
     this.pending = true;
     this.targetSeconds = targetSeconds;
+    this.seekTargetSeconds = targetSeconds;
+    this.hasPlayedSinceSeek = false;
     this.emit("loading");
   }
 
   private seekToTarget(): void {
+    if (this.seekTargetSeconds === undefined) {
+      if (!this.video.paused) this.hasPlayedSinceSeek = true;
+      return;
+    }
     if (
       this.video.readyState >= HTMLMediaElement.HAVE_METADATA &&
-      !this.video.seeking &&
-      Math.abs(this.video.currentTime - this.targetSeconds) > 1 / 120
+      !this.video.seeking
     ) {
-      this.video.currentTime = this.targetSeconds;
+      const target = this.seekTargetSeconds;
+      this.seekTargetSeconds = undefined;
+      this.hasPlayedSinceSeek = !this.video.paused;
+      // Native events and clock commits may arrive after a seek has settled.
+      // Apply each command once, then wait for its decoded frame without
+      // pulling a naturally advancing or newly paused clock back to a row.
+      if (Math.abs(this.video.currentTime - target) > 1 / 120)
+        this.video.currentTime = target;
     }
   }
 
@@ -177,12 +193,14 @@ export class VideoFramePresentation {
       generation !== this.generation ||
       !this.pending ||
       this.suspended ||
+      this.seekTargetSeconds !== undefined ||
       this.video.seeking ||
       this.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
       !absoluteSource ||
       this.video.src !== absoluteSource ||
-      Math.abs(this.video.currentTime - this.targetSeconds) >
-        FRAME_TOLERANCE_SECONDS ||
+      (!this.hasPlayedSinceSeek &&
+        Math.abs(this.video.currentTime - this.targetSeconds) >
+          FRAME_TOLERANCE_SECONDS) ||
       (mediaTime !== undefined &&
         Math.abs(mediaTime - this.video.currentTime) > FRAME_TOLERANCE_SECONDS)
     )
@@ -234,19 +252,9 @@ export class VideoFramePresentation {
 
   private onMediaChange = (): void => {
     if (this.disposed || this.suspended) return;
-    if (this.video.seeking) {
-      if (!this.pending) return;
-      // Browsers may emit a transient seeking event when play() starts. If
-      // the media clock is still at the requested frame, keep that decoded
-      // frame visible; only a real target mismatch needs a new frame gate.
-      if (
-        Math.abs(this.video.currentTime - this.targetSeconds) >
-        FRAME_TOLERANCE_SECONDS
-      ) {
-        this.begin(this.targetSeconds);
-      }
-      return;
-    }
+    // A native seeking event is not a new application command. If a newer
+    // command is queued, apply it only after the current native seek settles.
+    if (this.video.seeking) return;
     if (
       this.pending &&
       this.video.readyState >= HTMLMediaElement.HAVE_METADATA
