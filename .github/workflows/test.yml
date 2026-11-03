@@ -4,6 +4,7 @@ name: Tests
 # a filtered workflow never reports on PRs that miss the filter — those PRs would
 # sit at "pending" forever. The suite runs in ~15s, so gating every PR is cheap.
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:

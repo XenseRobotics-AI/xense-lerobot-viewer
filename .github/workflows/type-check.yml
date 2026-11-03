@@ -5,6 +5,7 @@ name: Type Check & Lint
 # would sit at "pending" forever. This job also runs `format:check`, which covers
 # Markdown and config files that the old filter excluded.
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
