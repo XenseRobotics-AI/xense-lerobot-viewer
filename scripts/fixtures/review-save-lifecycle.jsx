@@ -25,13 +25,25 @@ const getState = (key) => {
   return states.get(key);
 };
 function complete(state, payload, succeeded) {
-  state.operations.set(payload.operation_id, {
+  const receipt = {
     operation_id: payload.operation_id,
     episode_index: payload.episode_index,
     reviewer: payload.reviewer,
     reviewed: payload.reviewed,
+    source: payload.source,
+    ...(payload.stay_ms === undefined
+      ? {}
+      : {
+          stay_ms: payload.stay_ms,
+          episode_duration_ms: payload.episode_duration_ms,
+        }),
     state: succeeded ? "succeeded" : "failed",
-  });
+  };
+  state.operations.set(payload.operation_id, receipt);
+  state.file.operation_receipts = [
+    ...(state.file.operation_receipts ?? []),
+    receipt,
+  ].slice(-4096);
   if (!succeeded) return;
   const key = String(payload.episode_index);
   const records = (state.file.episodes[key] ?? []).filter(
@@ -575,6 +587,49 @@ window.runReviewReloadTests = async () => {
     () => !window.reviewFixture.error,
     "roster configuration repaired",
   );
+  backend.profiles = [
+    { name: "Alice", role: "inspector" },
+    { name: "Bob", role: "admin" },
+  ];
+  await window.reviewFixture.refresh();
+  await until(
+    () => window.reviewFixture.reviewer === "Alice",
+    "restore inspectors for durable recovery",
+  );
+  await window.reviewFixture.mark(14, "episodes", true);
+  backend.mode = "hold";
+  await window.reviewFixture.mark(14, "episodes", false);
+  const unmarkKey = reviewSaveKey(14, "Alice");
+  await until(
+    () => window.reviewFixture.uncertainSaves[unmarkKey],
+    "unmark unknown before simulated restart",
+  );
+  const unmark = latest(14, false);
+  finishCall(unmark, true);
+  getState(unmark.endpoint).operations.clear();
+  const beforeRecovery = calls.length;
+  backend.mode = "normal";
+  await window.reviewFixture.refresh(unmarkKey);
+  await until(
+    () => !window.reviewFixture.uncertainSaves[unmarkKey],
+    "durable unmark after transient receipt loss",
+  );
+  ensure(
+    !window.reviewFixture.file.episodes["14"],
+    "unmark readback restored a removed mark",
+  );
+  ensure(
+    calls.length === beforeRecovery,
+    "durable recovery replayed the write",
+  );
+  ensure(
+    !JSON.parse(
+      sessionStorage.getItem(REVIEW_PENDING_STORAGE_KEY),
+    ).entries.some(
+      (entry) => entry.operation.operation_id === unmark.payload.operation_id,
+    ),
+    "confirmed unmark remains in browser recovery storage",
+  );
   ensure(
     window.reviewBrowserErrors.length === 0,
     "browser errors after reload: " + window.reviewBrowserErrors.join("; "),
@@ -591,6 +646,7 @@ window.runReviewReloadTests = async () => {
       "an empty roster does not hide pending-operation verification",
       "orphan verification reports success and terminal failure while pending stays protected",
       "proof-only verification works during roster failure without hiding metadata errors",
+      "durable unmark evidence releases guards after transient receipts disappear",
     ],
   };
 };

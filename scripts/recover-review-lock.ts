@@ -16,7 +16,11 @@ if (!browsePath || confirmation !== "--no-legacy-writers") {
     const backup = await recoverLegacyReviewLock(
       path.join(root, ".xense-viewer", "episode-reviews.json"),
     );
-    console.log("Empty legacy lock recovered. Records backed up to: " + backup);
+    console.log(
+      backup
+        ? "Empty legacy lock recovered. Records backed up to: " + backup
+        : "Empty legacy lock recovered. No review file existed; no review file or backup was created.",
+    );
     console.log(
       "Existing records and unfinished temporary files were not changed. Retry the manual mark in the viewer.",
     );

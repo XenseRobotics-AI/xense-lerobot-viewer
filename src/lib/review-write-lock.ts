@@ -205,7 +205,7 @@ export async function acquireReviewWriteLock(
 export async function recoverLegacyReviewLock(
   target: string,
   timeoutMs = 10_000,
-): Promise<string> {
+): Promise<string | undefined> {
   const native = await nativeLease(target + ".write-lock", timeoutMs);
   try {
     const directory = target + ".lock";
@@ -223,8 +223,22 @@ export async function recoverLegacyReviewLock(
       .toISOString()
       .replace(/[:.]/g, "-")
       .replace("Z", "+0800");
-    const backup = target + ".backup-" + stamp + "-" + randomUUID();
-    await fs.copyFile(target, backup, fs.constants.COPYFILE_EXCL);
+    const original = await fs
+      .lstat(target)
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
+    let backup: string | undefined;
+    if (original) {
+      if (!original.isFile() || original.isSymbolicLink())
+        throw new ReviewWriteLockError(
+          "Recovery requires a regular review file or no original file",
+          400,
+        );
+      backup = target + ".backup-" + stamp + "-" + randomUUID();
+      await fs.copyFile(target, backup, fs.constants.COPYFILE_EXCL);
+    }
     native.assertHeld();
     await fs.rmdir(directory);
     return backup;

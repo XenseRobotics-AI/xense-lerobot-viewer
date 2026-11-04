@@ -129,12 +129,44 @@ test("operator recovery backs up bytes and preserves unfinished writes", async (
   await fs.writeFile(target + ".tmp-pending", "unfinished");
   await fs.mkdir(target + ".lock");
   const backup = await recoverLegacyReviewLock(target);
-  expect(await fs.readFile(backup, "utf8")).toBe("original records\n");
+  expect(backup).toBeString();
+  expect(await fs.readFile(backup!, "utf8")).toBe("original records\n");
   expect(await fs.readFile(target, "utf8")).toBe("original records\n");
   expect(await fs.readFile(target + ".tmp-pending", "utf8")).toBe("unfinished");
   expect(await fs.exists(target + ".lock")).toBe(false);
   const lock = await acquireReviewWriteLock(target);
   await lock.release();
+});
+
+test("operator recovery handles an orphan before the first review file exists", async () => {
+  await fs.mkdir(target + ".lock");
+  await fs.writeFile(target + ".tmp-first", "unfinished first write");
+  expect(await recoverLegacyReviewLock(target)).toBeUndefined();
+  expect(await fs.exists(target)).toBe(false);
+  expect(await fs.exists(target + ".lock")).toBe(false);
+  expect(await fs.readFile(target + ".tmp-first", "utf8")).toBe(
+    "unfinished first write",
+  );
+  const lock = await acquireReviewWriteLock(target);
+  await lock.release();
+});
+
+test("operator recovery refuses symlinked or non-file originals", async () => {
+  const original = path.join(directory, "outside-records");
+  await fs.writeFile(original, "preserve");
+  await fs.mkdir(target + ".lock");
+  await fs.symlink(original, target);
+  await expect(recoverLegacyReviewLock(target)).rejects.toMatchObject({
+    status: 400,
+  });
+  expect(await fs.readFile(original, "utf8")).toBe("preserve");
+  expect(await fs.readdir(target + ".lock")).toEqual([]);
+  await fs.unlink(target);
+  await fs.mkdir(target);
+  await expect(recoverLegacyReviewLock(target)).rejects.toMatchObject({
+    status: 400,
+  });
+  expect(await fs.readdir(target + ".lock")).toEqual([]);
 });
 
 test("operator recovery refuses active or nonempty locks", async () => {

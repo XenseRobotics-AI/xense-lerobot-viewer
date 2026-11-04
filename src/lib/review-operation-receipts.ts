@@ -66,6 +66,13 @@ export class ReviewOperationReceipts {
         episode_index: update.episode_index,
         reviewer: update.reviewer,
         reviewed: update.reviewed,
+        source: update.source,
+        ...(update.stay_ms === undefined
+          ? {}
+          : {
+              stay_ms: update.stay_ms,
+              episode_duration_ms: update.episode_duration_ms,
+            }),
         state: "pending",
       },
     };

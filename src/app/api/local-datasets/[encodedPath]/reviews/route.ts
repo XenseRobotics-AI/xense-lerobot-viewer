@@ -27,6 +27,7 @@ import {
   reviewDatasetKey,
   reviewsFilePath,
   updateEpisodeReview,
+  persistFailedReviewOperation,
   ReviewStoreError,
 } from "@/lib/episode-reviews-store";
 import {
@@ -34,6 +35,7 @@ import {
   resolveReviewBrowsePath,
 } from "@/lib/episode-review-scope";
 import { parseReviewUpdate } from "@/types/episode-review.types";
+import { reviewReceiptMatches } from "@/types/review-operation.types";
 import { BROWSE_PATH_COOKIE } from "@/utils/browsePath";
 import { ReviewWriteLockError } from "@/lib/review-write-lock";
 
@@ -90,13 +92,16 @@ export async function GET(req: NextRequest, ctx: Context): Promise<Response> {
           "Content-Disposition": 'attachment; filename="episode-reviews.json"',
         },
       });
+    const file = await readEpisodeReviews(browsePath, root);
     const operation = operationId
-      ? reviewOperationReceipts().get(
+      ? (file.operation_receipts?.find(
+          (receipt) => receipt.operation_id === operationId,
+        ) ??
+        reviewOperationReceipts().get(
           reviewOperationScope(browsePath, key),
           operationId,
-        )
+        ))
       : undefined;
-    const file = await readEpisodeReviews(browsePath, root);
     // Evidence must remain readable if the roster changes after a save.
     if (verificationOnly)
       return Response.json({ file, operation }, { headers });
@@ -133,6 +138,7 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
   };
   let status = 500;
   let finishOperation: ((state: "succeeded" | "failed") => void) | undefined;
+  let operationTarget: { browsePath: string; datasetPath: string } | undefined;
   const finish = (response: Response) => {
     status = response.status;
     for (const [key, value] of Object.entries(responseHeaders))
@@ -184,6 +190,7 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
   try {
     event.request_phase = "scope";
     const { root, browsePath, key } = await scope(req, ctx);
+    operationTarget = { browsePath, datasetPath: root };
     event.dataset_id = reviewDiagnosticIdentity(root);
     event.request_phase = "profile";
     // Register first so roster failures become terminal, verifiable outcomes.
@@ -223,6 +230,52 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
         );
       }
     }
+    if (update.operation_id) {
+      event.request_phase = "store";
+      trace.phase = "read";
+      const readAt = performance.now();
+      const current = await readEpisodeReviews(browsePath, root)
+        .catch((error) => {
+          trace.failed_phase = "read";
+          throw error;
+        })
+        .finally(() => {
+          trace.timings.read =
+            Math.round((performance.now() - readAt) * 100) / 100;
+        });
+      const previous = current.operation_receipts?.find(
+        (receipt) => receipt.operation_id === update.operation_id,
+      );
+      if (previous) {
+        const same = reviewReceiptMatches(previous, {
+          ...update,
+          operation_id: update.operation_id,
+        });
+        if (!same)
+          return finish(
+            Response.json(
+              {
+                error: "operation_id already belongs to another action",
+                code: "OPERATION_CONFLICT",
+              },
+              { status: 409 },
+            ),
+          );
+        if (previous.state === "succeeded")
+          return finish(Response.json(current, { headers }));
+        return finish(
+          Response.json(
+            {
+              error:
+                "Operation already ended with an error; verify its outcome",
+              code: "OPERATION_REJECTED",
+            },
+            { status: 409 },
+          ),
+        );
+      }
+    }
+    event.request_phase = "profile";
     const profile = (await readReviewerProfiles(browsePath)).find(
       (entry) => entry.name === update.reviewer,
     );
@@ -244,6 +297,12 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
     event.error_code = reviewErrorCode(error);
     return finish(failure(error));
   } finally {
+    if (finishOperation && status >= 400 && !trace.committed && operationTarget)
+      await persistFailedReviewOperation(
+        operationTarget.browsePath,
+        operationTarget.datasetPath,
+        update,
+      ).catch(() => undefined);
     finishOperation?.(status < 400 || trace.committed ? "succeeded" : "failed");
     recordReviewDiagnostic({
       ...event,

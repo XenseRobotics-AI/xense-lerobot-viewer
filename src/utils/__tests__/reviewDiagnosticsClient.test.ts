@@ -185,6 +185,61 @@ describe("review write deadline and reconciliation", () => {
       ).file.episodes,
     ).toEqual({});
   });
+  test("durable terminal evidence takes precedence and compares the full action", () => {
+    const target = { ...payload(), stay_ms: 0, episode_duration_ms: 1000 };
+    const exact = { ...target, state: "succeeded" as const };
+    const stored = {
+      version: 1 as const,
+      episodes: {},
+      operation_receipts: [exact],
+    };
+    expect(
+      reviewOperationResolution(stored, target, { ...exact, state: "pending" }),
+    ).toBe("succeeded");
+    expect(
+      reviewOperationResolution(
+        { ...stored, operation_receipts: [{ ...exact, state: "failed" }] },
+        target,
+      ),
+    ).toBe("failed");
+    for (const change of [
+      { source: "urdf" as const },
+      { stay_ms: 1 },
+      { episode_duration_ms: 2000 },
+    ]) {
+      expect(reviewOperationResolution(stored, { ...target, ...change })).toBe(
+        "unknown",
+      );
+      expect(
+        reviewOperationResolution(
+          { version: 1, episodes: {} },
+          { ...target, ...change },
+          exact,
+        ),
+      ).toBe("unknown");
+    }
+    const legacy = {
+      operation_id: target.operation_id,
+      episode_index: target.episode_index,
+      reviewer: target.reviewer,
+      reviewed: true,
+      state: "succeeded" as const,
+    };
+    expect(parseReviewOperationReceipt(legacy)).toEqual(legacy);
+    expect(
+      reviewOperationResolution({ version: 1, episodes: {} }, target, legacy),
+    ).toBe("succeeded");
+    for (const change of [
+      { reviewer: " Alice " },
+      { reviewer: "Al\nlice" },
+      { stay_ms: 3, episode_duration_ms: 1 },
+      { stay_ms: 0, episode_duration_ms: Number.MAX_SAFE_INTEGER },
+      { reviewed: false, stay_ms: 0, episode_duration_ms: 1 },
+    ])
+      expect(
+        parseReviewOperationReceipt({ ...exact, ...change }),
+      ).toBeUndefined();
+  });
   test("a 200 response with the wrong mark state is not an acknowledgment", async () => {
     let calls = 0;
     const fetcher = (async (_url, init) => {

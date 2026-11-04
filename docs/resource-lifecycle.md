@@ -222,9 +222,12 @@ Then run, from the viewer checkout:
 
     bun scripts/recover-review-lock.ts /absolute/browse/directory --no-legacy-writers
 
-The command validates the storage scope, acquires the native lease, makes a uniquely
-named UTC+8 backup, then removes only the empty legacy directory. It refuses active
-native leases and nonempty/symlinked directories. It does not change review records,
+The command validates the storage scope, acquires the native lease, and backs up an
+existing regular review file under a unique UTC+8 name before removing only the
+empty legacy directory. If no review file exists yet, it reports that fact and
+creates neither a review file nor a synthetic backup. It refuses symlinked or
+non-file originals, active native leases, and nonempty/symlinked lock directories.
+It does not change review records,
 replay an unfinished mark or delete temporary files. Retry the manual mark afterward.
 An offline NFS mount may still delay filesystem operations; a lock timeout must not
 be reported as a successful save or used to bypass the legacy writer boundary.

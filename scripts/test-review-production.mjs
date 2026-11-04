@@ -173,7 +173,8 @@ try {
   await put(finalMark);
   const rosterFile = path.join(root, ".xense-viewer", "reviewers.json");
   const savedRoster = await fs.readFile(rosterFile, "utf8");
-  const savedReviews = await fs.readFile(reviewFile, "utf8");
+  const savedReviews = JSON.parse(await fs.readFile(reviewFile, "utf8"));
+  const rejectedOperations = [];
   let rejectedPuts = 0;
   const verifyRejected = async (body, expectedStatus) => {
     const fetcher = async (url, init) => {
@@ -197,7 +198,13 @@ try {
       { fetcher },
     ).catch((error) => error);
     assert.ok(outcome instanceof ReviewRejectedError);
-    assert.equal(await fs.readFile(reviewFile, "utf8"), savedReviews);
+    const persisted = JSON.parse(await fs.readFile(reviewFile, "utf8"));
+    for (const [key, original] of Object.entries(savedReviews.datasets)) {
+      assert.deepEqual(persisted.datasets[key].episodes, original.episodes);
+      assert.equal(persisted.datasets[key].updated_at, original.updated_at);
+    }
+    assert.equal(persisted.updated_at, savedReviews.updated_at);
+    rejectedOperations.push(body);
     const evidence = await (
       await fetch(base + route + "?verify=1&operation_id=" + body.operation_id)
     ).json();
@@ -278,16 +285,35 @@ try {
     ...payload(false),
     diagnostics: clientReviewDiagnostics("unmark"),
   };
-  await assert.rejects(
-    saveReviewWithDeadline(firstBase + route, crossUnmark, {
+  const crossUnmarkResult = await saveReviewWithDeadline(
+    firstBase + route,
+    crossUnmark,
+    {
       fetcher: lostResponse,
       timeoutMs: 5000,
       reconcileMs: 5000,
+    },
+  );
+  assert.equal(crossUnmarkResult.episodes["0"], undefined);
+  checks.push(
+    "two real processes reconcile committed marks and unmarks through atomic durable evidence",
+  );
+  const unknownUnmark = {
+    ...payload(false),
+    diagnostics: clientReviewDiagnostics("unmark"),
+  };
+  await assert.rejects(
+    saveReviewWithDeadline(firstBase + route, unknownUnmark, {
+      fetcher: async (url, init) => {
+        if (init?.method === "PUT") throw new TypeError("Unacknowledged write");
+        const readUrl = new URL(String(url));
+        return fetch(secondBase + readUrl.pathname + readUrl.search, init);
+      },
     }),
     ReviewSaveUnknownError,
   );
   checks.push(
-    "two real processes reconcile a persistent mark but never infer an unmark from missing remote receipt",
+    "an absent mark without matching durable evidence remains unknown",
   );
   const concurrentMark = payload(true),
     peerMark = { ...payload(true), reviewer: "Second Fixture" };
@@ -340,15 +366,26 @@ try {
   await stop();
   base = await start(logDir);
   state = await get(unmark.operation_id);
-  assert.equal(state.operation, undefined);
+  assert.equal(state.operation.state, "succeeded");
   state = await get(finalMark.operation_id);
-  assert.equal(state.operation, undefined);
+  assert.equal(state.operation.state, "succeeded");
   assert.equal(
     state.file.episodes["1"][0].operation_id,
     finalMark.operation_id,
   );
+  checks.push("restart preserves exact durable mark and unmark outcomes");
+  for (const rejected of rejectedOperations) {
+    state = await get(rejected.operation_id);
+    assert.equal(state.operation.state, "failed");
+  }
+  checks.push("terminal roster rejections survive a real process restart");
+  const beforeReplay = await fs.readFile(reviewFile, "utf8");
+  await put(unmark);
+  assert.equal(await fs.readFile(reviewFile, "utf8"), beforeReplay);
+  const replayConflict = await put({ ...unmark, source: "urdf" }, 409);
+  assert.equal(replayConflict.code, "OPERATION_CONFLICT");
   checks.push(
-    "restart loses transient receipts without fabricating outcomes and preserves mark operation id",
+    "old unmark replay after restart cannot erase later reviews or change its action",
   );
   await stop();
   const blocked = path.join(tmp, "not-a-directory");

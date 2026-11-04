@@ -144,7 +144,7 @@ describe("collection review persistence", () => {
       (await PUT(request("PUT", { ...mark, operation_id }), context())).status,
     ).toBe(200);
   });
-  test("real route receipts close lost responses for marking and unmarking without business history", async () => {
+  test("real route receipts close lost responses with bounded terminal evidence", async () => {
     const endpoint =
       "http://localhost/api/reviews?browsePath=" + encodeURIComponent(browse);
     const fetcher = (async (url, init) => {
@@ -188,13 +188,20 @@ describe("collection review persistence", () => {
       expect(verified.file).toEqual(result);
     }
     const raw = await fs.readFile(reviewsFilePath(browse), "utf8");
-    expect(raw).not.toContain('"operation"');
-    expect(raw).not.toContain('"receipt"');
+    const saved = await readEpisodeReviews(browse, datasetA);
+    expect(saved.operation_receipts).toHaveLength(2);
+    expect(
+      saved.operation_receipts?.every(
+        (receipt) => receipt.state === "succeeded",
+      ),
+    ).toBe(true);
+    expect(raw).not.toContain('"diagnostics"');
+    expect(raw).not.toContain('"request_id"');
   });
 
   test("a lost rejection after roster removal has a failed receipt and never deletes existing reviews", async () => {
     await updateEpisodeReview(browse, datasetA, mark);
-    const before = await fs.readFile(reviewsFilePath(browse), "utf8");
+    const before = await readEpisodeReviews(browse, datasetA);
     await roster([{ name: "Bob", role: "admin" }]);
     const operation_id = crypto.randomUUID();
     let puts = 0;
@@ -219,7 +226,15 @@ describe("collection review persistence", () => {
     ).catch((error) => error);
     expect(outcome).toBeInstanceOf(ReviewRejectedError);
     expect(puts).toBe(1);
-    expect(await fs.readFile(reviewsFilePath(browse), "utf8")).toBe(before);
+    const after = await readEpisodeReviews(browse, datasetA);
+    expect(after.episodes).toEqual(before.episodes);
+    expect(after.updated_at).toBe(before.updated_at);
+    expect(after.operation_receipts).toContainEqual({
+      ...mark,
+      reviewed: false,
+      operation_id,
+      state: "failed",
+    });
     const verified = await (
       await GET(
         request("GET", undefined, "&verify=1&operation_id=" + operation_id),
@@ -254,7 +269,14 @@ describe("collection review persistence", () => {
     ).catch((error) => error);
     expect(outcome).toBeInstanceOf(ReviewRejectedError);
     expect(puts).toBe(1);
-    expect(await fs.exists(reviewsFilePath(browse))).toBe(false);
+    expect((await readEpisodeReviews(browse, datasetA)).episodes).toEqual({});
+    expect(
+      (await readEpisodeReviews(browse, datasetA)).operation_receipts,
+    ).toContainEqual({
+      ...mark,
+      operation_id,
+      state: "failed",
+    });
     expect((await GET(request(), context())).status).toBe(500);
     const response = await GET(
       request("GET", undefined, "&verify=1&operation_id=" + operation_id),
@@ -355,7 +377,7 @@ describe("collection review persistence", () => {
     ).toBeUndefined();
   });
 
-  test("idempotent legacy marks gain only a temporary acknowledgment, preserving the first record", async () => {
+  test("idempotent legacy marks gain durable acknowledgment, preserving the first record", async () => {
     const original = await updateEpisodeReview(browse, datasetA, mark);
     const operation_id = crypto.randomUUID();
     expect(
@@ -367,7 +389,13 @@ describe("collection review persistence", () => {
         context(),
       )
     ).json();
-    expect(result.file).toEqual(original);
+    expect(result.file.episodes).toEqual(original.episodes);
+    expect(result.file.updated_at).toBe(original.updated_at);
+    expect(result.file.operation_receipts).toContainEqual({
+      ...mark,
+      operation_id,
+      state: "succeeded",
+    });
     expect(result.file.episodes["0"][0].operation_id).toBeUndefined();
     expect(result.operation.state).toBe("succeeded");
     expect(
@@ -436,7 +464,7 @@ describe("collection review persistence", () => {
     );
     expect(again.episodes["0"][0]).toEqual(saved);
     expect(duplicate.unchanged).toBe(true);
-    expect(duplicate.committed).toBeUndefined();
+    expect(duplicate.committed).toBe(true);
     expect(() =>
       parseReviewUpdate({ ...mark, operation_id: "unsafe\nidentifier" }),
     ).toThrow();
