@@ -35,7 +35,11 @@ import {
   resolveReviewBrowsePath,
 } from "@/lib/episode-review-scope";
 import { parseReviewUpdate } from "@/types/episode-review.types";
-import { reviewReceiptMatches } from "@/types/review-operation.types";
+import {
+  findReviewOperation,
+  reviewReceiptMatches,
+  type ReviewOperationReceipt,
+} from "@/types/review-operation.types";
 import { BROWSE_PATH_COOKIE } from "@/utils/browsePath";
 import { ReviewWriteLockError } from "@/lib/review-write-lock";
 
@@ -52,6 +56,11 @@ function failure(error: unknown): Response {
         error instanceof Error
           ? error.message
           : "Failed to access episode reviews",
+      ...((error instanceof ReviewStoreError ||
+        error instanceof ReviewWriteLockError) &&
+      error.code
+        ? { code: error.code }
+        : {}),
     },
     {
       status:
@@ -94,9 +103,7 @@ export async function GET(req: NextRequest, ctx: Context): Promise<Response> {
       });
     const file = await readEpisodeReviews(browsePath, root);
     const operation = operationId
-      ? (file.operation_receipts?.find(
-          (receipt) => receipt.operation_id === operationId,
-        ) ??
+      ? (findReviewOperation(file, operationId) ??
         reviewOperationReceipts().get(
           reviewOperationScope(browsePath, key),
           operationId,
@@ -194,6 +201,8 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
     operationTarget = { browsePath, datasetPath: root };
     event.dataset_id = reviewDiagnosticIdentity(root);
     event.request_phase = "profile";
+    let cachedConflict = false;
+    let cachedReceipt: ReviewOperationReceipt | undefined;
     // Register first so roster failures become terminal, verifiable outcomes.
     if (update.operation_id) {
       const registration = reviewOperationReceipts().begin(
@@ -205,34 +214,9 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
         finishOperation = registration.finish;
       } else if (registration.state === "unavailable") {
         persistOperationFailure = true;
-      } else if (registration.state === "conflict")
-        return finish(
-          Response.json(
-            {
-              error: "operation_id already belongs to another action",
-              code: "OPERATION_CONFLICT",
-            },
-            { status: 409 },
-          ),
-        );
-      else if (registration.state === "duplicate") {
-        if (registration.receipt.state === "succeeded")
-          return finish(
-            Response.json(await readEpisodeReviews(browsePath, root), {
-              headers,
-            }),
-          );
-        return finish(
-          Response.json(
-            {
-              error:
-                "Operation is pending or ended with an error; verify its outcome",
-              code: "OPERATION_UNCONFIRMED",
-            },
-            { status: 409 },
-          ),
-        );
-      }
+      } else if (registration.state === "conflict") cachedConflict = true;
+      else if (registration.state === "duplicate")
+        cachedReceipt = registration.receipt;
     }
     if (update.operation_id) {
       event.request_phase = "store";
@@ -247,9 +231,7 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
           trace.timings.read =
             Math.round((performance.now() - readAt) * 100) / 100;
         });
-      const previous = current.operation_receipts?.find(
-        (receipt) => receipt.operation_id === update.operation_id,
-      );
+      const previous = findReviewOperation(current, update.operation_id);
       if (previous) {
         const same = reviewReceiptMatches(previous, {
           ...update,
@@ -273,6 +255,32 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
               error:
                 "Operation already ended with an error; verify its outcome",
               code: "OPERATION_REJECTED",
+            },
+            { status: 409 },
+          ),
+        );
+      }
+      // Disk evidence wins even if a failed/conflicting request left this
+      // process with an older cache entry for the same operation ID.
+      if (cachedConflict)
+        return finish(
+          Response.json(
+            {
+              error: "operation_id already belongs to another action",
+              code: "OPERATION_CONFLICT",
+            },
+            { status: 409 },
+          ),
+        );
+      if (cachedReceipt) {
+        if (cachedReceipt.state === "succeeded")
+          return finish(Response.json(current, { headers }));
+        return finish(
+          Response.json(
+            {
+              error:
+                "Operation is pending or ended with an error; verify its outcome",
+              code: "OPERATION_UNCONFIRMED",
             },
             { status: 409 },
           ),
@@ -305,6 +313,7 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
       persistOperationFailure &&
       status >= 400 &&
       !trace.committed &&
+      trace.failed_phase !== "lock_wait" &&
       operationTarget
     )
       await persistFailedReviewOperation(

@@ -9,6 +9,7 @@ import {
   readEpisodeReviewState,
 } from "../reviewDiagnosticsClient";
 import { ReviewSaveQueue } from "../reviewSaveQueue";
+import { tStandalone } from "@/i18n/standalone";
 import { isReviewOperationId } from "@/types/review-diagnostics.types";
 import {
   parseReviewOperationReceipt,
@@ -353,6 +354,60 @@ describe("review write deadline and reconciliation", () => {
         ).episodes["2"][0].operation_id,
       ).toBe(body.operation_id);
     }
+  });
+  test("lock rejections present localized recovery guidance without retrying writes", async () => {
+    for (const [code, key] of [
+      ["REVIEW_LOCK_BUSY", "review.lockBusy"],
+      ["REVIEW_LEGACY_LOCK", "review.legacyLock"],
+      ["REVIEW_LOCK_UNAVAILABLE", "review.lockUnavailable"],
+    ] as const) {
+      let writes = 0;
+      const fetcher = (async () => {
+        writes++;
+        return Response.json(
+          { code, error: "Untranslated internal lock error" },
+          { status: 409 },
+        );
+      }) as typeof fetch;
+      await expect(
+        saveReviewWithDeadline("/reviews", payload(), { ...options, fetcher }),
+      ).rejects.toThrow(tStandalone(key));
+      expect(writes).toBe(1);
+    }
+  });
+  test("legacy servers without error codes still show localized abandoned lock guidance", async () => {
+    const fetcher = (async () =>
+      Response.json(
+        {
+          error:
+            "Review file is busy with an old-version or unknown writer. No lock was removed automatically.",
+        },
+        { status: 409 },
+      )) as typeof fetch;
+    await expect(
+      saveReviewWithDeadline("/reviews", payload(), { ...options, fetcher }),
+    ).rejects.toThrow(tStandalone("review.legacyLock"));
+  });
+  test("a confirmed failed lock loss retains its actionable message after reconciliation", async () => {
+    const body = payload();
+    let writes = 0;
+    const fetcher = (async (_url, init) => {
+      if (init?.method === "PUT") {
+        writes++;
+        return Response.json(
+          { code: "REVIEW_LOCK_CHANGED", error: "Lock changed" },
+          { status: 503 },
+        );
+      }
+      return Response.json({
+        file: { version: 1, episodes: {} },
+        operation: { ...body, state: "failed" },
+      });
+    }) as typeof fetch;
+    await expect(
+      saveReviewWithDeadline("/reviews", body, { ...options, fetcher }),
+    ).rejects.toThrow(tStandalone("review.lockChanged"));
+    expect(writes).toBe(1);
   });
   test("a definite validation rejection is not retried or read back", async () => {
     let calls = 0;

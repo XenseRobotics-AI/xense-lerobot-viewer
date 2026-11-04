@@ -1,4 +1,4 @@
-import { test, expect, beforeEach, afterEach } from "bun:test";
+import { test, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -35,7 +35,7 @@ test("kernel and legacy locks both exclude other writers and release exactly onc
     await expect(acquireReviewWriteLock(target, 30)).rejects.toMatchObject({
       status: 409,
     });
-    first.assertHeld();
+    await first.assertHeld();
   } finally {
     await first.release();
   }
@@ -45,6 +45,40 @@ test("kernel and legacy locks both exclude other writers and release exactly onc
   const second = await acquireReviewWriteLock(target);
   await second.release();
   expect((await fs.stat(target + ".write-lock")).ino).toBe(before);
+});
+
+test("a replaced native lock inode prevents the original writer from committing", async () => {
+  const lock = await acquireReviewWriteLock(target);
+  try {
+    await fs.rename(target + ".write-lock", target + ".write-lock-original");
+    await fs.writeFile(target + ".write-lock", "");
+    await expect(
+      Promise.resolve().then(() => lock.assertHeld()),
+    ).rejects.toMatchObject({ status: 503 });
+  } finally {
+    await lock.release();
+  }
+});
+
+test("a replaced owner token prevents commit and cannot be removed by the old owner", async () => {
+  const lock = await acquireReviewWriteLock(target);
+  const ownerPath = path.join(target + ".lock", "owner.json");
+  const original = await fs.readFile(ownerPath, "utf8");
+  const changed = JSON.stringify({
+    ...JSON.parse(original),
+    token: "another-owner",
+  });
+  try {
+    await fs.writeFile(ownerPath, changed);
+    await expect(
+      Promise.resolve().then(() => lock.assertHeld()),
+    ).rejects.toMatchObject({ status: 503 });
+    await expect(lock.release()).rejects.toMatchObject({ status: 503 });
+    expect(await fs.readFile(ownerPath, "utf8")).toBe(changed);
+  } finally {
+    await fs.writeFile(ownerPath, original);
+    await lock.release();
+  }
 });
 
 test("unknown old locks are never stolen based on age", async () => {
@@ -57,6 +91,30 @@ test("unknown old locks are never stolen based on age", async () => {
   expect(await fs.readdir(target + ".lock")).toEqual([]);
 });
 
+test("owner publication failures remove only the new empty lock and allow recovery", async () => {
+  const publishing = spyOn(fs, "link").mockRejectedValue(
+    Object.assign(new Error("Injected owner publication failure"), {
+      code: "ENOSPC",
+    }),
+  );
+  let failure: unknown;
+  try {
+    const lock = await acquireReviewWriteLock(target);
+    await lock.release();
+  } catch (error) {
+    failure = error;
+  } finally {
+    publishing.mockRestore();
+  }
+  expect(failure).toMatchObject({ code: "ENOSPC" });
+  expect(await fs.exists(target + ".lock")).toBe(false);
+  expect(
+    (await fs.readdir(directory)).filter((name) => name.includes(".owner-")),
+  ).toEqual([]);
+  const lock = await acquireReviewWriteLock(target);
+  await lock.release();
+});
+
 test("legacy writer completion wakes a new writer without deleting its lock", async () => {
   await fs.mkdir(target + ".lock");
   const pending = acquireReviewWriteLock(target, 500);
@@ -65,6 +123,86 @@ test("legacy writer completion wakes a new writer without deleting its lock", as
   const lock = await pending;
   await lock.release();
   expect(await fs.exists(target + ".lock")).toBe(false);
+});
+
+test("legacy lock timeouts do not depend on wall clock movement", async () => {
+  await fs.mkdir(target + ".lock");
+  const wallClock = spyOn(Date, "now").mockReturnValue(0);
+  const pending = acquireReviewWriteLock(target, 30).then(
+    async (lock) => {
+      await lock.release();
+      return 200;
+    },
+    (error: { status: number }) => error.status,
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const outcome = await Promise.race([
+      pending,
+      new Promise<number>((resolve) => {
+        timer = setTimeout(() => resolve(-1), 1000);
+      }),
+    ]);
+    expect(outcome).toBe(409);
+  } finally {
+    clearTimeout(timer);
+    wallClock.mockRestore();
+    await pending;
+  }
+});
+
+test("partial staged owner writes cannot strand a nonempty compatibility lock", async () => {
+  const open = fs.open.bind(fs);
+  const opening = spyOn(fs, "open").mockImplementation(
+    async (...args: Parameters<typeof fs.open>) => {
+      const handle = await open(...args);
+      if (String(args[0]).includes(".lock.owner-")) {
+        const write = handle.writeFile.bind(handle);
+        handle.writeFile = async () => {
+          await write("{partial");
+          throw Object.assign(new Error("Injected full disk"), {
+            code: "ENOSPC",
+          });
+        };
+      }
+      return handle;
+    },
+  );
+  try {
+    await expect(acquireReviewWriteLock(target)).rejects.toMatchObject({
+      code: "ENOSPC",
+    });
+  } finally {
+    opening.mockRestore();
+  }
+  expect(await fs.exists(target + ".lock")).toBe(false);
+  expect(
+    (await fs.readdir(directory)).filter((name) => name.includes(".owner-")),
+  ).toEqual([]);
+});
+
+test("owner publication never overwrites or removes an unexpected existing owner", async () => {
+  const publishing = spyOn(fs, "link").mockImplementation(
+    async (_source, destination) => {
+      await fs.writeFile(destination, "foreign owner", { flag: "wx" });
+      throw Object.assign(new Error("Injected competing owner"), {
+        code: "EEXIST",
+      });
+    },
+  );
+  try {
+    await expect(acquireReviewWriteLock(target)).rejects.toMatchObject({
+      code: "EEXIST",
+    });
+  } finally {
+    publishing.mockRestore();
+  }
+  expect(
+    await fs.readFile(path.join(target + ".lock", "owner.json"), "utf8"),
+  ).toBe("foreign owner");
+  expect(
+    (await fs.readdir(directory)).filter((name) => name.includes(".owner-")),
+  ).toEqual([]);
 });
 
 test("a killed Node writer releases the native lease and its known orphan is recovered", async () => {
@@ -108,7 +246,7 @@ test("a killed Node writer releases the native lease and its known orphan is rec
     expect(
       await fs.readFile(path.join(target + ".lock", "owner.json"), "utf8"),
     ).not.toBe(owner);
-    replacement.assertHeld();
+    await replacement.assertHeld();
   } finally {
     await replacement.release();
   }

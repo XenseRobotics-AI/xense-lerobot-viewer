@@ -10,6 +10,7 @@ export class ReviewWriteLockError extends Error {
   constructor(
     message: string,
     public status: number,
+    public code = "REVIEW_LOCK_UNAVAILABLE",
   ) {
     super(message);
   }
@@ -86,17 +87,41 @@ async function nativeLease(file: string, timeoutMs: number) {
               : "Cannot acquire the system review lock. Install util-linux flock and use a filesystem supporting shared locks. " +
                   (processError?.message ?? stderr.trim()),
             code === 75 ? 409 : 503,
+            code === 75 ? "REVIEW_LOCK_BUSY" : "REVIEW_LOCK_UNAVAILABLE",
           ),
         );
     });
   });
   return {
     ino: identity.ino.toString(),
+    async verifyHeld() {
+      const current = await fs
+        .lstat(file, { bigint: true })
+        .catch(() => undefined);
+      if (
+        !current?.isFile() ||
+        current.isSymbolicLink() ||
+        current.ino !== identity.ino ||
+        current.dev !== identity.dev
+      )
+        throw new ReviewWriteLockError(
+          "Review system lock identity changed; stop writers and investigate before retrying",
+          503,
+          "REVIEW_LOCK_CHANGED",
+        );
+      if (finished || child.exitCode !== null || child.signalCode !== null)
+        throw new ReviewWriteLockError(
+          "Review write lock was lost before commit; retry saving",
+          503,
+          "REVIEW_LOCK_CHANGED",
+        );
+    },
     assertHeld() {
       if (finished || child.exitCode !== null || child.signalCode !== null)
         throw new ReviewWriteLockError(
           "Review write lock was lost before commit; retry saving",
           503,
+          "REVIEW_LOCK_CHANGED",
         );
     },
     async release() {
@@ -119,8 +144,9 @@ export async function acquireReviewWriteLock(
   const directory = target + ".lock";
   const ownerPath = path.join(directory, OWNER);
   const token = randomUUID();
-  const deadline = Date.now() + timeoutMs;
+  const deadline = performance.now() + timeoutMs;
   try {
+    await native.verifyHeld();
     while (true) {
       native.assertHeld();
       try {
@@ -158,22 +184,34 @@ export async function acquireReviewWriteLock(
         await fs.rmdir(directory);
         continue;
       }
-      if (Date.now() >= deadline)
+      if (performance.now() >= deadline)
         throw new ReviewWriteLockError(
           "Review file is busy with an old-version or unknown writer. If its empty .lock directory is left behind, pause all old-version saves before recovering it; browsing can continue. No lock was removed automatically.",
           409,
+          "REVIEW_LEGACY_LOCK",
         );
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
+    const stagedOwner = directory + ".owner-" + token;
+    let staged = false;
     try {
-      await fs.writeFile(
-        ownerPath,
-        JSON.stringify({ protocol: PROTOCOL, ino: native.ino, token }),
-        { flag: "wx" },
-      );
+      const handle = await fs.open(stagedOwner, "wx");
+      staged = true;
+      try {
+        await handle.writeFile(
+          JSON.stringify({ protocol: PROTOCOL, ino: native.ino, token }),
+        );
+      } finally {
+        await handle.close();
+      }
+      // Exclusive hard-link publication never exposes partial owner JSON and
+      // cannot overwrite an unexpected owner in the compatibility directory.
+      await fs.link(stagedOwner, ownerPath);
     } catch (error) {
       await fs.rmdir(directory).catch(() => undefined);
       throw error;
+    } finally {
+      if (staged) await fs.rm(stagedOwner, { force: true });
     }
   } catch (error) {
     await native.release();
@@ -181,7 +219,24 @@ export async function acquireReviewWriteLock(
   }
   let released = false;
   return {
-    assertHeld: native.assertHeld,
+    async assertHeld() {
+      await native.verifyHeld();
+      const owner = await fs
+        .readFile(ownerPath, "utf8")
+        .then((raw) => JSON.parse(raw))
+        .catch(() => undefined);
+      if (
+        owner?.token !== token ||
+        owner.protocol !== PROTOCOL ||
+        owner.ino !== native.ino
+      )
+        throw new ReviewWriteLockError(
+          "Review lock ownership changed; stop writers and investigate before retrying",
+          503,
+          "REVIEW_LOCK_CHANGED",
+        );
+      native.assertHeld();
+    },
     async release() {
       if (released) return;
       released = true;
@@ -191,6 +246,7 @@ export async function acquireReviewWriteLock(
           throw new ReviewWriteLockError(
             "Review lock ownership changed; recovery is required",
             503,
+            "REVIEW_LOCK_CHANGED",
           );
         await fs.unlink(ownerPath);
         await fs.rmdir(directory);
@@ -239,7 +295,7 @@ export async function recoverLegacyReviewLock(
       backup = target + ".backup-" + stamp + "-" + randomUUID();
       await fs.copyFile(target, backup, fs.constants.COPYFILE_EXCL);
     }
-    native.assertHeld();
+    await native.verifyHeld();
     await fs.rmdir(directory);
     return backup;
   } finally {

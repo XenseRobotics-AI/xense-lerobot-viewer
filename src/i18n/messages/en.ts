@@ -361,6 +361,14 @@ export const en = {
   "review.backgroundSaves":
     "{count} marks saving in the background; you can switch episodes",
   "review.retrySave": "Retry save",
+  "review.lockBusy":
+    "Another service is saving inspection records. Retry shortly. This request did not write any records.",
+  "review.legacyLock":
+    "Inspection storage is held by a legacy or unknown writer. An administrator must pause all legacy saves before using the recovery script. Do not manually delete lock files.",
+  "review.lockChanged":
+    "Lock ownership changed before saving, so the commit was stopped. Verify this operation and ask an administrator to check shared storage and writer services.",
+  "review.lockUnavailable":
+    "The inspection storage lock is unavailable. Ask an administrator to check permissions, flock, and shared storage.",
   "review.undo": "Undo my inspection",
   "review.mark": "Mark as inspected",
   "review.manualHint":

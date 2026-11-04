@@ -211,6 +211,12 @@ so old-version viewers remain mutually exclusive with new writers. New-owned
 directories contain a protocol, native inode identity and unique owner token. Only
 an orphan carrying this recognized protocol can be recovered automatically, after
 acquiring the same native lease. Device numbers are not compared across NFS clients.
+Owner JSON is fully staged outside the compatibility directory and published with
+an exclusive hard link; a failed write or publication cannot expose partial owner
+metadata. Commit checks verify the native inode and owner token/protocol/inode.
+These checks detect observed ownership changes; they cannot fence noncooperating
+writers or guarantee behavior through a network partition. Waiting on legacy locks
+uses a monotonic clock, so a wall clock adjustment cannot extend the deadline.
 Empty or unknown legacy locks are never stolen, regardless of age. Their writers
 may be running on another machine. A tiny crash window between directory creation
 and owner-record creation is conservatively treated as an unknown legacy lock too.

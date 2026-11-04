@@ -388,6 +388,24 @@ try {
     "old unmark replay after restart cannot erase later reviews or change its action",
   );
   await stop();
+  const evicted = JSON.parse(await fs.readFile(reviewFile, "utf8"));
+  for (const file of Object.values(evicted.datasets))
+    file.operation_receipts = [];
+  await fs.writeFile(reviewFile, JSON.stringify(evicted));
+  base = await start(logDir);
+  const beforeEvictedReplay = await fs.readFile(reviewFile, "utf8");
+  state = await get(finalMark.operation_id);
+  assert.equal(state.operation.state, "succeeded");
+  const retainedConflict = { ...finalMark, reviewed: false };
+  delete retainedConflict.stay_ms;
+  delete retainedConflict.episode_duration_ms;
+  await put(retainedConflict, 409);
+  await put(finalMark);
+  assert.equal(await fs.readFile(reviewFile, "utf8"), beforeEvictedReplay);
+  checks.push(
+    "retained live marks fence operation reuse after history eviction and a real restart",
+  );
+  await stop();
   const blocked = path.join(tmp, "not-a-directory");
   await fs.writeFile(blocked, "fixture");
   base = await start(blocked);

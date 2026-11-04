@@ -13,6 +13,7 @@ import {
 import { isInsideRoot } from "@/lib/local-dataset-paths";
 import {
   MAX_DURABLE_REVIEW_RECEIPTS,
+  findReviewOperation,
   reviewReceiptMatches,
 } from "@/types/review-operation.types";
 import {
@@ -29,6 +30,7 @@ export class ReviewStoreError extends Error {
   constructor(
     message: string,
     public status: number,
+    public code?: string,
   ) {
     super(message);
   }
@@ -168,9 +170,7 @@ function storeOperationReceipt(
 }
 
 function matchingReceipt(file: EpisodeReviewsFile, update: ReviewUpdate) {
-  return file.operation_receipts?.find(
-    (receipt) => receipt.operation_id === update.operation_id,
-  );
+  return findReviewOperation(file, update.operation_id);
 }
 
 function sameOperation(
@@ -238,7 +238,7 @@ export async function updateEpisodeReview(
     lock = await phase("lock_wait", () => acquireReviewWriteLock(target));
   } catch (error) {
     if (error instanceof ReviewWriteLockError)
-      throw new ReviewStoreError(error.message, error.status);
+      throw new ReviewStoreError(error.message, error.status, error.code);
     throw error;
   }
   const tmp = `${target}.tmp-${randomUUID()}`;
@@ -293,7 +293,7 @@ export async function updateEpisodeReview(
           }),
         );
         await phase("commit", async () => {
-          lock.assertHeld();
+          await lock.assertHeld();
           await fs.rename(tmp, target);
           if (trace) trace.committed = true;
         });
@@ -323,7 +323,7 @@ export async function updateEpisodeReview(
         }),
       );
       await phase("commit", async () => {
-        lock.assertHeld();
+        await lock.assertHeld();
         await fs.rename(tmp, target);
         if (trace) trace.committed = true;
       });
@@ -358,7 +358,7 @@ export async function updateEpisodeReview(
       }),
     );
     await phase("commit", async () => {
-      lock.assertHeld();
+      await lock.assertHeld();
       await fs.rename(tmp, target);
       if (trace) trace.committed = true;
     });
@@ -403,7 +403,7 @@ export async function persistFailedReviewOperation(
       encoding: "utf8",
       flag: "wx",
     });
-    lock.assertHeld();
+    await lock.assertHeld();
     await fs.rename(tmp, target);
   } finally {
     await fs.rm(tmp, { force: true }).finally(() => lock.release());

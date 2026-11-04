@@ -348,8 +348,14 @@ export default function EpisodeReviewPanel({
         )}
       </details>
       {error && (
-        <div role="alert" className="mt-2 text-red-300">
-          {t("review.error")} <span className="break-all">{error}</span>{" "}
+        <div
+          role="alert"
+          className="mt-2 min-w-0 rounded border border-red-400/20 bg-red-400/5 p-2 text-[11px] leading-relaxed text-red-300"
+        >
+          <p className="font-medium">{t("review.error")}</p>
+          <p className="mt-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+            {error}
+          </p>
           <button
             type="button"
             disabled={saving || pendingCount > 0 || verifying}
@@ -358,7 +364,7 @@ export default function EpisodeReviewPanel({
               else if (loadError) void refresh();
               else saveMark(!mine);
             }}
-            className="underline"
+            className="mt-2 underline"
           >
             {t(
               uncertainSaves[key]

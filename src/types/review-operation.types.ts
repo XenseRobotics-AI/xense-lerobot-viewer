@@ -18,6 +18,37 @@ export type DurableReviewOperationReceipt = ReviewOperationReceipt & {
 };
 export const MAX_DURABLE_REVIEW_RECEIPTS = 4096;
 
+/** Current marks remain evidence even after the bounded receipt was evicted. */
+export function findReviewOperation(
+  file: EpisodeReviewsFile,
+  operationId: string | undefined,
+): DurableReviewOperationReceipt | undefined {
+  if (!operationId) return undefined;
+  const receipt = file.operation_receipts?.find(
+    (entry) => entry.operation_id === operationId,
+  );
+  if (receipt) return receipt;
+  for (const [episode, records] of Object.entries(file.episodes)) {
+    const record = records.find((entry) => entry.operation_id === operationId);
+    if (record)
+      return {
+        operation_id: operationId,
+        episode_index: Number(episode),
+        reviewer: record.reviewer,
+        reviewed: true,
+        source: record.source,
+        ...(record.stay_ms === undefined
+          ? {}
+          : {
+              stay_ms: record.stay_ms,
+              episode_duration_ms: record.episode_duration_ms,
+            }),
+        state: "succeeded",
+      };
+  }
+  return undefined;
+}
+
 export function reviewReceiptMatches(
   receipt: ReviewOperationReceipt,
   target: PendingReviewOperation,

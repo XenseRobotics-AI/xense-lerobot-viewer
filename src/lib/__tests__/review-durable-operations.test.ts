@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -204,6 +204,17 @@ describe("durable review outcomes", () => {
     const proof = await (await readProof(first.operation_id)).json();
     expect(proof.operation?.state).toBe("succeeded");
     expect(!!proof.file.episodes["0"]?.length).toBe(proof.operation.reviewed);
+    expect((await send(winner)).status).toBe(200);
+    expect(await fs.readFile(reviewsFilePath(root), "utf8")).toBe(before);
+  });
+  test("a failed conflicting request cannot hide the committed operation in the same process", async () => {
+    const original = action();
+    await updateEpisodeReview(root, dataset, original);
+    restart();
+    const before = await fs.readFile(reviewsFilePath(root), "utf8");
+    expect((await send({ ...original, source: "urdf" })).status).toBe(409);
+    expect((await send(original)).status).toBe(200);
+    expect(await fs.readFile(reviewsFilePath(root), "utf8")).toBe(before);
   });
   test("roster failures remain terminal across restart without changing review records", async () => {
     const original = action();
@@ -243,6 +254,36 @@ describe("durable review outcomes", () => {
     const persisted = await fs.readFile(reviewsFilePath(root), "utf8");
     expect((await send(failed)).status).toBe(409);
     expect(await fs.readFile(reviewsFilePath(root), "utf8")).toBe(persisted);
+  });
+  test("lock contention is not followed by a second lock attempt to persist its own failure", async () => {
+    const bin = path.join(root, "lock-fixture-bin");
+    const attempts = path.join(root, "lock-attempts");
+    await fs.mkdir(bin);
+    await fs.writeFile(
+      path.join(bin, "flock"),
+      '#!/bin/sh\nprintf x >> "$REVIEW_TEST_LOCK_ATTEMPTS"\nexit 75\n',
+      { mode: 0o755 },
+    );
+    const previousPath = process.env.PATH;
+    const previousAttempts = process.env.REVIEW_TEST_LOCK_ATTEMPTS;
+    process.env.PATH = bin + path.delimiter + previousPath;
+    process.env.REVIEW_TEST_LOCK_ATTEMPTS = attempts;
+    try {
+      const body = action();
+      const response = await send(body);
+      expect(response.status).toBe(409);
+      expect((await response.json()).code).toBe("REVIEW_LOCK_BUSY");
+      expect(await fs.readFile(attempts, "utf8")).toBe("x");
+      const proof = await (await readProof(body.operation_id)).json();
+      expect(proof.operation?.state).toBe("failed");
+      expect(proof.file.episodes).toEqual({});
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousAttempts === undefined)
+        delete process.env.REVIEW_TEST_LOCK_ATTEMPTS;
+      else process.env.REVIEW_TEST_LOCK_ATTEMPTS = previousAttempts;
+    }
   });
   test("corrupt durable history is rejected rather than erased by a subsequent save", async () => {
     const body = action();
@@ -350,6 +391,101 @@ describe("durable review outcomes", () => {
     ).rejects.toThrow();
     expect(await fs.readFile(reviewsFilePath(root), "utf8")).toBe(raw);
   });
+  test("a retained mark still fences operation ID reuse after receipt eviction", async () => {
+    const original = { ...action(), stay_ms: 0, episode_duration_ms: 1000 };
+    await updateEpisodeReview(root, dataset, original);
+    const collection = JSON.parse(
+      await fs.readFile(reviewsFilePath(root), "utf8"),
+    );
+    collection.datasets["nested/one"].operation_receipts = [];
+    await fs.writeFile(reviewsFilePath(root), JSON.stringify(collection));
+    const before = await fs.readFile(reviewsFilePath(root), "utf8");
+    for (const changed of [
+      {
+        ...original,
+        reviewed: false,
+        stay_ms: undefined,
+        episode_duration_ms: undefined,
+      },
+      { ...original, episode_index: 1 },
+      { ...original, reviewer: "Bob" },
+      { ...original, source: "urdf" as const },
+      { ...original, stay_ms: 1 },
+    ]) {
+      restart();
+      expect((await send(changed)).status).toBe(409);
+      expect(await fs.readFile(reviewsFilePath(root), "utf8")).toBe(before);
+    }
+  });
+  test("a retained mark cannot acquire a failed outcome after receipt eviction", async () => {
+    const original = action();
+    await updateEpisodeReview(root, dataset, original);
+    const collection = JSON.parse(
+      await fs.readFile(reviewsFilePath(root), "utf8"),
+    );
+    collection.datasets["nested/one"].operation_receipts = [];
+    await fs.writeFile(reviewsFilePath(root), JSON.stringify(collection));
+    const before = await fs.readFile(reviewsFilePath(root), "utf8");
+    await persistFailedReviewOperation(root, dataset, original);
+    expect(await fs.readFile(reviewsFilePath(root), "utf8")).toBe(before);
+    await fs.writeFile(
+      path.join(root, ".xense-viewer", "reviewers.json"),
+      "{broken",
+    );
+    restart();
+    expect((await send(original)).status).toBe(200);
+    const proof = await (await readProof(original.operation_id)).json();
+    expect(proof.operation?.state).toBe("succeeded");
+    expect(reviewOperationResolution(proof.file, original)).toBe("succeeded");
+  });
+  test.each(["native", "owner"] as const)(
+    "a %s lock change after staging cannot overwrite committed reviews",
+    async (changed) => {
+      await updateEpisodeReview(root, dataset, action());
+      const target = reviewsFilePath(root);
+      const before = await fs.readFile(target, "utf8");
+      const write = fs.writeFile.bind(fs);
+      const writing = spyOn(fs, "writeFile").mockImplementation(
+        async (...args: Parameters<typeof fs.writeFile>) => {
+          await write(...args);
+          if (String(args[0]).startsWith(target + ".tmp-")) {
+            if (changed === "native") {
+              await fs.rename(target + ".write-lock", target + ".retired-lock");
+              await write(target + ".write-lock", "new lock inode");
+            } else {
+              const ownerPath = path.join(target + ".lock", "owner.json");
+              const owner = JSON.parse(await fs.readFile(ownerPath, "utf8"));
+              await write(
+                ownerPath,
+                JSON.stringify({ ...owner, token: "another-writer" }),
+              );
+            }
+          }
+        },
+      );
+      try {
+        await expect(
+          updateEpisodeReview(root, dataset, action(false)),
+        ).rejects.toMatchObject({ status: 503 });
+      } finally {
+        writing.mockRestore();
+      }
+      expect(await fs.readFile(target, "utf8")).toBe(before);
+      if (changed === "owner")
+        expect(
+          JSON.parse(
+            await fs.readFile(
+              path.join(target + ".lock", "owner.json"),
+              "utf8",
+            ),
+          ).token,
+        ).toBe("another-writer");
+      else
+        expect(await fs.readFile(target + ".write-lock", "utf8")).toBe(
+          "new lock inode",
+        );
+    },
+  );
   test("history capacity preserves current records and evicted evidence stays unknown", async () => {
     const operation_receipts = Array.from({ length: 4096 }, () => ({
       ...action(false),

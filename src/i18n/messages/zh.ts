@@ -349,6 +349,14 @@ export const zh: Record<MessageKey, string> = {
   "review.saving": "正在保存…",
   "review.backgroundSaves": "{count} 个标记后台保存中，可继续切换 episode",
   "review.retrySave": "重试保存",
+  "review.lockBusy":
+    "其他服务正在保存质检记录，请稍后重试。本次请求未写入记录。",
+  "review.legacyLock":
+    "质检存储被旧版或未知写入服务占用。请管理员先暂停所有旧版保存，再使用恢复脚本处理遗留锁；请勿手动删除锁文件。",
+  "review.lockChanged":
+    "保存前检测到锁归属变化，已停止提交。请先核对本次结果，并联系管理员检查共享存储和写入服务。",
+  "review.lockUnavailable":
+    "质检存储锁不可用，请管理员检查文件权限、flock 及共享存储状态。",
   "review.undo": "撤销我的检查标记",
   "review.mark": "标记为已检查",
   "review.manualHint": "检查完成后手动标记；浏览或播放不会自动标记。",

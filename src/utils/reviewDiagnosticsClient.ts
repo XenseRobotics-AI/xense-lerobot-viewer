@@ -102,6 +102,32 @@ export class ReviewRejectedError extends Error {
   }
 }
 
+function reviewFailureMessage(
+  raw: { code?: unknown; error?: unknown } | null,
+  status: number,
+): string {
+  const code =
+    raw?.code ??
+    (typeof raw?.error === "string" &&
+    raw.error.startsWith(
+      "Review file is busy with an old-version or unknown writer.",
+    )
+      ? "REVIEW_LEGACY_LOCK"
+      : undefined);
+  switch (code) {
+    case "REVIEW_LOCK_BUSY":
+      return tStandalone("review.lockBusy");
+    case "REVIEW_LEGACY_LOCK":
+      return tStandalone("review.legacyLock");
+    case "REVIEW_LOCK_CHANGED":
+      return tStandalone("review.lockChanged");
+    case "REVIEW_LOCK_UNAVAILABLE":
+      return tStandalone("review.lockUnavailable");
+    default:
+      return typeof raw?.error === "string" ? raw.error : String(status);
+  }
+}
+
 /** Deadline covers headers AND body, even if a transport ignores abort. */
 async function deadline<T>(
   work: (signal: AbortSignal) => Promise<T>,
@@ -159,9 +185,7 @@ async function readReviewResponse(
       });
       if (!response.ok) {
         const raw = await response.json().catch(() => null);
-        throw new Error(
-          typeof raw?.error === "string" ? raw.error : String(response.status),
-        );
+        throw new Error(reviewFailureMessage(raw, response.status));
       }
       const raw: unknown = await response.json();
       if (!raw || typeof raw !== "object" || Array.isArray(raw))
@@ -259,6 +283,7 @@ export async function saveReviewWithDeadline(
 ): Promise<EpisodeReviewsFile> {
   const fetcher = options.fetcher ?? fetch;
   const started = performance.now();
+  let serverFailureMessage: string | undefined;
   const report = (result: "unknown" | "timeout_confirmed" | "rejected") => {
     try {
       options.report?.({
@@ -284,18 +309,17 @@ export async function saveReviewWithDeadline(
         signal,
       });
       if (!response.ok) {
+        const raw = await response.json().catch(() => null);
+        serverFailureMessage = reviewFailureMessage(raw, response.status);
         if (
           response.status >= 500 ||
           response.status === 408 ||
           response.status === 499
         )
           throw new Error("Ambiguous server failure");
-        const raw = await response.json().catch(() => null);
         if (raw?.code === "OPERATION_UNCONFIRMED")
           throw new Error("Operation needs verification");
-        throw new ReviewRejectedError(
-          typeof raw?.error === "string" ? raw.error : String(response.status),
-        );
+        throw new ReviewRejectedError(serverFailureMessage);
       }
       const file = parseReviewsFile(await response.json());
       if (reviewStateMatches(file, payload) !== true)
@@ -322,7 +346,7 @@ export async function saveReviewWithDeadline(
       }
       if (resolution === "failed")
         throw new ReviewRejectedError(
-          tStandalone("review.saveEndedWithError"),
+          serverFailureMessage ?? tStandalone("review.saveEndedWithError"),
           file,
         );
     } catch (error) {

@@ -73,6 +73,14 @@ window.fetch = async (input, init = {}) => {
   if (init.method === "PUT") {
     const payload = JSON.parse(init.body);
     calls.push({ endpoint: url.pathname, payload });
+    if (backend.mode === "legacy-lock")
+      return Response.json(
+        {
+          code: "REVIEW_LEGACY_LOCK",
+          error: "Review file is busy with an old-version or unknown writer.",
+        },
+        { status: 409 },
+      );
     state.operations.set(payload.operation_id, {
       operation_id: payload.operation_id,
       episode_index: payload.episode_index,
@@ -429,6 +437,39 @@ window.runReviewLifecycleTests = async () => {
     "browser errors: " + window.reviewBrowserErrors.join("; "),
   );
   checks.push("captured target and late response after scope navigation");
+  backend.mode = "legacy-lock";
+  const beforeBlocked = calls.length;
+  await window.reviewFixture.mark(7, "episodes", true);
+  await until(
+    () =>
+      document
+        .querySelector('[role="alert"]')
+        ?.textContent.includes("recovery script"),
+    "localized legacy lock guidance",
+  );
+  const lockAlert = document.querySelector('[role="alert"]');
+  ensure(
+    !lockAlert.textContent.includes("Review file is busy with"),
+    "raw server exception leaked into recovery guidance",
+  );
+  ensure(
+    !lockAlert.querySelector(".break-all"),
+    "lock guidance breaks normal words",
+  );
+  ensure(
+    calls.length === beforeBlocked + 1,
+    "lock rejection retried a write automatically",
+  );
+  ensure(
+    !window.reviewFixture.uncertainSaves[
+      reviewSaveKey(7, window.reviewFixture.reviewer)
+    ],
+    "known lock rejection became an unknown operation",
+  );
+  backend.mode = "normal";
+  checks.push(
+    "legacy lock guidance is localized and a rejected save does not replay",
+  );
   return { result: "passed", checks, put_requests: calls.length };
 };
 
