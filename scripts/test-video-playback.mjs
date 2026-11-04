@@ -184,33 +184,61 @@ try {
     },
   });
   const profile = path.join(temp, "chrome");
-  browser = Bun.spawn(
-    [
-      chrome,
-      "--headless=new",
-      "--no-sandbox",
-      "--disable-gpu",
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--remote-debugging-port=0",
-      "--user-data-dir=" + profile,
-      "about:blank",
-    ],
-    { stdout: "ignore", stderr: "ignore" },
-  );
+  const stderrPath = path.join(temp, "chrome-stderr.log");
+  const stderrHandle = await fs.open(stderrPath, "w");
+  try {
+    browser = Bun.spawn(
+      [
+        chrome,
+        "--headless=new",
+        "--no-sandbox",
+        "--disable-gpu",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--remote-debugging-port=0",
+        "--user-data-dir=" + profile,
+        "about:blank",
+      ],
+      { stdout: "ignore", stderr: stderrHandle.fd },
+    );
+  } finally {
+    await stderrHandle.close();
+  }
   let active;
-  for (let i = 0; i < 100; i++) {
+  const startupDeadline = performance.now() + 30_000;
+  while (performance.now() < startupDeadline) {
+    if (browser.exitCode !== null) break;
     try {
-      active = await fs.readFile(
+      const contents = await fs.readFile(
         path.join(profile, "DevToolsActivePort"),
         "utf8",
       );
-      break;
-    } catch {
-      await Bun.sleep(50);
+      const [port, endpoint] = contents.trim().split("\n");
+      if (
+        Number.isInteger(Number(port)) &&
+        Number(port) > 0 &&
+        Number(port) <= 65535 &&
+        endpoint?.startsWith("/devtools/browser/")
+      ) {
+        active = contents;
+        break;
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
     }
+    await Bun.sleep(50);
   }
-  assert.ok(active, "Chrome did not start");
+  if (!active) {
+    const diagnostic = (await fs.readFile(stderrPath, "utf8")).slice(-8192);
+    throw new Error(
+      "Chrome did not start (" +
+        chrome +
+        "; exit " +
+        (browser.exitCode ?? "still running") +
+        ")\n" +
+        diagnostic,
+    );
+  }
   const [port, endpoint] = active.trim().split("\n");
   socket = new WebSocket(`ws://127.0.0.1:${port}${endpoint}`);
   await new Promise((resolve, reject) => {
