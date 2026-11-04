@@ -226,6 +226,24 @@ describe("durable review outcomes", () => {
       (await (await readProof(failed.operation_id, other)).json()).operation,
     ).toBeUndefined();
   });
+  test("cache saturation still persists a terminal request failure across restart", async () => {
+    processState.__reviewOperationReceipts = new ReviewOperationReceipts({
+      capacity: 0,
+    });
+    await fs.writeFile(
+      path.join(root, ".xense-viewer", "reviewers.json"),
+      "{broken",
+    );
+    const failed = action(false);
+    expect((await send(failed)).status).toBe(500);
+    restart();
+    const proof = await (await readProof(failed.operation_id)).json();
+    expect(proof.operation?.state).toBe("failed");
+    expect(proof.file.episodes).toEqual({});
+    const persisted = await fs.readFile(reviewsFilePath(root), "utf8");
+    expect((await send(failed)).status).toBe(409);
+    expect(await fs.readFile(reviewsFilePath(root), "utf8")).toBe(persisted);
+  });
   test("corrupt durable history is rejected rather than erased by a subsequent save", async () => {
     const body = action();
     const receipt = { ...body, state: "succeeded" };

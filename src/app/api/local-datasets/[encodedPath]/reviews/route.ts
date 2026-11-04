@@ -138,6 +138,7 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
   };
   let status = 500;
   let finishOperation: ((state: "succeeded" | "failed") => void) | undefined;
+  let persistOperationFailure = false;
   let operationTarget: { browsePath: string; datasetPath: string } | undefined;
   const finish = (response: Response) => {
     status = response.status;
@@ -199,9 +200,12 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
         reviewOperationScope(browsePath, key),
         { ...update, operation_id: update.operation_id },
       );
-      if (registration.state === "started")
+      if (registration.state === "started") {
+        persistOperationFailure = true;
         finishOperation = registration.finish;
-      else if (registration.state === "conflict")
+      } else if (registration.state === "unavailable") {
+        persistOperationFailure = true;
+      } else if (registration.state === "conflict")
         return finish(
           Response.json(
             {
@@ -297,7 +301,12 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
     event.error_code = reviewErrorCode(error);
     return finish(failure(error));
   } finally {
-    if (finishOperation && status >= 400 && !trace.committed && operationTarget)
+    if (
+      persistOperationFailure &&
+      status >= 400 &&
+      !trace.committed &&
+      operationTarget
+    )
       await persistFailedReviewOperation(
         operationTarget.browsePath,
         operationTarget.datasetPath,
