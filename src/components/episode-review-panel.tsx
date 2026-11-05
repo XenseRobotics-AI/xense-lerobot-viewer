@@ -47,6 +47,7 @@ export default function EpisodeReviewPanel({
     recoveryWarning,
     refresh,
     mark,
+    endpoint,
   } = useEpisodeReviews();
   const key = reviewSaveKey(episodeId, reviewer);
   const saving = !!pendingSaves[key];
@@ -79,6 +80,9 @@ export default function EpisodeReviewPanel({
       setVerifying(false);
     }
   };
+  useEffect(() => {
+    setVerificationResult(null);
+  }, [endpoint, key]);
   const inputId = useId();
   const [, setStayTick] = useState(0);
   const reviews = file.episodes[String(episodeId)] ?? [];
@@ -109,6 +113,7 @@ export default function EpisodeReviewPanel({
     };
   }, []);
   const saveMark = (reviewed: boolean) => {
+    setVerificationResult(null);
     const stay = reviewed ? readStaySnapshot() : undefined;
     void mark(episodeId, source, reviewed, stay, readDiagnostics());
   };
@@ -174,6 +179,7 @@ export default function EpisodeReviewPanel({
         </select>
         <button
           type="button"
+          data-review-save
           onClick={() => saveMark(!mine)}
           disabled={
             disabled ||

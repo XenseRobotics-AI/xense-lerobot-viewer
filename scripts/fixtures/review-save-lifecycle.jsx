@@ -637,6 +637,41 @@ window.runReviewReloadTests = async () => {
     () => window.reviewFixture.reviewer === "Alice",
     "restore inspectors for durable recovery",
   );
+  backend.mode = "hold";
+  document.querySelector("[data-review-save]").click();
+  const newMarkKey = reviewSaveKey(7, "Alice");
+  await until(
+    () => window.reviewFixture.uncertainSaves[newMarkKey],
+    "operation used to produce a terminal failure on the current review",
+  );
+  backend.mode = "normal";
+  finishCall(latest(7, false), false);
+  document.querySelector('[role="alert"] button').click();
+  await until(
+    () => !window.reviewFixture.uncertainSaves[newMarkKey],
+    "current review terminal failure verification",
+  );
+  await until(
+    () => document.querySelector('[data-review-verification-result="failed"]'),
+    "current review terminal failure banner",
+  );
+  backend.mode = "hold";
+  document.querySelector("[data-review-save]").click();
+  await until(
+    () => window.reviewFixture.uncertainSaves[newMarkKey],
+    "new save after a verified terminal failure",
+  );
+  ensure(
+    !document.querySelector("[data-review-verification-result]"),
+    "previous terminal result remained beside a new unknown operation",
+  );
+  backend.mode = "normal";
+  finishCall(latest(7, false), false);
+  document.querySelector('[role="alert"] button').click();
+  await until(
+    () => !window.reviewFixture.uncertainSaves[newMarkKey],
+    "clear the new save after stale-result verification",
+  );
   await window.reviewFixture.mark(14, "episodes", true);
   backend.mode = "hold";
   await window.reviewFixture.mark(14, "episodes", false);
@@ -688,6 +723,7 @@ window.runReviewReloadTests = async () => {
       "orphan verification reports success and terminal failure while pending stays protected",
       "proof-only verification works during roster failure without hiding metadata errors",
       "durable unmark evidence releases guards after transient receipts disappear",
+      "new saves clear earlier verification results without releasing unknown guards",
     ],
   };
 };

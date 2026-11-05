@@ -194,12 +194,14 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
       ),
     );
   }
-  recordReviewDiagnostic(event);
+  let receivedRecorded = false;
   try {
     event.request_phase = "scope";
     const { root, browsePath, key } = await scope(req, ctx);
     operationTarget = { browsePath, datasetPath: root };
     event.dataset_id = reviewDiagnosticIdentity(root);
+    recordReviewDiagnostic(event, browsePath);
+    receivedRecorded = true;
     event.request_phase = "profile";
     let cachedConflict = false;
     let cachedReceipt: ReviewOperationReceipt | undefined;
@@ -309,6 +311,7 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
     event.error_code = reviewErrorCode(error);
     return finish(failure(error));
   } finally {
+    if (!receivedRecorded) recordReviewDiagnostic(event);
     if (
       persistOperationFailure &&
       status >= 400 &&
@@ -322,12 +325,15 @@ export async function PUT(req: NextRequest, ctx: Context): Promise<Response> {
         update,
       ).catch(() => undefined);
     finishOperation?.(status < 400 || trace.committed ? "succeeded" : "failed");
-    recordReviewDiagnostic({
-      ...event,
-      event: "completed",
-      status,
-      store: trace,
-      duration_ms: Math.round(performance.now() - started),
-    });
+    recordReviewDiagnostic(
+      {
+        ...event,
+        event: "completed",
+        status,
+        store: trace,
+        duration_ms: Math.round(performance.now() - started),
+      },
+      operationTarget?.browsePath,
+    );
   }
 }

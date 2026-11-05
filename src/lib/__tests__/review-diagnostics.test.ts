@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   ReviewDiagnosticWriter,
   createRotatingReviewSink,
+  createScopedReviewDiagnosticSink,
   reviewErrorCode,
   reviewDiagnosticIdentity,
 } from "../review-diagnostics";
@@ -96,6 +97,109 @@ describe("bounded review diagnostic protocol", () => {
 });
 
 describe("review diagnostic writer", () => {
+  test("scoped batches mirror to the correct shared directories without merging scopes", async () => {
+    const root = await folder();
+    const a = path.join(root, "a"),
+      b = path.join(root, "b");
+    await fs.mkdir(a);
+    await fs.mkdir(b);
+    const local = path.join(root, "local");
+    const writer = new ReviewDiagnosticWriter(
+      createScopedReviewDiagnosticSink(local),
+    );
+    const first = event(),
+      second = event();
+    writer.record(first, a);
+    writer.record(second, b);
+    await writer.flush();
+    for (const [scope, expected, excluded] of [
+      [a, first, second],
+      [b, second, first],
+    ] as const) {
+      const dir = path.join(scope, ".xense-viewer", "review-diagnostics");
+      const names = await fs.readdir(dir);
+      expect(names).toHaveLength(1);
+      const content = await fs.readFile(path.join(dir, names[0]), "utf8");
+      expect(content).toContain(expected.request_id);
+      expect(content).not.toContain(excluded.request_id);
+      expect(content).not.toContain(scope);
+      expect((await fs.stat(path.join(dir, names[0]))).mode & 0o777).toBe(
+        0o664,
+      );
+      expect((await fs.stat(dir)).mode & 0o777).toBe(0o775);
+    }
+    const content = await fs.readFile(
+      path.join(local, (await fs.readdir(local))[0]),
+      "utf8",
+    );
+    expect(content).toContain(first.request_id);
+    expect(content).toContain(second.request_id);
+    expect(writer.status()).toMatchObject({ written: 2, dropped: 0 });
+  });
+  test("shared delivery failures preserve local evidence and later unscoped logging", async () => {
+    const root = await folder();
+    const local = path.join(root, "local"),
+      bad = path.join(root, "bad");
+    await fs.writeFile(bad, "not a directory");
+    const writer = new ReviewDiagnosticWriter(
+      createScopedReviewDiagnosticSink(local, 1),
+    );
+    const failed = event(),
+      later = event();
+    writer.record(failed, bad);
+    writer.record(later);
+    await writer.flush();
+    const content = await fs.readFile(
+      path.join(local, (await fs.readdir(local))[0]),
+      "utf8",
+    );
+    expect(content).toContain(failed.request_id);
+    expect(content).toContain(later.request_id);
+    expect(writer.status()).toMatchObject({
+      written: 1,
+      dropped: 1,
+      write_failures: 1,
+    });
+  });
+  test("shared logging refuses symlink escapes and capacity remains bounded", async () => {
+    const root = await folder(),
+      outside = await folder();
+    await fs.mkdir(path.join(root, ".xense-viewer"));
+    await fs.symlink(
+      outside,
+      path.join(root, ".xense-viewer", "review-diagnostics"),
+    );
+    const local = path.join(root, "local");
+    const sink = createScopedReviewDiagnosticSink(local, 1);
+    await expect(sink('{"first":1}\n', root)).rejects.toThrow(
+      "Diagnostic delivery failed",
+    );
+    await expect(
+      sink('{"second":2}\n', path.join(root, "other")),
+    ).rejects.toThrow("Diagnostic delivery failed");
+    expect(await fs.readdir(outside)).toHaveLength(0);
+    expect(await fs.exists(path.join(root, "other"))).toBe(false);
+  });
+  test("rotation leaves another live writer's current file intact", async () => {
+    const dir = await folder();
+    const a = createRotatingReviewSink(dir, { maxBytes: 20, maxFiles: 2 });
+    const b = createRotatingReviewSink(dir, { maxBytes: 20, maxFiles: 2 });
+    await a('{"a":1}\n');
+    const first = (await fs.readdir(dir))[0];
+    for (let i = 0; i < 8; i++) await b('{"b":1}\n');
+    expect(await fs.readFile(path.join(dir, first), "utf8")).toBe('{"a":1}\n');
+    expect(await fs.readdir(dir)).toHaveLength(3);
+  });
+  test("a symlinked metadata parent cannot create directories outside the scope", async () => {
+    const root = await folder(),
+      outside = await folder();
+    await fs.symlink(outside, path.join(root, ".xense-viewer"));
+    const sink = createScopedReviewDiagnosticSink(path.join(root, "local"));
+    await expect(sink('{"event":1}\n', root)).rejects.toThrow(
+      "Diagnostic delivery failed",
+    );
+    expect(await fs.readdir(outside)).toHaveLength(0);
+  });
   test("batches events in order, producing real JSON lines with UTC+8 timestamps", async () => {
     const writes: string[] = [];
     const writer = new ReviewDiagnosticWriter(

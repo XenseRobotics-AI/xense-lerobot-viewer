@@ -255,6 +255,36 @@ try {
     ),
   );
   checks.push("asynchronous anonymized logs and commit evidence");
+  const sharedLogDir = path.join(root, ".xense-viewer", "review-diagnostics");
+  const sharedEvents = [];
+  for (const name of await fs.readdir(sharedLogDir)) {
+    if (!name.endsWith(".jsonl")) continue;
+    const raw = await fs.readFile(path.join(sharedLogDir, name), "utf8");
+    assert.ok(!raw.includes("Closure Fixture"));
+    assert.ok(!raw.includes(root));
+    sharedEvents.push(
+      ...raw.trim().split("\n").filter(Boolean).map(JSON.parse),
+    );
+  }
+  assert.ok(
+    sharedEvents.some(
+      (entry) =>
+        entry.operation_id === finalMark.operation_id &&
+        entry.event === "completed" &&
+        entry.store?.committed,
+    ),
+  );
+  assert.ok(
+    sharedEvents.some(
+      (entry) =>
+        entry.operation_id === rejectedOperations[1].operation_id &&
+        entry.event === "completed" &&
+        entry.status === 500,
+    ),
+  );
+  checks.push(
+    "shared browse directory contains anonymized success and failure operation logs",
+  );
 
   const firstBase = base,
     secondBase = await start(logDir);

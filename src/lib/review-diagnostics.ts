@@ -2,17 +2,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHmac, randomUUID } from "node:crypto";
 import { reviewTimestamp } from "@/utils/reviewTime";
+import { isInsideRoot } from "@/lib/local-dataset-paths";
 import {
   REVIEW_BUILD,
   type ReviewDiagnosticEvent,
 } from "@/types/review-diagnostics.types";
 
-type Sink = (lines: string) => Promise<void>;
+type Sink = (lines: string, browsePath?: string) => Promise<void>;
 const MAX_EVENT_BYTES = 4096;
 
 /** One in-flight batch, bounded waiting queue; disk failures never reach saves. */
 export class ReviewDiagnosticWriter {
-  private queue: string[] = [];
+  private queue: { line: string; browsePath?: string }[] = [];
   private running: Promise<void> | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private counters = {
@@ -32,7 +33,7 @@ export class ReviewDiagnosticWriter {
     } = {},
   ) {}
 
-  record(event: ReviewDiagnosticEvent): void {
+  record(event: ReviewDiagnosticEvent, browsePath?: string): void {
     if (this.options.enabled === false) return;
     try {
       const line =
@@ -48,7 +49,7 @@ export class ReviewDiagnosticWriter {
         this.counters.dropped++;
         return;
       }
-      this.queue.push(line);
+      this.queue.push({ line, browsePath });
       this.counters.accepted++;
       this.counters.high_water = Math.max(
         this.counters.high_water,
@@ -77,9 +78,20 @@ export class ReviewDiagnosticWriter {
     if (this.running) return this.running;
     const drain = async () => {
       while (this.queue.length) {
-        const batch = this.queue.splice(0, this.options.batchSize ?? 32);
+        const browsePath = this.queue[0].browsePath;
+        let length = 1;
+        while (
+          length < this.queue.length &&
+          length < (this.options.batchSize ?? 32) &&
+          this.queue[length].browsePath === browsePath
+        )
+          length++;
+        const batch = this.queue.splice(0, length);
         try {
-          await this.sink(batch.join(""));
+          await this.sink(
+            batch.map((entry) => entry.line).join(""),
+            browsePath,
+          );
           this.counters.written += batch.length;
         } catch {
           this.counters.write_failures++;
@@ -115,6 +127,7 @@ export function createRotatingReviewSink(
     maxBytes?: number;
     maxFiles?: number;
     retentionMs?: number;
+    shared?: boolean;
   } = {},
 ): Sink {
   const prefix = "review-" + process.pid + "-" + randomUUID();
@@ -136,14 +149,18 @@ export function createRotatingReviewSink(
     const ordered = files
       .filter((entry) => entry.stat?.isFile())
       .sort((a, b) => b.stat!.mtimeMs - a.stat!.mtimeMs);
+    let ownFiles = 0;
     await Promise.all(
       ordered
-        .filter(
-          (entry, index) =>
-            index >= maxFiles - 1 ||
+        .filter((entry) => {
+          const excess =
+            entry.name.startsWith(prefix + "-") && ownFiles++ >= maxFiles - 1;
+          return (
+            excess ||
             Date.now() - entry.stat!.mtimeMs >
-              (options.retentionMs ?? 7 * 86400000),
-        )
+              (options.retentionMs ?? 7 * 86400000)
+          );
+        })
         .map((entry) =>
           fs.rm(path.join(directory, entry.name), { force: true }),
         ),
@@ -154,7 +171,28 @@ export function createRotatingReviewSink(
     if (bytes > maxBytes)
       throw new Error("Diagnostic batch exceeds file capacity");
     if (!initialized || size + bytes > maxBytes) {
-      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+      if (options.shared) {
+        const root = await fs.realpath(path.resolve(directory, "../.."));
+        const parent = path.dirname(directory);
+        try {
+          if (!isInsideRoot(root, await fs.realpath(parent)))
+            throw new Error("Diagnostic directory escapes browse directory");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+      const created = await fs.mkdir(directory, {
+        recursive: true,
+        mode: options.shared ? 0o2775 : 0o700,
+      });
+      if (options.shared) {
+        const root = path.resolve(directory, "../..");
+        if (
+          !isInsideRoot(await fs.realpath(root), await fs.realpath(directory))
+        )
+          throw new Error("Diagnostic directory escapes browse directory");
+        if (created) await fs.chmod(directory, 0o2775);
+      }
       if (initialized) sequence++;
       size = 0;
       initialized = false;
@@ -164,12 +202,49 @@ export function createRotatingReviewSink(
     const file = path.join(directory, prefix + "-" + sequence + ".jsonl");
     // Rotate after a failed append too: partial writes must not evade the cap.
     try {
-      await fs.appendFile(file, lines, { mode: 0o600 });
+      const handle = await fs.open(file, "a", options.shared ? 0o664 : 0o600);
+      try {
+        if (options.shared) await handle.chmod(0o664);
+        await handle.writeFile(lines);
+      } finally {
+        await handle.close();
+      }
       size += bytes;
     } catch (error) {
       size = maxBytes;
       throw error;
     }
+  };
+}
+
+/** Mirror scoped server events to shared storage without growing scope state forever. */
+export function createScopedReviewDiagnosticSink(
+  localDirectory: string,
+  maxScopes = 32,
+): Sink {
+  const local = createRotatingReviewSink(localDirectory);
+  const scopes = new Map<string, Sink>();
+  return async (lines, browsePath) => {
+    const writes = [local(lines)];
+    if (browsePath) {
+      const root = path.resolve(browsePath);
+      let shared = scopes.get(root);
+      if (!shared && scopes.size < maxScopes) {
+        shared = createRotatingReviewSink(
+          path.join(root, ".xense-viewer", "review-diagnostics"),
+          { shared: true },
+        );
+        scopes.set(root, shared);
+      }
+      writes.push(
+        shared
+          ? shared(lines)
+          : Promise.reject(new Error("Diagnostic scope capacity exceeded")),
+      );
+    }
+    const results = await Promise.allSettled(writes);
+    if (results.some((result) => result.status === "rejected"))
+      throw new Error("Diagnostic delivery failed");
   };
 }
 
@@ -184,7 +259,7 @@ function state() {
     globalState.__reviewDiagnostics = {
       secret: randomUUID(),
       writer: new ReviewDiagnosticWriter(
-        createRotatingReviewSink(
+        createScopedReviewDiagnosticSink(
           process.env.REVIEW_DIAGNOSTICS_DIR ??
             path.join(process.cwd(), ".xense-diagnostics", "reviews"),
         ),
@@ -203,8 +278,11 @@ export function reviewDiagnosticIdentity(value: string): string {
     .digest("hex")
     .slice(0, 24);
 }
-export function recordReviewDiagnostic(event: ReviewDiagnosticEvent): void {
-  state().writer.record(event);
+export function recordReviewDiagnostic(
+  event: ReviewDiagnosticEvent,
+  browsePath?: string,
+): void {
+  state().writer.record(event, browsePath);
 }
 export function reviewDiagnosticsStatus() {
   return { version: 1, server_build: REVIEW_BUILD, ...state().writer.status() };
