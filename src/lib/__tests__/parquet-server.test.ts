@@ -1,5 +1,11 @@
-import { describe, expect, it } from "bun:test";
-import { buildV2EpisodeDataPath } from "../parquet-server";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import {
+  buildV2EpisodeDataPath,
+  listV3EpisodeMetadataFiles,
+} from "../parquet-server";
 
 const V2_INFO = {
   codebase_version: "v2.1",
@@ -49,5 +55,40 @@ describe("buildV2EpisodeDataPath", () => {
         3,
       ),
     ).toBe("episodes/000003.parquet");
+  });
+});
+
+describe("listV3EpisodeMetadataFiles", () => {
+  let datasetRoot: string;
+
+  beforeAll(async () => {
+    datasetRoot = await fs.mkdtemp(path.join(os.tmpdir(), "v3-shards-"));
+    for (const file of [
+      "meta/episodes/chunk-4/file-12.parquet",
+      "meta/episodes/chunk-4/file-2.parquet",
+      "meta/episodes/chunk-9/file-0.parquet",
+      "meta/episodes/chunk-4/file-7.txt",
+      "meta/episodes/chunk-x/file-0.parquet",
+    ]) {
+      const absolutePath = path.join(datasetRoot, file);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, "");
+    }
+  });
+
+  afterAll(async () => {
+    await fs.rm(datasetRoot, { recursive: true, force: true });
+  });
+
+  it("enumerates only existing parquet shards in numeric order", async () => {
+    expect(await listV3EpisodeMetadataFiles(datasetRoot)).toEqual([
+      "meta/episodes/chunk-4/file-2.parquet",
+      "meta/episodes/chunk-4/file-12.parquet",
+      "meta/episodes/chunk-9/file-0.parquet",
+    ]);
+  });
+
+  it("returns an empty list when the metadata tree is missing", async () => {
+    expect(await listV3EpisodeMetadataFiles(os.tmpdir())).toEqual([]);
   });
 });

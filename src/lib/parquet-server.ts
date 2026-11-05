@@ -9,6 +9,7 @@
  */
 
 import fs from "node:fs/promises";
+import path from "node:path";
 import {
   asyncBufferFromFile,
   parquetMetadataAsync,
@@ -22,10 +23,13 @@ import {
 import { resolveInsideDataset } from "@/lib/local-dataset-paths";
 import {
   buildV3DataPath,
-  buildV3EpisodesMetadataPath,
   formatEpisodeChunk,
   formatEpisodeIndex,
 } from "@/utils/stringFormatting";
+import {
+  matchesFixedV3EpisodeMetadataProbing,
+  sortV3EpisodeMetadataShards,
+} from "@/utils/v3ShardPaths";
 import { formatStringWithVars } from "@/utils/parquetUtils";
 import { bigIntToNumber } from "@/utils/typeGuards";
 import { toJsonSafe } from "@/utils/parquetBrowser";
@@ -40,6 +44,7 @@ const MAX_CACHED_FILES = 8;
 /** Safety rails for the episode-metadata walk (v3 chunk/file directories). */
 const MAX_EPISODE_CHUNKS = 64;
 const MAX_FILES_PER_CHUNK = 4096;
+const warnedNonstandardShardRoots = new Set<string>();
 
 export interface ParquetHandle {
   file: AsyncBuffer;
@@ -278,6 +283,61 @@ async function statFileOrNull(
   }
 }
 
+/** Enumerate existing v3 metadata shards, including gaps and non-zero starts. */
+export async function listV3EpisodeMetadataFiles(
+  datasetRoot: string,
+): Promise<string[]> {
+  const episodesRoot = resolveInsideDataset(datasetRoot, "meta", "episodes");
+  if (!episodesRoot) return [];
+
+  let chunkEntries: import("node:fs").Dirent[];
+  try {
+    chunkEntries = await fs.readdir(episodesRoot, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const chunkNames = chunkEntries
+    .filter((entry) => entry.isDirectory() && /^chunk-\d+$/i.test(entry.name))
+    .map((entry) => entry.name)
+    .sort((left, right) => {
+      const leftIndex = Number(left.match(/\d+$/)?.[0] ?? -1);
+      const rightIndex = Number(right.match(/\d+$/)?.[0] ?? -1);
+      return leftIndex - rightIndex || left.localeCompare(right);
+    })
+    .slice(0, MAX_EPISODE_CHUNKS);
+
+  const paths: string[] = [];
+  for (const chunkName of chunkNames) {
+    let fileEntries: import("node:fs").Dirent[];
+    try {
+      fileEntries = await fs.readdir(path.join(episodesRoot, chunkName), {
+        withFileTypes: true,
+      });
+    } catch {
+      continue;
+    }
+
+    const fileNames = fileEntries
+      .filter(
+        (entry) => entry.isFile() && /^file-\d+\.parquet$/i.test(entry.name),
+      )
+      .map((entry) => entry.name)
+      .sort((left, right) => {
+        const leftIndex = Number(left.match(/\d+/)?.[0] ?? -1);
+        const rightIndex = Number(right.match(/\d+/)?.[0] ?? -1);
+        return leftIndex - rightIndex || left.localeCompare(right);
+      })
+      .slice(0, MAX_FILES_PER_CHUNK);
+
+    for (const fileName of fileNames) {
+      paths.push(`meta/episodes/${chunkName}/${fileName}`);
+    }
+  }
+
+  return sortV3EpisodeMetadataShards(paths);
+}
+
 const LOCATOR_COLUMNS = [
   "episode_index",
   "data/chunk_index",
@@ -378,42 +438,52 @@ export async function locateEpisodeRows(
     return locateEpisodeRowsV2(datasetRoot, episodeIndex, info);
   }
 
-  for (let chunk = 0; chunk < MAX_EPISODE_CHUNKS; chunk += 1) {
-    let sawFile = false;
-
-    for (let file = 0; file < MAX_FILES_PER_CHUNK; file += 1) {
-      const relPath = buildV3EpisodesMetadataPath(chunk, file);
-      const absolutePath = resolveInsideDataset(datasetRoot, relPath);
-      if (!absolutePath) return null;
-
-      const stat = await statFileOrNull(absolutePath);
-      if (!stat) break;
-      sawFile = true;
-
-      const handle = await openParquet(
-        absolutePath,
-        relPath,
-        stat.size,
-        stat.mtimeMs,
-      );
-      const rows = (await parquetReadObjects({
-        file: handle.file,
-        metadata: handle.metadata,
-        columns: LOCATOR_COLUMNS,
-      })) as Record<string, unknown>[];
-
-      for (const row of rows) {
-        if (bigIntToNumber(row["episode_index"], -1) !== episodeIndex) continue;
-        return {
-          episodeIndex,
-          relPath: buildDataPathFromRow(row),
-          fromIndex: bigIntToNumber(row["dataset_from_index"], 0),
-          toIndex: bigIntToNumber(row["dataset_to_index"], 0),
-        };
-      }
+  const metadataPaths = await listV3EpisodeMetadataFiles(datasetRoot);
+  if (
+    !matchesFixedV3EpisodeMetadataProbing(metadataPaths) &&
+    !warnedNonstandardShardRoots.has(datasetRoot)
+  ) {
+    warnedNonstandardShardRoots.add(datasetRoot);
+    if (warnedNonstandardShardRoots.size > 100) {
+      const oldest = warnedNonstandardShardRoots.values().next().value;
+      if (oldest) warnedNonstandardShardRoots.delete(oldest);
     }
+    const shownPaths = metadataPaths.slice(0, 8).join(", ");
+    const suffix =
+      metadataPaths.length > 8 ? ` (and ${metadataPaths.length - 8} more)` : "";
+    console.warn(
+      `[parquet] Found v3 episode metadata shards outside the fixed chunk-0/file-0 sequence for ${datasetRoot}: ${shownPaths}${suffix}`,
+    );
+  }
 
-    if (!sawFile) return null;
+  for (const relPath of metadataPaths) {
+    const absolutePath = resolveInsideDataset(datasetRoot, relPath);
+    if (!absolutePath) continue;
+
+    const stat = await statFileOrNull(absolutePath);
+    if (!stat) continue;
+
+    const handle = await openParquet(
+      absolutePath,
+      relPath,
+      stat.size,
+      stat.mtimeMs,
+    );
+    const rows = (await parquetReadObjects({
+      file: handle.file,
+      metadata: handle.metadata,
+      columns: LOCATOR_COLUMNS,
+    })) as Record<string, unknown>[];
+
+    for (const row of rows) {
+      if (bigIntToNumber(row["episode_index"], -1) !== episodeIndex) continue;
+      return {
+        episodeIndex,
+        relPath: buildDataPathFromRow(row),
+        fromIndex: bigIntToNumber(row["dataset_from_index"], 0),
+        toIndex: bigIntToNumber(row["dataset_to_index"], 0),
+      };
+    }
   }
 
   return null;
