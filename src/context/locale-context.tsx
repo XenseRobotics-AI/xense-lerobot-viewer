@@ -1,7 +1,6 @@
 "use client";
 
 import React, {
-  createContext,
   useCallback,
   useContext,
   useEffect,
@@ -17,32 +16,12 @@ import {
 import { interpolate, pluralKey, type InterpolationVars } from "@/i18n/format";
 import { richInterpolate } from "@/i18n/rich";
 import { MESSAGES, type MessageKey } from "@/i18n/messages";
-
-/** Base names of `_one` / `_other` key pairs, e.g. `"home.taskCount"`. */
-type PluralBaseOf<K> = K extends `${infer B}_one` ? B : never;
-export type PluralBase = PluralBaseOf<MessageKey>;
-
-type LocaleContextType = {
-  locale: Locale;
-  setLocale: (next: Locale) => void;
-  /** Translate one key, substituting `{name}` placeholders. */
-  t: (key: MessageKey, vars?: InterpolationVars) => string;
-  /** Translate a `_one` / `_other` pair. `count` is available as `{count}`. */
-  tp: (base: PluralBase, count: number, vars?: InterpolationVars) => string;
-  /** Like `t`, but placeholders take React nodes so inline markup survives. */
-  tRich: (
-    key: MessageKey,
-    nodes: Record<string, React.ReactNode>,
-  ) => React.ReactNode;
-  /** Like `tp`, with React nodes. */
-  tpRich: (
-    base: PluralBase,
-    count: number,
-    nodes: Record<string, React.ReactNode>,
-  ) => React.ReactNode;
-};
-
-const LocaleContext = createContext<LocaleContextType | undefined>(undefined);
+import {
+  LocaleContext,
+  type LocaleContextType,
+  type PluralBase,
+} from "./locale-context-state";
+export type { PluralBase } from "./locale-context-state";
 
 export const useLocale = () => {
   const ctx = useContext(LocaleContext);

@@ -24,6 +24,28 @@ try {
     target: "browser",
     format: "esm",
     define: { "process.env.NODE_ENV": '"development"', "process.env": "{}" },
+    plugins: [
+      {
+        name: "locale-module-reload",
+        setup(build) {
+          build.onResolve(
+            { filter: /locale-context\.tsx\?locale-reload-regression$/ },
+            () => ({
+              path: path.join(repo, "src/context/locale-context.tsx"),
+              namespace: "locale-reloaded",
+            }),
+          );
+          build.onLoad(
+            { filter: /.*/, namespace: "locale-reloaded" },
+            async (args) => ({
+              contents: await fs.readFile(args.path, "utf8"),
+              loader: "tsx",
+              resolveDir: path.dirname(args.path),
+            }),
+          );
+        },
+      },
+    ],
   });
   assert.ok(built.success, JSON.stringify(built.logs));
   const bundle = await built.outputs[0].text();

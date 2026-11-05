@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import net from "node:net";
 import assert from "node:assert/strict";
+import { MESSAGES } from "../src/i18n/messages/index.ts";
 import { spawn } from "node:child_process";
 const nodeBin = process.env.NODE_BIN || "node";
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "review-closure-http-"));
@@ -25,6 +26,8 @@ const root = path.join(dataTemp, "datasets"),
   dataset = path.join(root, "nested", "sample"),
   logDir = path.join(tmp, "logs");
 await fs.mkdir(path.join(dataset, "meta"), { recursive: true });
+await fs.mkdir(path.join(dataset, "data", "chunk-000"), { recursive: true });
+await fs.mkdir(path.join(dataset, "videos", "chunk-000"), { recursive: true });
 await fs.mkdir(path.join(root, ".xense-viewer"), { recursive: true });
 await fs.writeFile(
   path.join(dataset, "meta", "info.json"),
@@ -144,6 +147,33 @@ const payload = (reviewed, episode_index = 0) => ({
 });
 try {
   base = await start(logDir);
+  const encodedDataset = Buffer.from(dataset).toString("base64url");
+  for (const entry of ["/viewer/", "/_local/"]) {
+    for (const locale of ["en", "zh"]) {
+      const response = await fetch(base + entry + encodedDataset + "/0", {
+        headers: { Cookie: "xense-locale=" + locale },
+        signal: AbortSignal.timeout(15000),
+      });
+      const html = await response.text();
+      assert.equal(response.status, 200);
+      assert.ok(!html.includes("useLocale must be used within"));
+      assert.ok(
+        !html.includes("data-dgst="),
+        "server rendering fell back to an error",
+      );
+      assert.ok(
+        html.includes(">" + MESSAGES[locale]["loading.title"] + "</h1>") &&
+          html.includes('role="dialog"'),
+        "EpisodeViewer must render its translated first-paint loading gate",
+      );
+      assert.ok(
+        html.includes('lang="' + (locale === "zh" ? "zh-CN" : "en") + '"'),
+      );
+    }
+  }
+  checks.push(
+    "real viewer routes and rewrites render with their cookie-seeded locale provider",
+  );
   const mark = payload(true);
   let body = await put(mark);
   assert.equal(body.episodes["0"][0].stay_ms, 0);

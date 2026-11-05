@@ -9,7 +9,8 @@ import { makeLocalRepoId } from "../../src/utils/datasetRoute";
 import { reviewSaveKey } from "../../src/utils/reviewSaveQueue";
 import { REVIEW_PENDING_STORAGE_KEY } from "../../src/utils/reviewPendingOperations";
 import EpisodeReviewPanel from "../../src/components/episode-review-panel";
-import { LocaleProvider } from "../../src/context/locale-context";
+import { LocaleProvider, useLocale } from "../../src/context/locale-context";
+import { useLocale as useReloadedLocale } from "../../src/context/locale-context.tsx?locale-reload-regression";
 
 window.reviewFixtureInstance = crypto.randomUUID();
 
@@ -162,6 +163,18 @@ function ReviewHarness() {
     </>
   );
 }
+function LocaleReloadHarness() {
+  const original = useLocale();
+  const refreshed = useReloadedLocale();
+  useEffect(() => {
+    window.localeFixture = { original, refreshed };
+  });
+  return (
+    <output data-reloaded-locale={refreshed.locale}>
+      {refreshed.t("review.unchecked")}
+    </output>
+  );
+}
 function App() {
   const [scope, setScope] = useState("/fixture-a");
   useEffect(() => {
@@ -169,6 +182,7 @@ function App() {
   }, []);
   return (
     <>
+      <LocaleReloadHarness />
       <StayHarness />
       <EpisodeReviewsProvider
         repoId={makeLocalRepoId(scope)}
@@ -225,6 +239,31 @@ window.runReviewLifecycleTests = async () => {
   await until(
     () => window.reviewFixture?.loaded && window.stayFixture,
     "provider load",
+  );
+  await until(
+    () => window.localeFixture,
+    "original and refreshed locale consumers",
+  );
+  window.localeFixture.original.setLocale("zh");
+  await until(
+    () => window.localeFixture.refreshed.locale === "zh",
+    "locale change across reloaded consumers",
+  );
+  ensure(
+    document.querySelector("[data-reloaded-locale]").textContent === "未检查",
+    "refreshed consumer did not translate",
+  );
+  ensure(
+    document.documentElement.lang === "zh-CN",
+    "document locale did not follow provider",
+  );
+  window.localeFixture.refreshed.setLocale("en");
+  await until(
+    () => window.localeFixture.original.locale === "en",
+    "locale change from reloaded hook",
+  );
+  checks.push(
+    "original and refreshed locale modules share live language changes",
   );
   ensure(
     JSON.parse(sessionStorage.getItem(timerKey)).stay_ms === 4000,

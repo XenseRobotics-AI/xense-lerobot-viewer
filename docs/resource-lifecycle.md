@@ -14,6 +14,25 @@ media source removal, or a lost diagnostic/review result.
 | HTTP connection actually closes                                                    | Detach the response                                                           | This is a transport event; the server cannot infer user intent from the error name |
 | Diagnostic deadline expires                                                        | Finish the response with a timeout error                                      | Abort that job with TimeoutError; do not classify it as a user cancellation        |
 
+## Locale context and viewer errors
+
+The root layout seeds LocaleProvider from the validated locale cookie. Context
+identity lives in locale-context-state.ts, separately from the provider, hooks
+and translation dictionaries. Re-evaluating the provider/hooks module must keep
+existing consumers and providers connected. Context values remain per provider;
+there is no process-wide locale state or fallback that hides missing providers.
+
+The active /viewer/[encodedPath]/[episode] route owns its error boundary, including
+requests rewritten from /\_local. Importing EpisodeViewer from a different route
+directory does not inherit that directory's boundary.
+
+Unit and browser regressions load a second copy of the actual provider/hooks
+module, verify translation and language changes across both copies, and retain
+the missing-provider error. Production checks render the real viewer route and
+rewrite with both supported locale cookies. These checks cover module identity
+and route integration; they do not establish the cause of an unobserved remote
+deployment failure or replace restarting a service after updating its build.
+
 ## Resource ownership
 
 - File responses (200 and 206): one response owns one filesystem stream. Attach
