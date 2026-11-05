@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
-import fs from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { statDatasetFile } from "@/lib/local-dataset-paths";
 
 export const runtime = "nodejs";
@@ -74,8 +75,10 @@ export async function GET(
   const rangeHeader = req.headers.get("range");
   if (!rangeHeader) {
     const headers = buildCommonHeaders(file.absolutePath, file.size);
-    const buffer = await fs.readFile(file.absolutePath);
-    return new Response(buffer, { status: 200, headers });
+    return new Response(fileStream(file.absolutePath), {
+      status: 200,
+      headers,
+    });
   }
 
   const range = normalizeRange(rangeHeader, file.size);
@@ -88,20 +91,35 @@ export async function GET(
     });
   }
 
-  const handle = await fs.open(file.absolutePath, "r");
-  const body = new Uint8Array(range.end - range.start + 1);
-  await handle.read(body, 0, body.byteLength, range.start);
-  await handle.close();
-  const headers = buildCommonHeaders(file.absolutePath, body.byteLength);
+  const headers = buildCommonHeaders(
+    file.absolutePath,
+    range.end - range.start + 1,
+  );
   headers.set(
     "content-range",
     `bytes ${range.start}-${range.end}/${file.size}`,
   );
 
-  return new Response(body, {
+  return new Response(fileStream(file.absolutePath, range), {
     status: 206,
     headers,
   });
+}
+
+/**
+ * The file (or an inclusive byte range of it) as a web stream, read in chunks as the client consumes it — never
+ * buffered whole. A whole-file request (no Range) or an explicit large range used to be read entirely into memory:
+ * a 57 MB episode mp4 × 8 cameras per episode. When the client goes away the stream is cancelled, which destroys
+ * the file stream and closes the descriptor.
+ */
+function fileStream(
+  absolutePath: string,
+  range?: { start: number; end: number },
+): ReadableStream {
+  // node's web ReadableStream and the DOM one are the same object at runtime; the cast bridges the two type copies
+  return Readable.toWeb(
+    createReadStream(absolutePath, range),
+  ) as unknown as ReadableStream;
 }
 
 export async function HEAD(
