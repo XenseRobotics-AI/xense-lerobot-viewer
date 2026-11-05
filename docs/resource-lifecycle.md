@@ -225,20 +225,31 @@ helper waiting on the server's stdin pipe. The kernel releases its lease when th
 server exits or crashes; no heartbeat or time-based lock stealing is used. Never
 unlink this persistent file: its presence alone does not mean it is locked.
 
-While holding that lease, a new writer also acquires the original .lock directory
-so old-version viewers remain mutually exclusive with new writers. New-owned
-directories contain a protocol, native inode identity and unique owner token. Only
-an orphan carrying this recognized protocol can be recovered automatically, after
-acquiring the same native lease. Device numbers are not compared across NFS clients.
-Owner JSON is fully staged outside the compatibility directory and published with
-an exclusive hard link; a failed write or publication cannot expose partial owner
-metadata. Commit checks verify the native inode and owner token/protocol/inode.
+While holding that lease, a new writer publishes the original .lock name as a
+relative symbolic link to a unique sibling directory containing complete owner
+metadata. Directory and owner permissions are set before publication, independently
+of process umask. The exclusive link operation never replaces an existing legacy
+directory. The link contains a protocol, native inode identity and unique owner
+token indirectly through its owner.json. Only an orphan carrying this recognized
+protocol can be recovered automatically, after acquiring the same native lease.
+Device numbers are not compared across NFS clients. Release removes the link in
+one atomic operation before cleaning its owner directory; a crash before or after
+publication/removal leaves either no lock name or a complete, recoverable marker.
+A lost publication acknowledgement retains the marker instead of deleting its
+owner. A recognized v1 orphan is atomically renamed away before cleanup, so its
+upgrade cannot strand an empty directory either. Unreferenced staging/retired
+directories may remain after a crash; they do not block saves and are not swept
+automatically. Commit checks verify the native inode and owner token/protocol/inode.
 These checks detect observed ownership changes; they cannot fence noncooperating
 writers or guarantee behavior through a network partition. Waiting on legacy locks
 uses a monotonic clock, so a wall clock adjustment cannot extend the deadline.
 Empty or unknown legacy locks are never stolen, regardless of age. Their writers
-may be running on another machine. A tiny crash window between directory creation
-and owner-record creation is conservatively treated as an unknown legacy lock too.
+may be running on another machine. Empty locks left by pre-v2 publication or
+cleanup still require operator recovery. Symlinks pointing outside the expected
+relative owner directory, malformed owners and mismatched inode identities are
+rejected without deleting their targets. The filesystem must support symbolic
+links. Upgrade all writing servers: v1 viewers reject a v2 link while it is held
+and cannot recover a v2 orphan, although their mkdir still excludes the v2 writer.
 Reads, exports, navigation and playback do not acquire this write lease.
 
 For a genuinely abandoned empty legacy lock, first pause saves on **all old-version

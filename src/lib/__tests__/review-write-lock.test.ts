@@ -14,6 +14,7 @@ let target: string;
 const children: ChildProcess[] = [];
 beforeEach(async () => {
   directory = await fs.mkdtemp(path.join(os.tmpdir(), "viewer-review-lock-"));
+  await fs.chmod(directory, 0o2775);
   target = path.join(directory, "episode-reviews.json");
 });
 afterEach(async () => {
@@ -91,8 +92,8 @@ test("unknown old locks are never stolen based on age", async () => {
   expect(await fs.readdir(target + ".lock")).toEqual([]);
 });
 
-test("owner publication failures remove only the new empty lock and allow recovery", async () => {
-  const publishing = spyOn(fs, "link").mockRejectedValue(
+test("owner publication failures leave no compatibility lock and allow recovery", async () => {
+  const publishing = spyOn(fs, "symlink").mockRejectedValue(
     Object.assign(new Error("Injected owner publication failure"), {
       code: "ENOSPC",
     }),
@@ -151,21 +152,17 @@ test("legacy lock timeouts do not depend on wall clock movement", async () => {
   }
 });
 
-test("partial staged owner writes cannot strand a nonempty compatibility lock", async () => {
-  const open = fs.open.bind(fs);
-  const opening = spyOn(fs, "open").mockImplementation(
-    async (...args: Parameters<typeof fs.open>) => {
-      const handle = await open(...args);
+test("partial staged owner writes cannot publish an incomplete compatibility lock", async () => {
+  const write = fs.writeFile.bind(fs);
+  const writing = spyOn(fs, "writeFile").mockImplementation(
+    async (...args: Parameters<typeof fs.writeFile>) => {
       if (String(args[0]).includes(".lock.owner-")) {
-        const write = handle.writeFile.bind(handle);
-        handle.writeFile = async () => {
-          await write("{partial");
-          throw Object.assign(new Error("Injected full disk"), {
-            code: "ENOSPC",
-          });
-        };
+        await write(args[0], "{partial");
+        throw Object.assign(new Error("Injected full disk"), {
+          code: "ENOSPC",
+        });
       }
-      return handle;
+      return write(...args);
     },
   );
   try {
@@ -173,7 +170,7 @@ test("partial staged owner writes cannot strand a nonempty compatibility lock", 
       code: "ENOSPC",
     });
   } finally {
-    opening.mockRestore();
+    writing.mockRestore();
   }
   expect(await fs.exists(target + ".lock")).toBe(false);
   expect(
@@ -182,17 +179,22 @@ test("partial staged owner writes cannot strand a nonempty compatibility lock", 
 });
 
 test("owner publication never overwrites or removes an unexpected existing owner", async () => {
-  const publishing = spyOn(fs, "link").mockImplementation(
+  const publishing = spyOn(fs, "symlink").mockImplementation(
     async (_source, destination) => {
-      await fs.writeFile(destination, "foreign owner", { flag: "wx" });
+      await fs.mkdir(destination);
+      await fs.writeFile(
+        path.join(String(destination), "owner.json"),
+        "foreign owner",
+        { flag: "wx" },
+      );
       throw Object.assign(new Error("Injected competing owner"), {
         code: "EEXIST",
       });
     },
   );
   try {
-    await expect(acquireReviewWriteLock(target)).rejects.toMatchObject({
-      code: "EEXIST",
+    await expect(acquireReviewWriteLock(target, 30)).rejects.toMatchObject({
+      code: "REVIEW_LEGACY_LOCK",
     });
   } finally {
     publishing.mockRestore();
@@ -206,15 +208,15 @@ test("owner publication never overwrites or removes an unexpected existing owner
 });
 
 test("a killed Node writer releases the native lease and its known orphan is recovered", async () => {
-  const input = await fs.readFile(
-    new URL("../review-write-lock.ts", import.meta.url),
-    "utf8",
-  );
+  const bundle = await Bun.build({
+    entrypoints: [new URL("../review-write-lock.ts", import.meta.url).pathname],
+    target: "node",
+    format: "esm",
+    write: false,
+  });
+  expect(bundle.success).toBe(true);
   const helper = path.join(directory, "lock.mjs");
-  await fs.writeFile(
-    helper,
-    new Bun.Transpiler({ loader: "ts" }).transformSync(input),
-  );
+  await fs.writeFile(helper, await bundle.outputs[0].text());
   const child = spawn(
     "node",
     [
@@ -261,6 +263,209 @@ test("symlinked lock directories are rejected without touching their targets", a
   });
   expect(await fs.readdir(other)).toEqual([]);
 });
+
+test("a lost publication acknowledgement preserves a complete recoverable owner", async () => {
+  const symlink = fs.symlink.bind(fs);
+  const publishing = spyOn(fs, "symlink").mockImplementation(
+    async (...args: Parameters<typeof fs.symlink>) => {
+      await symlink(...args);
+      throw Object.assign(new Error("Lost publication acknowledgement"), {
+        code: "EIO",
+      });
+    },
+  );
+  try {
+    await expect(acquireReviewWriteLock(target)).rejects.toMatchObject({
+      code: "EIO",
+    });
+  } finally {
+    publishing.mockRestore();
+  }
+  expect((await fs.lstat(target + ".lock")).isSymbolicLink()).toBe(true);
+  expect(
+    JSON.parse(
+      await fs.readFile(path.join(target + ".lock", "owner.json"), "utf8"),
+    ).protocol,
+  ).toBe("xense-review-flock-v2");
+  const next = await acquireReviewWriteLock(target);
+  await next.assertHeld();
+  await next.release();
+  expect(await fs.readdir(directory)).toEqual([
+    "episode-reviews.json.write-lock",
+  ]);
+});
+
+test("a failed v1 orphan cleanup cannot leave an empty compatibility directory", async () => {
+  await fs.writeFile(target + ".write-lock", "");
+  const ino = (
+    await fs.stat(target + ".write-lock", { bigint: true })
+  ).ino.toString();
+  await fs.mkdir(target + ".lock");
+  await fs.writeFile(
+    path.join(target + ".lock", "owner.json"),
+    JSON.stringify({
+      protocol: "xense-review-flock-v1",
+      ino,
+      token: crypto.randomUUID(),
+    }),
+  );
+  const unlink = fs.unlink.bind(fs);
+  const cleaning = spyOn(fs, "unlink").mockImplementation(async (p) => {
+    if (String(p).includes(".lock.retired-"))
+      throw Object.assign(new Error("Injected cleanup failure"), {
+        code: "EIO",
+      });
+    return unlink(p);
+  });
+  try {
+    await expect(acquireReviewWriteLock(target)).rejects.toMatchObject({
+      code: "EIO",
+    });
+  } finally {
+    cleaning.mockRestore();
+  }
+  expect(await fs.exists(target + ".lock")).toBe(false);
+  const next = await acquireReviewWriteLock(target);
+  await next.release();
+});
+
+test("a foreign atomic owner is preserved even when its path looks valid", async () => {
+  const token = crypto.randomUUID();
+  const other = target + ".lock.owner-" + token;
+  await fs.mkdir(other);
+  const raw = JSON.stringify({
+    protocol: "xense-review-flock-v2",
+    ino: "foreign-inode",
+    token,
+  });
+  await fs.writeFile(path.join(other, "owner.json"), raw);
+  await fs.symlink(path.basename(other), target + ".lock");
+  await expect(acquireReviewWriteLock(target, 30)).rejects.toMatchObject({
+    code: "REVIEW_LOCK_CHANGED",
+  });
+  expect(await fs.readFile(path.join(other, "owner.json"), "utf8")).toBe(raw);
+  expect(await fs.readlink(target + ".lock")).toBe(path.basename(other));
+});
+
+test("a replaced owner directory cannot redirect lock cleanup outside its scope", async () => {
+  const lock = await acquireReviewWriteLock(target);
+  const linkTarget = await fs.readlink(target + ".lock");
+  const stagedDirectory = path.join(directory, linkTarget);
+  const moved = stagedDirectory + ".saved";
+  const outside = path.join(directory, "outside-owner");
+  await fs.unlink(target + ".lock");
+  await fs.rename(stagedDirectory, moved);
+  await fs.mkdir(outside);
+  await fs.writeFile(path.join(outside, "owner.json"), "preserve this data");
+  await fs.symlink("outside-owner", stagedDirectory, "dir");
+  await fs.symlink(linkTarget, target + ".lock", "dir");
+  await expect(lock.assertHeld()).rejects.toMatchObject({
+    code: "REVIEW_LOCK_CHANGED",
+  });
+  await expect(lock.release()).rejects.toMatchObject({
+    code: "REVIEW_LOCK_CHANGED",
+  });
+  expect(await fs.readFile(path.join(outside, "owner.json"), "utf8")).toBe(
+    "preserve this data",
+  );
+  expect(await fs.readlink(target + ".lock")).toBe(linkTarget);
+});
+
+test("restrictive process umasks cannot make published owners unreadable to other servers", async () => {
+  const previous = process.umask(0o077);
+  let lock: Awaited<ReturnType<typeof acquireReviewWriteLock>> | undefined;
+  try {
+    lock = await acquireReviewWriteLock(target);
+    expect((await fs.stat(target + ".write-lock")).mode & 0o777).toBe(0o664);
+    expect((await fs.stat(target + ".lock")).mode & 0o777).toBe(0o775);
+    expect(
+      (await fs.stat(path.join(target + ".lock", "owner.json"))).mode & 0o777,
+    ).toBe(0o664);
+    const link = await fs.readlink(target + ".lock");
+    expect(path.isAbsolute(link)).toBe(false);
+    await lock.assertHeld();
+  } finally {
+    process.umask(previous);
+    await lock?.release();
+  }
+});
+
+test.each(["before_publish", "after_publish", "before_unlink", "after_unlink"])(
+  "a killed Node process at %s never strands an unknown empty lock",
+  async (boundary) => {
+    const bundle = await Bun.build({
+      entrypoints: [
+        new URL("../review-write-lock.ts", import.meta.url).pathname,
+      ],
+      target: "node",
+      format: "esm",
+      write: false,
+    });
+    expect(bundle.success).toBe(true);
+    const helper = path.join(directory, "crash-lock.mjs");
+    await fs.writeFile(helper, await bundle.outputs[0].text());
+    const source = [
+      'import fs from "node:fs/promises";',
+      "import {acquireReviewWriteLock} from " +
+        JSON.stringify(pathToFileURL(helper).href) +
+        ";",
+      "const [target, boundary] = process.argv.slice(1);",
+      'const pause = () => { console.log("boundary"); return new Promise(() => {}); };',
+      "const symlink = fs.symlink.bind(fs);",
+      'fs.symlink = async (...args) => { if(boundary === "before_publish") await pause(); await symlink(...args); if(boundary === "after_publish") await pause(); };',
+      "const unlink = fs.unlink.bind(fs);",
+      'fs.unlink = async (...args) => { if(String(args[0]) === target + ".lock" && boundary === "before_unlink") await pause(); await unlink(...args); if(String(args[0]) === target + ".lock" && boundary === "after_unlink") await pause(); };',
+      "const lock = await acquireReviewWriteLock(target); await lock.release();",
+    ].join(String.fromCharCode(10));
+    const child = spawn(
+      "node",
+      ["--input-type=module", "-e", source, target, boundary],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    children.push(child);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stderr = "";
+    child.stderr!.on("data", (chunk) => {
+      stderr = (stderr + chunk).slice(-4096);
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Crash boundary not reached: " + stderr)),
+          5000,
+        );
+        child.stdout!.once("data", () => resolve());
+        child.once("error", reject);
+        child.once("exit", (code) =>
+          reject(new Error("Writer exited: " + code + " " + stderr)),
+        );
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    const marker = await fs.lstat(target + ".lock").catch(() => undefined);
+    if (boundary === "before_publish" || boundary === "after_unlink")
+      expect(marker).toBeUndefined();
+    else {
+      expect(marker?.isSymbolicLink()).toBe(true);
+      expect(
+        JSON.parse(
+          await fs.readFile(path.join(target + ".lock", "owner.json"), "utf8"),
+        ).protocol,
+      ).toBe("xense-review-flock-v2");
+    }
+    const closed = new Promise((resolve) => child.once("close", resolve));
+    child.kill("SIGKILL");
+    await closed;
+    const replacement = await acquireReviewWriteLock(target, 1000);
+    try {
+      await replacement.assertHeld();
+    } finally {
+      await replacement.release();
+    }
+    expect(await fs.exists(target + ".lock")).toBe(false);
+  },
+);
 
 test("operator recovery backs up bytes and preserves unfinished writes", async () => {
   await fs.writeFile(target, "original records\n");

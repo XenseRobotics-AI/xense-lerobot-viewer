@@ -1,9 +1,11 @@
+import { reviewTimestamp as calendarTimestamp } from "@/utils/reviewTime";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
 const PROTOCOL = "xense-review-flock-v1";
+const ATOMIC_PROTOCOL = "xense-review-flock-v2";
 const OWNER = "owner.json";
 
 export class ReviewWriteLockError extends Error {
@@ -18,14 +20,18 @@ export class ReviewWriteLockError extends Error {
 
 /** Persistent inode: never unlink this file, even when no process holds it. */
 async function nativeLease(file: string, timeoutMs: number) {
+  let fixMode = true;
   try {
     const stat = await fs.lstat(file);
     if (!stat.isFile() || stat.isSymbolicLink())
       throw new ReviewWriteLockError("Invalid system review lock file", 400);
+    fixMode = (stat.mode & 0o777) !== 0o664;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   const handle = await fs.open(file, "a", 0o664);
+  // A cooperating server may have a stricter umask and a different UID.
+  if (fixMode) await handle.chmod(0o664);
   const identity = await handle.stat({ bigint: true });
   await handle.close();
   // --no-fork leaves one tiny shell waiting on stdin. Parent exit closes the
@@ -134,23 +140,138 @@ async function nativeLease(file: string, timeoutMs: number) {
   };
 }
 
-/** Keep mkdir compatibility while old viewer instances still share the file. */
+/** Publish a complete owned directory atomically; mkdir alone has a crash gap. */
 export async function acquireReviewWriteLock(
   target: string,
   timeoutMs = 10_000,
 ) {
-  const file = target + ".write-lock";
-  const native = await nativeLease(file, timeoutMs);
+  const native = await nativeLease(target + ".write-lock", timeoutMs);
   const directory = target + ".lock";
-  const ownerPath = path.join(directory, OWNER);
   const token = randomUUID();
+  const stagedDirectory = directory + ".owner-" + token;
+  const stagedOwner = path.join(stagedDirectory, OWNER);
+  const linkTarget = path.basename(stagedDirectory);
   const deadline = performance.now() + timeoutMs;
+  let staged = false;
+  let published = false;
+  let stagedIdentity: { ino: bigint; dev: bigint } | undefined;
+
+  async function readOwner(ownerPath: string) {
+    try {
+      const stat = await fs.lstat(ownerPath);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096)
+        return undefined;
+      return JSON.parse(await fs.readFile(ownerPath, "utf8"));
+    } catch (error) {
+      if (
+        error instanceof SyntaxError ||
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      )
+        return undefined;
+      throw error;
+    }
+  }
+
+  async function ownedLink() {
+    try {
+      const stat = await fs.lstat(directory);
+      if (
+        !stat.isSymbolicLink() ||
+        (await fs.readlink(directory)) !== linkTarget
+      )
+        return false;
+      const ownerDirectory = await fs.lstat(stagedDirectory, { bigint: true });
+      if (
+        !ownerDirectory.isDirectory() ||
+        ownerDirectory.isSymbolicLink() ||
+        ownerDirectory.ino !== stagedIdentity?.ino ||
+        ownerDirectory.dev !== stagedIdentity.dev
+      )
+        return false;
+      const owner = await readOwner(stagedOwner);
+      return (
+        owner?.protocol === ATOMIC_PROTOCOL &&
+        owner.ino === native.ino &&
+        owner.token === token
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
+  async function removeStaged(strict = true) {
+    if (!staged) return;
+    const directoryStat = await fs.lstat(stagedDirectory, { bigint: true });
+    if (
+      !directoryStat.isDirectory() ||
+      directoryStat.isSymbolicLink() ||
+      directoryStat.ino !== stagedIdentity?.ino ||
+      directoryStat.dev !== stagedIdentity.dev
+    )
+      throw new ReviewWriteLockError(
+        "Review owner directory changed; recovery is required",
+        503,
+        "REVIEW_LOCK_CHANGED",
+      );
+    const ownerStat = await fs
+      .lstat(stagedOwner)
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
+    if (ownerStat) {
+      const owner = await readOwner(stagedOwner);
+      if (
+        !ownerStat.isFile() ||
+        ownerStat.isSymbolicLink() ||
+        owner?.protocol !== ATOMIC_PROTOCOL ||
+        owner.token !== token ||
+        owner.ino !== native.ino
+      ) {
+        if (!strict) {
+          await fs.unlink(stagedOwner);
+          await fs.rmdir(stagedDirectory);
+          staged = false;
+          return;
+        }
+        throw new ReviewWriteLockError(
+          "Review owner changed; recovery is required",
+          503,
+          "REVIEW_LOCK_CHANGED",
+        );
+      }
+      await fs.unlink(stagedOwner);
+    }
+    await fs.rmdir(stagedDirectory);
+    staged = false;
+  }
+
   try {
     await native.verifyHeld();
+    await fs.mkdir(stagedDirectory, { mode: 0o775 });
+    staged = true;
+    const stagedStat = await fs.lstat(stagedDirectory, { bigint: true });
+    stagedIdentity = { ino: stagedStat.ino, dev: stagedStat.dev };
+    await fs.writeFile(
+      stagedOwner,
+      JSON.stringify({
+        protocol: ATOMIC_PROTOCOL,
+        ino: native.ino,
+        token,
+      }),
+      { flag: "wx", mode: 0o664 },
+    );
+    // Cooperating servers may use different UIDs/umasks on the shared mount.
+    await fs.chmod(stagedOwner, 0o664);
+    await fs.chmod(stagedDirectory, 0o2775);
     while (true) {
-      native.assertHeld();
+      await native.verifyHeld();
       try {
-        await fs.mkdir(directory);
+        // Relative targets stay valid when another host mounts the same share
+        // at a different absolute path. EEXIST never replaces a legacy owner.
+        await fs.symlink(linkTarget, directory, "dir");
+        published = true;
         break;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
@@ -162,26 +283,63 @@ export async function acquireReviewWriteLock(
         if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
         throw error;
       }
-      if (!stat.isDirectory() || stat.isSymbolicLink())
-        throw new ReviewWriteLockError(
-          "Review lock must be a real directory",
-          400,
-        );
-      let owner;
-      try {
-        owner = JSON.parse(await fs.readFile(ownerPath, "utf8"));
-      } catch (error) {
+      if (stat.isSymbolicLink()) {
+        const previousTarget = await fs.readlink(directory);
+        const prefix = path.basename(directory) + ".owner-";
+        const previousToken = previousTarget.slice(prefix.length);
         if (
-          !(error instanceof SyntaxError) &&
-          (error as NodeJS.ErrnoException).code !== "ENOENT"
+          !previousTarget.startsWith(prefix) ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+            previousToken,
+          )
         )
-          throw error;
+          throw new ReviewWriteLockError("Unrecognized review lock link", 400);
+        const previousDirectory = path.join(
+          path.dirname(directory),
+          previousTarget,
+        );
+        const previousStat = await fs
+          .lstat(previousDirectory)
+          .catch(() => undefined);
+        const previousOwner = path.join(previousDirectory, OWNER);
+        const owner =
+          previousStat?.isDirectory() && !previousStat.isSymbolicLink()
+            ? await readOwner(previousOwner)
+            : undefined;
+        if (
+          owner?.protocol !== ATOMIC_PROTOCOL ||
+          owner.ino !== native.ino ||
+          owner.token !== previousToken
+        )
+          throw new ReviewWriteLockError(
+            "Review lock ownership cannot be proven; recovery is required",
+            503,
+            "REVIEW_LOCK_CHANGED",
+          );
+        await native.verifyHeld();
+        // Remove the compatibility name first, in one atomic operation.
+        // A crash during owner cleanup leaves only an unreferenced directory.
+        await fs.unlink(directory);
+        await fs.unlink(previousOwner);
+        await fs.rmdir(previousDirectory);
+        continue;
       }
-      // Holding this same kernel inode proves the prior new-protocol writer
-      // is gone. An empty/unknown old lock has no such proof: never steal it.
-      if (owner?.protocol === PROTOCOL && owner.ino === native.ino) {
-        await fs.unlink(ownerPath);
-        await fs.rmdir(directory);
+      if (!stat.isDirectory())
+        throw new ReviewWriteLockError("Invalid review lock entry", 400);
+      const ownerPath = path.join(directory, OWNER);
+      const owner = await readOwner(ownerPath);
+      if (
+        owner?.protocol === PROTOCOL &&
+        owner.ino === native.ino &&
+        (await fs.readdir(directory)).every((name) => name === OWNER)
+      ) {
+        // Upgrade a proven v1 orphan by retiring the whole directory atomically.
+        // Unlinking owner.json first would recreate the empty-directory gap.
+        const retired = directory + ".retired-" + randomUUID();
+        await native.verifyHeld();
+        await fs.rename(directory, retired);
+        await fs.unlink(path.join(retired, OWNER));
+        await fs.rmdir(retired);
         continue;
       }
       if (performance.now() >= deadline)
@@ -192,28 +350,14 @@ export async function acquireReviewWriteLock(
         );
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    const stagedOwner = directory + ".owner-" + token;
-    let staged = false;
-    try {
-      const handle = await fs.open(stagedOwner, "wx");
-      staged = true;
-      try {
-        await handle.writeFile(
-          JSON.stringify({ protocol: PROTOCOL, ino: native.ino, token }),
-        );
-      } finally {
-        await handle.close();
-      }
-      // Exclusive hard-link publication never exposes partial owner JSON and
-      // cannot overwrite an unexpected owner in the compatibility directory.
-      await fs.link(stagedOwner, ownerPath);
-    } catch (error) {
-      await fs.rmdir(directory).catch(() => undefined);
-      throw error;
-    } finally {
-      if (staged) await fs.rm(stagedOwner, { force: true });
-    }
   } catch (error) {
+    // A failed exclusive publication must never remove someone else's lock.
+    // If publication succeeded but its acknowledgement was lost, retain the
+    // complete marker; the next lease holder can recover it safely.
+    if (!published) {
+      const own = await ownedLink().catch(() => undefined);
+      if (own === false) await removeStaged(false).catch(() => undefined);
+    }
     await native.release();
     throw error;
   }
@@ -221,15 +365,7 @@ export async function acquireReviewWriteLock(
   return {
     async assertHeld() {
       await native.verifyHeld();
-      const owner = await fs
-        .readFile(ownerPath, "utf8")
-        .then((raw) => JSON.parse(raw))
-        .catch(() => undefined);
-      if (
-        owner?.token !== token ||
-        owner.protocol !== PROTOCOL ||
-        owner.ino !== native.ino
-      )
+      if (!(await ownedLink()))
         throw new ReviewWriteLockError(
           "Review lock ownership changed; stop writers and investigate before retrying",
           503,
@@ -241,15 +377,14 @@ export async function acquireReviewWriteLock(
       if (released) return;
       released = true;
       try {
-        const owner = JSON.parse(await fs.readFile(ownerPath, "utf8"));
-        if (owner.token !== token)
+        if (!(await ownedLink()))
           throw new ReviewWriteLockError(
             "Review lock ownership changed; recovery is required",
             503,
             "REVIEW_LOCK_CHANGED",
           );
-        await fs.unlink(ownerPath);
-        await fs.rmdir(directory);
+        await fs.unlink(directory);
+        await removeStaged();
       } finally {
         await native.release();
       }
@@ -275,10 +410,9 @@ export async function recoverLegacyReviewLock(
         "Recovery only accepts an empty legacy lock directory; no files were removed",
         409,
       );
-    const stamp = new Date(Date.now() + 8 * 3600_000)
-      .toISOString()
+    const stamp = calendarTimestamp()
       .replace(/[:.]/g, "-")
-      .replace("Z", "+0800");
+      .replace("+08-00", "+0800");
     const original = await fs
       .lstat(target)
       .catch((error: NodeJS.ErrnoException) => {
