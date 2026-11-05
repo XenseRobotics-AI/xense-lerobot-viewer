@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import ChunkErrorReload from "@/components/chunk-error-reload";
 import { LocaleProvider } from "@/context/locale-context";
@@ -10,7 +10,15 @@ import { MESSAGES } from "@/i18n/messages";
 // Exposed as a CSS variable rather than a class so `globals.css` can append the
 // CJK fallbacks — Inter ships no Chinese glyphs, and without an explicit chain
 // the browser picks its default (often a serif) for every translated string.
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+// Bundled (Inter 4.001 latin, variable weight; SIL OFL, see fonts/OFL-Inter.txt)
+// instead of next/font/google: that one downloads from Google at build / dev
+// start, which hangs or fails without a proxy and on offline servers.
+const inter = localFont({
+  src: "./fonts/inter-latin.woff2",
+  variable: "--font-inter",
+  weight: "100 900",
+  display: "swap",
+});
 
 export async function generateMetadata(): Promise<Metadata> {
   const messages = MESSAGES[await getServerLocale()];
