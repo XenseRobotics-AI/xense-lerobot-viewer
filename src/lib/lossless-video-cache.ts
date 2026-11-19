@@ -332,7 +332,11 @@ async function encode(
         "-y",
         partial,
       ];
-      if (color && !color.fullRange && info.pix_fmt === "yuvj420p") {
+      if (
+        color &&
+        !color.fullRange &&
+        (info.pix_fmt === "yuvj420p" || info.color_range === "pc")
+      ) {
         // Reinterpret the same YUV samples with the original browser's range.
         // Full-to-full scaling keeps every sample unchanged; only tags change.
         args.splice(args.indexOf("-pix_fmt") + 1, 1, "yuv420p");
@@ -487,7 +491,7 @@ export async function getLosslessPlaybackFile(
   const hash = createHash("sha256")
     .update(
       JSON.stringify([
-        "lossless-h264-v4-episode-clock",
+        "lossless-h264-v5-full-range-metadata",
         source.absolutePath,
         source.size,
         source.mtimeMs,
