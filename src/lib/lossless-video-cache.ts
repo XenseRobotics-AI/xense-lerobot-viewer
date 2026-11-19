@@ -332,20 +332,19 @@ async function encode(
         "-y",
         partial,
       ];
-      if (
-        color &&
-        !color.fullRange &&
-        (info.pix_fmt === "yuvj420p" || info.color_range === "pc")
-      ) {
-        // Reinterpret the same YUV samples with the original browser's range.
-        // Full-to-full scaling keeps every sample unchanged; only tags change.
-        args.splice(args.indexOf("-pix_fmt") + 1, 1, "yuv420p");
-        args.splice(
-          args.length - 2,
-          0,
-          "-vf",
-          "scale=in_range=full:out_range=full,format=yuv420p,setparams=range=limited",
-        );
+      if (color) {
+        // FFmpeg 8 can convert samples to match encoder colour options. Set
+        // matching AVFrame metadata first so the options only change tags.
+        let filter = "";
+        if (
+          !color.fullRange &&
+          (info.pix_fmt === "yuvj420p" || info.color_range === "pc")
+        ) {
+          args.splice(args.indexOf("-pix_fmt") + 1, 1, "yuv420p");
+          filter = "scale=in_range=full:out_range=full,format=yuv420p,";
+        }
+        filter += `setparams=range=${color.fullRange ? "full" : "limited"}:colorspace=${color.matrix}:color_primaries=${color.primaries}:color_trc=${color.transfer}`;
+        args.splice(args.length - 2, 0, "-vf", filter);
       }
       if (color)
         args.splice(
@@ -491,7 +490,7 @@ export async function getLosslessPlaybackFile(
   const hash = createHash("sha256")
     .update(
       JSON.stringify([
-        "lossless-h264-v5-full-range-metadata",
+        "lossless-h264-v6-frame-colour-metadata",
         source.absolutePath,
         source.size,
         source.mtimeMs,

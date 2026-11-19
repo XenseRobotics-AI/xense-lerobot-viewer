@@ -186,40 +186,46 @@ describe.skipIf(!available)("lossless playback cache", () => {
     expect((await fs.stat(a.file.absolutePath)).size).toBeGreaterThan(0);
   });
   test("matching browser display colour changes only colour metadata, not decoded samples", async () => {
-    const result = await getLosslessPlaybackFile(
-      await input(),
-      {
-        from: 0,
-        to: 1,
-        color: {
-          matrix: "bt709",
-          primaries: "bt709",
-          transfer: "bt709",
-          fullRange: false,
-        },
-      },
-      new AbortController().signal,
-      cache,
-    );
-    expect(frameHashes(result.file.absolutePath)).toEqual(frameHashes(source));
-    const metadata = JSON.parse(
-      command([
-        "ffprobe",
-        "-v",
-        "error",
-        "-show_entries",
-        "stream=color_range,color_space,color_transfer,color_primaries",
-        "-of",
-        "json",
-        result.file.absolutePath,
-      ]),
-    ).streams[0];
-    expect(metadata).toMatchObject({
-      color_range: "tv",
-      color_space: "bt709",
-      color_transfer: "bt709",
-      color_primaries: "bt709",
-    });
+    for (const fullRange of [false, true]) {
+      for (const matrix of ["bt709", "smpte170m"] as const) {
+        const result = await getLosslessPlaybackFile(
+          await input(),
+          {
+            from: 0,
+            to: 1,
+            color: {
+              matrix,
+              primaries: matrix,
+              transfer: matrix,
+              fullRange,
+            },
+          },
+          new AbortController().signal,
+          cache,
+        );
+        expect(frameHashes(result.file.absolutePath)).toEqual(
+          frameHashes(source),
+        );
+        const metadata = JSON.parse(
+          command([
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=color_range,color_space,color_transfer,color_primaries",
+            "-of",
+            "json",
+            result.file.absolutePath,
+          ]),
+        ).streams[0];
+        expect(metadata).toMatchObject({
+          color_range: fullRange ? "pc" : "tv",
+          color_space: matrix,
+          color_transfer: matrix,
+          color_primaries: matrix,
+        });
+      }
+    }
   });
   test("cancelling one client leaves the other client's preparation running", async () => {
     const file = await input();
