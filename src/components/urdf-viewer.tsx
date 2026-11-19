@@ -20,6 +20,7 @@ import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import type { EpisodeData } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import UrdfPlaybackBar from "@/components/urdf-playback-bar";
+import { ReplayPlaybackDriver } from "@/components/replay-playback-driver";
 import UrdfValueReadout from "@/components/urdf-value-readout";
 import UrdfVideoOverlay from "@/components/urdf-video-overlay";
 import { useLocale } from "@/context/locale-context";
@@ -767,7 +768,7 @@ function TacCapGripperModel({
   frame: TacCapGripperFrame | null;
   profile: BundledGripperProfile;
   side: TacCapSide;
-  /** See `PlaybackDriver`: between-row time while playing, else null. */
+  /** See `ReplayPlaybackDriver`: between-row time while playing, else null. */
   smoothTimeRef: React.MutableRefObject<number | null>;
   tcpFrameConvention: TcpFrameConvention;
   track: TacCapGripperTrack | null;
@@ -2057,80 +2058,6 @@ function RobotScene({
   return null;
 }
 
-// ─── Playback ticker ───
-function PlaybackDriver({
-  playing,
-  rowsPerSecond,
-  replayRevision,
-  totalFrames,
-  frameRef,
-  setFrame,
-  smoothTimeRef,
-  timeAtRow,
-}: {
-  playing: boolean;
-  /** Chart rows to advance per second — see `rowsPerSecond` in URDFViewer. */
-  rowsPerSecond: number;
-  replayRevision: number;
-  totalFrames: number;
-  frameRef: React.MutableRefObject<number>;
-  setFrame: React.Dispatch<React.SetStateAction<number>>;
-  /**
-   * Episode time between two rows, refreshed every display frame while
-   * playing (null when paused). `frame` only steps at the row rate — 30 Hz
-   * for a 30 fps dataset — and the models used to snap to each row, which on
-   * a 60–144 Hz screen reads as stutter however light the scene is. The
-   * models sample their pose from this in R3F's loop instead, so motion is
-   * continuous without re-rendering React at the display rate.
-   */
-  smoothTimeRef: React.MutableRefObject<number | null>;
-  timeAtRow: (row: number) => number;
-}) {
-  const elapsed = useRef(0);
-  const last = useRef(0);
-  useEffect(() => {
-    if (!playing) return;
-    let raf: number;
-    const tick = () => {
-      raf = requestAnimationFrame(tick);
-      const now = performance.now();
-      const dt = (now - last.current) / 1000;
-      last.current = now;
-      if (dt > 0 && dt < 0.5) {
-        elapsed.current += dt;
-        const fd = Math.floor(elapsed.current * rowsPerSecond);
-        if (fd > 0) {
-          elapsed.current -= fd / rowsPerSecond;
-          frameRef.current = (frameRef.current + fd) % totalFrames;
-          setFrame(frameRef.current);
-        }
-        const row = frameRef.current;
-        const t0 = timeAtRow(row);
-        const t1 = row + 1 < totalFrames ? timeAtRow(row + 1) : t0;
-        const alpha = Math.min(Math.max(elapsed.current * rowsPerSecond, 0), 1);
-        smoothTimeRef.current = t0 + (t1 - t0) * alpha;
-      }
-    };
-    last.current = performance.now();
-    elapsed.current = 0;
-    raf = requestAnimationFrame(tick);
-    return () => {
-      cancelAnimationFrame(raf);
-      smoothTimeRef.current = null;
-    };
-  }, [
-    playing,
-    rowsPerSecond,
-    replayRevision,
-    totalFrames,
-    frameRef,
-    setFrame,
-    smoothTimeRef,
-    timeAtRow,
-  ]);
-  return null;
-}
-
 // ═══════════════════════════════════════
 // ─── Main URDF Viewer ───
 // ═══════════════════════════════════════
@@ -2704,7 +2631,7 @@ export default function URDFViewer({
               isBundledGripper ? [0, 0, 0] : isG1 ? [0, 0.5, 0] : [0, 0.8, 0]
             }
           />
-          <PlaybackDriver
+          <ReplayPlaybackDriver
             playing={playing}
             rowsPerSecond={rowsPerSecond}
             replayRevision={replayRevision}
@@ -2716,6 +2643,8 @@ export default function URDFViewer({
           />
         </Canvas>
         <UrdfVideoOverlay
+          datasetKey={datasetInfo.repoId}
+          episodeId={selectedEpisode}
           active={active}
           episodeTimeSeconds={replayTimeSeconds}
           playing={playing}

@@ -314,6 +314,18 @@ export const zh: Record<MessageKey, string> = {
   "player.minimize": "还原",
   "player.hide": "隐藏该视频",
   "player.noVideoTag": "你的浏览器不支持 video 标签。",
+  "player.decodingVideoFrame": "正在解码画面",
+  "player.loadingVideoFrame": "正在读取视频",
+  "player.smoothPlayback": "流畅播放（原画质）",
+  "player.originalPlayback": "原始播放",
+  "player.compatibilityActive": "流畅模式已启用",
+  "player.compatibilityPreparing": "取消准备（{done}/{total}）",
+  "player.compatibilityHelp":
+    "为当前 Episode 准备无损播放副本。首次准备需要等待及磁盘缓存；原视频、画质和 3D 设置保持不变。",
+  "player.compatibilityError": "准备失败，可重试",
+  "player.compatibilityUnavailable": "当前视频无需转换或格式不适用",
+  "player.videoFrameError": "画面加载失败",
+  "player.retryVideo": "重试加载画面",
 
   // ── loading ─────────────────────────────────────────────────────────────
   "loading.title": "加载中",

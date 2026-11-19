@@ -12,15 +12,21 @@ import type { VideoInfo } from "@/types";
  */
 
 /** Where this episode starts on the media clock (0 for a whole-file video). */
-function segmentStartOf(video: VideoInfo): number {
-  return video.isSegmented ? Math.max(0, video.segmentStart ?? 0) : 0;
+export function videoSegmentStart(video: VideoInfo): number {
+  if (!video.isSegmented) return 0;
+  return Number.isFinite(video.segmentStart)
+    ? Math.max(0, video.segmentStart as number)
+    : 0;
 }
 
 /** Where it ends, or `undefined` when the file runs to its natural end. */
-function segmentEndOf(video: VideoInfo): number | undefined {
+export function videoSegmentEnd(video: VideoInfo): number | undefined {
   if (!video.isSegmented) return undefined;
   const end = video.segmentEnd;
-  return end !== undefined && Number.isFinite(end) ? end : undefined;
+  const start = videoSegmentStart(video);
+  return end !== undefined && Number.isFinite(end) && end > start
+    ? end
+    : undefined;
 }
 
 /** Convert episode-local replay time to time in the underlying MP4 shard. */
@@ -31,9 +37,9 @@ export function mediaTimeFromEpisodeTime(
   const localTime = Number.isFinite(episodeTimeSeconds)
     ? Math.max(0, episodeTimeSeconds)
     : 0;
-  const segmentStart = segmentStartOf(video);
+  const segmentStart = videoSegmentStart(video);
   const target = segmentStart + localTime;
-  const segmentEnd = segmentEndOf(video);
+  const segmentEnd = videoSegmentEnd(video);
 
   if (segmentEnd === undefined) return target;
   // Staying a millisecond inside the segment avoids the browser briefly
@@ -55,8 +61,8 @@ export function episodeTimeFromMediaTime(
   mediaTimeSeconds: number,
 ): number {
   if (!Number.isFinite(mediaTimeSeconds)) return 0;
-  const segmentStart = segmentStartOf(video);
-  const segmentEnd = segmentEndOf(video);
+  const segmentStart = videoSegmentStart(video);
+  const segmentEnd = videoSegmentEnd(video);
   const localTime = Math.max(0, mediaTimeSeconds - segmentStart);
 
   if (segmentEnd === undefined) return localTime;
