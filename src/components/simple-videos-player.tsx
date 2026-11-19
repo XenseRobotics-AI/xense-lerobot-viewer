@@ -4,6 +4,8 @@ import React, { useEffect, useRef } from "react";
 import { useTimeControls, useTimeState } from "../context/time-context";
 import { FaExpand, FaCompress, FaTimes, FaEye } from "react-icons/fa";
 import type { VideoInfo } from "@/types";
+import { FirstFrameVideo } from "./first-frame-video";
+import { seekVideoWithFrameGate } from "@/utils/videoFramePresentation";
 import {
   createCoalescedSeeker,
   type CoalescedSeeker,
@@ -11,8 +13,14 @@ import {
 import {
   episodeTimeFromMediaTime,
   mediaTimeFromEpisodeTime,
+  videoSegmentEnd,
+  videoSegmentStart,
 } from "@/utils/videoSegments";
+import { useDocumentVisible } from "@/hooks/use-document-visible";
 import { useT } from "@/context/locale-context";
+import { normalizeHiddenVideoNames } from "@/utils/videoVisibility";
+import { useVideoCompatibility } from "@/hooks/use-video-compatibility";
+import { VideoCompatibilityControl } from "./video-compatibility-control";
 
 const THRESHOLDS = {
   VIDEO_SYNC_TOLERANCE: 0.2,
@@ -22,6 +30,7 @@ const THRESHOLDS = {
 const VIDEO_READY_TIMEOUT_MS = 10_000;
 
 type VideoPlayerProps = {
+  datasetKey?: string;
   videosInfo: VideoInfo[];
   /**
    * The episode currently being requested. This is separate from
@@ -35,20 +44,43 @@ type VideoPlayerProps = {
    * next episode's metadata/data slice is being resolved. */
   loading?: boolean;
   onVideosReady?: () => void;
+  onVisibleVideoFrameReady?: (ready: boolean) => void;
 };
 
 const videoEventCleanup = new WeakMap<HTMLVideoElement, () => void>();
 
+function invalidatePlayAttempt(attempt: { current: number }): void {
+  attempt.current++;
+}
+
 export const SimpleVideosPlayer = ({
-  videosInfo,
+  datasetKey = "episode",
+  videosInfo: originalVideosInfo,
   episodeId,
   loading = false,
   onVideosReady,
+  onVisibleVideoFrameReady,
 }: VideoPlayerProps) => {
   const t = useT();
-  const { seek, setIsPlaying } = useTimeControls();
+  const visible = useDocumentVisible();
+  const compatibility = useVideoCompatibility(
+    originalVideosInfo,
+    `${datasetKey}:${episodeId}`,
+    visible && !loading,
+  );
+  const videosInfo = compatibility.videos;
+  const { seek, setIsPlaying, playingIntentRef } = useTimeControls();
   const { currentTime, externalSeekVersion, isPlaying } = useTimeState();
   const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
+  // Keep display props stable while the primary camera reports its clock.
+  // Source/episode transitions still read the latest per-camera media time.
+  const videoTargetRefs = useRef<{ current: number }[]>([]);
+  videosInfo.forEach((info, index) => {
+    const target = mediaTimeFromEpisodeTime(info, currentTime);
+    if (videoTargetRefs.current[index])
+      videoTargetRefs.current[index].current = target;
+    else videoTargetRefs.current[index] = { current: target };
+  });
   // One coalescing seeker per element (see utils/coalescedSeek): external
   // seeks never interrupt a seek that is still decoding.
   const seekersRef = useRef<Map<HTMLVideoElement, CoalescedSeeker>>(new Map());
@@ -59,15 +91,93 @@ export const SimpleVideosPlayer = ({
   while (videoRefCallbacksRef.current.length < videosInfo.length) {
     const idx = videoRefCallbacksRef.current.length;
     videoRefCallbacksRef.current.push((el: HTMLVideoElement | null) => {
+      const previous = videoRefs.current[idx];
+      if (previous && previous !== el) {
+        previous.pause();
+        // React Strict Mode can reattach the same node immediately. Only
+        // release the stream after it really left this player's ref slot.
+        queueMicrotask(() => {
+          if (videoRefs.current[idx] === previous) return;
+          try {
+            previous.removeAttribute("src");
+            previous.load();
+          } catch {
+            // A browser may reject a load reset while the node is being
+            // detached. The node is already unreachable from this player.
+          }
+        });
+      }
       videoRefs.current[idx] = el;
     });
   }
   const [hiddenVideos, setHiddenVideos] = React.useState<string[]>([]);
   const [enlargedVideo, setEnlargedVideo] = React.useState<string | null>(null);
+  const enlargedPanelRef = useRef<HTMLDivElement | null>(null);
+  const enlargedControlRef = useRef<HTMLButtonElement | null>(null);
   const [showHiddenMenu, setShowHiddenMenu] = React.useState(false);
   const [videosReady, setVideosReady] = React.useState(false);
+  const wasPlayingWhenHiddenRef = useRef(false);
+  const playAttemptRef = useRef(0);
 
-  const hiddenSet = React.useMemo(() => new Set(hiddenVideos), [hiddenVideos]);
+  useEffect(() => {
+    if (!enlargedVideo) return;
+    const previousOverflow = document.body.style.overflow;
+    const previousFocus =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    document.body.style.overflow = "hidden";
+    enlargedControlRef.current?.focus({ preventScroll: true });
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setEnlargedVideo(null);
+      } else if (event.key === "Tab") {
+        const buttons =
+          enlargedPanelRef.current?.querySelectorAll<HTMLButtonElement>(
+            "button:not(:disabled)",
+          );
+        const first = buttons?.[0];
+        const last = buttons?.[buttons.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      if (previousFocus?.isConnected)
+        previousFocus.focus({ preventScroll: true });
+    };
+  }, [enlargedVideo]);
+
+  const videoNames = React.useMemo(
+    () => videosInfo.map((video) => video.filename),
+    [videosInfo],
+  );
+  const hiddenSet = React.useMemo(
+    () => new Set(normalizeHiddenVideoNames(videoNames, hiddenVideos)),
+    [videoNames, hiddenVideos],
+  );
+
+  useEffect(() => {
+    setHiddenVideos((previous) => {
+      const normalized = normalizeHiddenVideoNames(videoNames, previous);
+      return normalized.length === previous.length &&
+        normalized.every((name, index) => name === previous[index])
+        ? previous
+        : normalized;
+    });
+    setEnlargedVideo((previous) =>
+      previous && videoNames.includes(previous) ? previous : null,
+    );
+  }, [videoNames]);
 
   const firstVisibleIdx = videosInfo.findIndex(
     (video) => !hiddenSet.has(video.filename),
@@ -101,17 +211,45 @@ export const SimpleVideosPlayer = ({
   useEffect(() => {
     onVideosReadyRef.current = onVideosReady;
   }, [onVideosReady]);
+  const onVisibleVideoFrameReadyRef = useRef(onVisibleVideoFrameReady);
+  useEffect(() => {
+    onVisibleVideoFrameReadyRef.current = onVisibleVideoFrameReady;
+  }, [onVisibleVideoFrameReady]);
+
+  useEffect(() => {
+    const video =
+      firstVisibleIdx >= 0 ? videoRefs.current[firstVisibleIdx] : null;
+    const info = firstVisibleIdx >= 0 ? videosInfo[firstVisibleIdx] : null;
+    const targetTime = info ? mediaTimeFromEpisodeTime(info, 0) : 0;
+    const ready =
+      !loading &&
+      !!video &&
+      !!info &&
+      !video.seeking &&
+      video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+      (!info.isSegmented ||
+        Math.abs(video.currentTime - targetTime) <=
+          THRESHOLDS.VIDEO_SEGMENT_BOUNDARY);
+    onVisibleVideoFrameReadyRef.current?.(ready);
+  }, [episodeId, firstVisibleIdx, loading, videosInfo]);
+
+  useEffect(() => {
+    if (!visible) {
+      wasPlayingWhenHiddenRef.current = isPlaying;
+      videoRefs.current.forEach((video) => video?.pause());
+      return;
+    }
+    if (wasPlayingWhenHiddenRef.current) setIsPlaying(true);
+    wasPlayingWhenHiddenRef.current = false;
+  }, [visible, isPlaying, setIsPlaying]);
 
   // Initialize video refs array
   useEffect(() => {
     videoRefs.current = videoRefs.current.slice(0, videosInfo.length);
   }, [videosInfo.length]);
 
-  // Stop the previous episode as soon as selection changes. The parent keeps
-  // the previous data around while the next parquet slice is being decoded;
-  // without this effect that old media can keep playing underneath the
-  // loading overlay. Do not change the source here — retaining the element
-  // for a shared v3 MP4 is what lets the browser reuse its buffer.
+  // Stop previous playback while the next parquet slice is resolving; the
+  // frame presenter changes sources only after the new episode commits.
   React.useLayoutEffect(() => {
     if (!loading) return;
     // The parent intentionally keeps the previous EpisodeData visible while
@@ -137,12 +275,13 @@ export const SimpleVideosPlayer = ({
         return;
       }
       video.pause();
-      video.currentTime = mediaTimeFromEpisodeTime(info, 0);
+      seekVideoWithFrameGate(video, mediaTimeFromEpisodeTime(info, 0));
     });
   }, [episodeId, loading, videosInfo]);
 
-  // Handle videos ready — with a timeout fallback so the UI never hangs
-  // if a video fails to reach canplaythrough (e.g. network stall).
+  // Handle videos ready after each stream has a decoded frame. Waiting for
+  // canplaythrough made the first click appear to refresh the page because
+  // playback was held until the browser estimated the entire file was ready.
   useEffect(() => {
     let cancelled = false;
     if (loading) {
@@ -159,7 +298,6 @@ export const SimpleVideosPlayer = ({
       resolved = true;
       setVideosReady(true);
       onVideosReadyRef.current?.();
-      setIsPlaying(true);
     };
 
     const checkReady = () => {
@@ -178,12 +316,15 @@ export const SimpleVideosPlayer = ({
     // played fresh frames while the others still showed the segment-end
     // frame. Now the gap is microseconds.
     const loopAllVideos = () => {
-      if (cancelled) return;
+      // A timeupdate can race the React pause update at a segment boundary.
+      // Never turn that final playback tick into an explicit seek: doing so
+      // invalidates the decoded frame exactly as the user pauses.
+      if (cancelled || !playingIntentRef.current) return;
       videoRefs.current.forEach((other, otherIdx) => {
         if (!other) return;
         const otherInfo = videosInfo[otherIdx];
         if (!otherInfo) return;
-        other.currentTime = otherInfo.segmentStart ?? 0;
+        seekVideoWithFrameGate(other, videoSegmentStart(otherInfo));
       });
       // Update the slider as a status report — don't bump externalSeekVersion
       // since we already drove every video to its target.
@@ -204,19 +345,20 @@ export const SimpleVideosPlayer = ({
       // (b) reporting the primary video's currentTime back to the context
       const handleTimeUpdate = () => {
         if (info.isSegmented) {
-          const segmentEnd = info.segmentEnd ?? video.duration;
-          const segmentStart = info.segmentStart ?? 0;
+          const segmentEnd = videoSegmentEnd(info) ?? video.duration;
+          const segmentStart = videoSegmentStart(info);
           if (
             video.currentTime >=
             segmentEnd - THRESHOLDS.VIDEO_SEGMENT_BOUNDARY
           ) {
+            if (!playingIntentRef.current) return;
             // Primary drives the coordinated loop. Non-primary cameras
             // that race ahead just snap to segmentStart and wait — the
             // primary's next loop will re-align everyone.
             if (index === firstVisibleIdxRef.current) {
               loopAllVideos();
             } else {
-              video.currentTime = segmentStart;
+              seekVideoWithFrameGate(video, segmentStart);
             }
             return;
           }
@@ -235,13 +377,14 @@ export const SimpleVideosPlayer = ({
       // — covers the case where the user paused outside the segment range.
       const handlePlay = info.isSegmented
         ? () => {
-            const segmentStart = info.segmentStart ?? 0;
-            const segmentEnd = info.segmentEnd ?? video.duration;
+            if (!playingIntentRef.current) return;
+            const segmentStart = videoSegmentStart(info);
+            const segmentEnd = videoSegmentEnd(info) ?? video.duration;
             if (
               video.currentTime < segmentStart ||
               video.currentTime >= segmentEnd
             ) {
-              video.currentTime = segmentStart;
+              seekVideoWithFrameGate(video, segmentStart);
             }
           }
         : null;
@@ -250,6 +393,8 @@ export const SimpleVideosPlayer = ({
       const markVideoReady = () => {
         if (cancelled || countedAsReady) return;
         countedAsReady = true;
+        if (index === firstVisibleIdxRef.current)
+          onVisibleVideoFrameReadyRef.current?.(true);
         checkReady();
       };
 
@@ -270,7 +415,7 @@ export const SimpleVideosPlayer = ({
                 video.readyState >= HTMLMediaElement.HAVE_METADATA &&
                 !video.seeking
               ) {
-                video.currentTime = targetTime;
+                seekVideoWithFrameGate(video, targetTime);
               }
               return;
             }
@@ -287,15 +432,22 @@ export const SimpleVideosPlayer = ({
       const handleEnded = info.isSegmented
         ? null
         : () => {
+            if (!playingIntentRef.current) return;
             // Same coordinated loop strategy for non-segmented videos at
             // their natural end — primary drives, others wait for primary
             // to align them.
             if (index === firstVisibleIdxRef.current) {
               loopAllVideos();
             } else {
-              video.currentTime = 0;
+              seekVideoWithFrameGate(video, 0);
             }
           };
+      const handlePlayable = !info.isSegmented
+        ? () => {
+            if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA)
+              markVideoReady();
+          }
+        : null;
 
       video.addEventListener("timeupdate", handleTimeUpdate);
       if (handlePlay) video.addEventListener("play", handlePlay);
@@ -317,14 +469,14 @@ export const SimpleVideosPlayer = ({
           Math.abs(video.currentTime - targetTime) >
             THRESHOLDS.VIDEO_SEGMENT_BOUNDARY
         ) {
-          video.currentTime = targetTime;
+          seekVideoWithFrameGate(video, targetTime);
         }
         queueMicrotask(handleSegmentReady);
       } else if (!info.isSegmented) {
-        if (video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
-          queueMicrotask(checkReady);
-        } else {
-          video.addEventListener("canplaythrough", checkReady, { once: true });
+        video.addEventListener("loadeddata", handlePlayable!);
+        video.addEventListener("canplay", handlePlayable!);
+        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+          queueMicrotask(handlePlayable!);
         }
       }
 
@@ -337,7 +489,10 @@ export const SimpleVideosPlayer = ({
           video.removeEventListener("seeked", handleSegmentReady);
         }
         if (handleEnded) video.removeEventListener("ended", handleEnded);
-        video.removeEventListener("canplaythrough", checkReady);
+        if (handlePlayable) {
+          video.removeEventListener("loadeddata", handlePlayable);
+          video.removeEventListener("canplay", handlePlayable);
+        }
       });
     });
 
@@ -350,7 +505,8 @@ export const SimpleVideosPlayer = ({
         const cleanup = videoEventCleanup.get(video);
         if (cleanup) {
           cleanup();
-          videoEventCleanup.delete(video);
+          if (videoEventCleanup.get(video) === cleanup)
+            videoEventCleanup.delete(video);
         }
       });
     };
@@ -359,25 +515,53 @@ export const SimpleVideosPlayer = ({
     // firstVisibleIdxRef above).
     // onVideosReady intentionally omitted — read via onVideosReadyRef so
     // an inline parent prop doesn't tear this effect down on every render.
-  }, [loading, videosInfo, setIsPlaying, seek]);
+  }, [loading, videosInfo, setIsPlaying, seek, playingIntentRef]);
 
   // Handle play/pause — skip hidden videos
   useEffect(() => {
-    if (!videosReady) return;
+    const attempt = ++playAttemptRef.current;
+    if (!videosReady)
+      return () => {
+        invalidatePlayAttempt(playAttemptRef);
+      };
 
     videoRefs.current.forEach((video, idx) => {
       if (!video || hiddenSet.has(videosInfo[idx].filename)) return;
-      if (isPlaying) {
-        video.play().catch((e) => {
-          if (e.name !== "AbortError") {
-            console.error("Error playing video");
-          }
+      if (isPlaying && visible) {
+        void video.play().catch((error: unknown) => {
+          if (
+            error &&
+            typeof error === "object" &&
+            "name" in error &&
+            error.name === "AbortError"
+          )
+            return;
+          if (
+            playAttemptRef.current !== attempt ||
+            !playingIntentRef.current ||
+            document.hidden
+          )
+            return;
+          // Keep the global control truthful when a browser rejects playback
+          // (codec, policy, or a stream that failed between ready and play).
+          setIsPlaying(false);
         });
       } else {
         video.pause();
       }
     });
-  }, [isPlaying, videosReady, hiddenSet, videosInfo]);
+    return () => {
+      invalidatePlayAttempt(playAttemptRef);
+    };
+  }, [
+    isPlaying,
+    videosReady,
+    hiddenSet,
+    videosInfo,
+    visible,
+    setIsPlaying,
+    playingIntentRef,
+  ]);
 
   // Drive every video to currentTime on external seeks (slider drag, chart
   // click, loop reset). The version-based check replaces a 0.3s heuristic
@@ -402,7 +586,11 @@ export const SimpleVideosPlayer = ({
       // tiles froze. Coalesce: one seek in flight per element, newest wins.
       let seeker = seekersRef.current.get(video);
       if (!seeker) {
-        seeker = createCoalescedSeeker(video, THRESHOLDS.VIDEO_SYNC_TOLERANCE);
+        seeker = createCoalescedSeeker(
+          video,
+          THRESHOLDS.VIDEO_SYNC_TOLERANCE,
+          (target) => seekVideoWithFrameGate(video, target),
+        );
         seekersRef.current.set(video, seeker);
       }
       seeker.request(targetTime);
@@ -429,13 +617,12 @@ export const SimpleVideosPlayer = ({
   }, []);
 
   // The page shell becomes interactive as soon as the episode data commits.
-  // Keep only the media tiles covered until their requested segment has
-  // actually decoded, so a retained <video> can never flash the previous
-  // episode's frame while the rest of the page already shows the new one.
-  const mediaPending = loading || !videosReady;
-
   return (
     <>
+      <VideoCompatibilityControl
+        state={compatibility}
+        className="mb-3 justify-end"
+      />
       {/* Hidden videos menu */}
       {hiddenVideos.length > 0 && (
         <div className="relative mb-4">
@@ -472,39 +659,52 @@ export const SimpleVideosPlayer = ({
       {/* Videos */}
       <div className="flex flex-wrap gap-x-2 gap-y-6">
         {videosInfo.map((info, idx) => {
-          if (hiddenVideos.includes(info.filename)) return null;
+          if (hiddenSet.has(info.filename)) return null;
 
           const isEnlarged = enlargedVideo === info.filename;
 
           return (
             <div
-              // Camera names stay the same across episodes. Use the actual
-              // media URL as the identity: v3 episodes commonly share one
-              // MP4 and only change segmentStart/segmentEnd, so that element
-              // can be retained and seeked without another media load. When
-              // the URL changes (for example a v2 episode or a new v3 file),
-              // React replaces the tile and cannot retain the old resource.
-              key={`${info.filename}:${info.url}`}
+              key={info.filename}
+              ref={isEnlarged ? enlargedPanelRef : undefined}
+              role={isEnlarged ? "dialog" : undefined}
+              aria-modal={isEnlarged ? true : undefined}
+              aria-label={isEnlarged ? info.filename : undefined}
               className={`${
                 isEnlarged
-                  ? "z-40 fixed inset-0 bg-black bg-opacity-90 flex flex-col items-center justify-center"
+                  ? "z-[60] fixed inset-0 flex flex-col bg-black/95 p-4"
                   : "max-w-96"
               }`}
             >
-              <p className="truncate w-full rounded-t-md bg-[var(--surface-1)] border border-b-0 border-white/5 px-2.5 py-1 text-[11px] text-slate-400 flex items-center justify-between gap-2">
+              <p className="truncate w-full shrink-0 rounded-t-md bg-[var(--surface-1)] border border-b-0 border-white/5 px-2.5 py-1 text-[11px] text-slate-400 flex items-center justify-between gap-2">
                 <span className="truncate">{info.filename}</span>
                 <span className="flex gap-0.5 shrink-0">
                   <button
+                    ref={isEnlarged ? enlargedControlRef : undefined}
+                    type="button"
+                    aria-label={
+                      isEnlarged ? t("player.minimize") : t("player.enlarge")
+                    }
                     title={
                       isEnlarged ? t("player.minimize") : t("player.enlarge")
                     }
-                    className="p-1 rounded text-slate-500 hover:text-slate-200 hover:bg-white/5 transition-colors"
+                    className={
+                      isEnlarged
+                        ? "inline-flex items-center gap-2 rounded-md border border-white/15 px-3 py-2 text-sm text-slate-100 hover:bg-white/10"
+                        : "p-1 rounded text-slate-500 hover:text-slate-200 hover:bg-white/5 transition-colors"
+                    }
                     onClick={() =>
                       setEnlargedVideo(isEnlarged ? null : info.filename)
                     }
                   >
                     {isEnlarged ? (
-                      <FaCompress size={10} />
+                      <>
+                        <FaCompress size={14} />
+                        {t("player.minimize")}
+                        <kbd className="rounded border border-white/15 px-1 text-xs text-slate-400">
+                          Esc
+                        </kbd>
+                      </>
                     ) : (
                       <FaExpand size={10} />
                     )}
@@ -523,36 +723,25 @@ export const SimpleVideosPlayer = ({
                       }
                     }}
                     disabled={
-                      videosInfo.filter(
-                        (v) => !hiddenVideos.includes(v.filename),
-                      ).length === 1
+                      videosInfo.filter((v) => !hiddenSet.has(v.filename))
+                        .length === 1
                     }
                   >
                     <FaTimes size={10} />
                   </button>
                 </span>
               </p>
-              <div className="relative w-full">
-                <video
-                  ref={videoRefCallbacksRef.current[idx]}
-                  className={`w-full object-contain ${
-                    isEnlarged ? "max-h-[90vh] max-w-[90vw]" : ""
-                  }`}
-                  muted
-                  preload="metadata"
-                  src={info.url}
-                  aria-busy={mediaPending}
-                >
-                  {t("player.noVideoTag")}
-                </video>
-                {mediaPending && (
-                  <div
-                    className="absolute inset-0 z-20 flex items-center justify-center bg-[var(--surface-0)]"
-                    aria-hidden="true"
-                  >
-                    <span className="size-6 animate-spin rounded-full border-2 border-slate-700 border-t-cyan-300" />
-                  </div>
-                )}
+              <div
+                className={`relative w-full ${isEnlarged ? "min-h-0 flex-1" : ""}`}
+              >
+                <FirstFrameVideo
+                  frameKey={`${datasetKey}:${episodeId ?? "episode"}`}
+                  onVideoElement={videoRefCallbacksRef.current[idx]}
+                  video={info}
+                  targetSeconds={videoTargetRefs.current[idx]}
+                  suspended={loading}
+                  expanded={isEnlarged}
+                />
               </div>
             </div>
           );

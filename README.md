@@ -280,3 +280,33 @@ docker run -p 7860:7860 \
 This project is forked from the LeRobot dataset visualizer originally created by [@Mishig25](https://github.com/mishig25) (huggingface/lerobot PR [#1055](https://github.com/huggingface/lerobot/pull/1055)).
 
 The Doctor checks are a TypeScript port of the diagnostic concepts from [`lerobot-doctor`](https://github.com/jashshah999/lerobot-doctor) by Jash Shah (Apache-2.0); no Python package or subprocess is used by this integration.
+
+## Video startup and Intel compatibility playback
+
+Episode and 3D Replay video players serve eligible MP4s with their index first,
+so each camera can decode its first frame without fetching the file's tail.
+This is a streamed playback representation: original files, encoded frames,
+timestamps and file downloads remain unchanged. Initial playback reads start at
+256 KB; sequential reads retain 2 MB chunks. Unsupported layouts use the original
+file. Index caching is bounded and follows file size and modification time.
+The waiting indicator distinguishes video loading from frame preparation.
+
+For four or more local streams, **Smooth playback (original quality)** offers
+an optional compatibility mode for 8-bit 4:2:0 HEVC video up to 1080p. It prepares
+pixel-lossless H.264 copies of the current episode before switching all cameras;
+the original frames remain visible during preparation, which can be cancelled.
+Models, shadows, resolution and the 3D render loop remain unchanged. Playback
+copies use an episode-local media clock; source intervals and the user timeline
+retain their original mapping. Select **Original playback** to switch back.
+
+This optional mode requires `ffmpeg` with `libx264` and `ffprobe` on the server.
+Preparation can take several minutes and the lossless copies can be much larger
+than the original files (about 3.9 GiB for the tested 92.5-second eight-camera
+episode). Copies are stored under `~/.cache/xense-viewer/lossless-video`;
+`XENSE_VIDEO_CACHE_DIR` can select another local disk. The cache reserves space
+for in-progress encoders within 16 GiB / 128 files, retains active client leases,
+and evicts unused copies when preparing more episodes. Individual copies are
+limited to 4 GiB and 300 seconds; unsupported sources continue using the original.
+Compatible HTTP ranges follow each camera's bitrate so tactile preloads do not
+hold connections needed by the higher-bitrate wrist and head streams. Slow
+storage or network links can still limit delivery of these large copies.

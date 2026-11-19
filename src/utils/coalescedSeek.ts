@@ -32,17 +32,21 @@ export interface CoalescedSeeker {
 /**
  * `tolerance`: a request closer than this to where the element already is
  * (or is already going) is ignored, like the old `VIDEO_SYNC_TOLERANCE` check.
+ * `applySeek`: optionally route each actual seek through a frame presenter.
  */
 export function createCoalescedSeeker(
   media: SeekableMedia,
   tolerance: number,
+  applySeek: (target: number) => void = (target) => {
+    media.currentTime = target;
+  },
 ): CoalescedSeeker {
   let pending: number | null = null;
   let inFlight: number | null = null;
 
   const apply = (target: number) => {
     inFlight = target;
-    media.currentTime = target;
+    applySeek(target);
   };
 
   const onSeeked = () => {

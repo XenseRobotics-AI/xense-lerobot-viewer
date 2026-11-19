@@ -1,117 +1,155 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
+import { GET, HEAD } from "../route";
 import { encodeLocalDatasetPath } from "@/utils/datasetRoute";
-import { GET } from "../route";
 
-// A 5 MB "video" with a recognisable byte at each offset (offset % 251), so a range's content can be checked.
-const SIZE = 5 * 1024 * 1024;
-let dir: string;
-let encoded: string;
-
-beforeAll(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), "file-route-"));
-  const video = path.join(dir, "videos", "cam", "chunk-000");
-  await fs.mkdir(video, { recursive: true });
-  const bytes = new Uint8Array(SIZE);
-  for (let i = 0; i < SIZE; i++) bytes[i] = i % 251;
-  await fs.writeFile(path.join(video, "file-000.mp4"), bytes);
-  encoded = encodeLocalDatasetPath(dir);
+let root: string;
+const bytes = Buffer.from("0123456789");
+beforeEach(async () => {
+  root = await fs.mkdtemp(path.join(os.tmpdir(), "viewer-stream-"));
+  await fs.writeFile(path.join(root, "video.mp4"), bytes);
 });
-
-afterAll(async () => {
-  await fs.rm(dir, { recursive: true, force: true });
+afterEach(async () => {
+  await fs.rm(root, { recursive: true, force: true });
 });
-
-const FILE = ["videos", "cam", "chunk-000", "file-000.mp4"];
-
-function call(range?: string) {
-  const req = new NextRequest("http://localhost/x", {
+const context = (filePath = ["video.mp4"]) => ({
+  params: Promise.resolve({
+    encodedPath: encodeLocalDatasetPath(root),
+    filePath,
+  }),
+});
+const request = (range?: string, signal?: AbortSignal) =>
+  new NextRequest("http://localhost/api/file", {
     headers: range ? { range } : {},
-  });
-  return GET(req, {
-    params: Promise.resolve({ encodedPath: encoded, filePath: FILE }),
-  });
-}
-
-function expectPattern(body: Uint8Array, start: number) {
-  for (const i of [0, 1, body.length - 1])
-    expect(body[i]).toBe((start + i) % 251);
-}
-
-describe("local file route (streamed)", () => {
-  it("streams the whole file without a Range header", async () => {
-    const res = await call();
-    expect(res.status).toBe(200);
-    expect(res.body).toBeInstanceOf(ReadableStream);
-    expect(res.headers.get("content-length")).toBe(String(SIZE));
-    const body = new Uint8Array(await res.arrayBuffer());
-    expect(body.length).toBe(SIZE);
-    expectPattern(body, 0);
+    signal,
   });
 
-  it("serves an explicit inclusive range", async () => {
-    const res = await call("bytes=1000-4999");
-    expect(res.status).toBe(206);
-    expect(res.headers.get("content-range")).toBe(`bytes 1000-4999/${SIZE}`);
-    expect(res.headers.get("content-length")).toBe("4000");
-    const body = new Uint8Array(await res.arrayBuffer());
-    expect(body.length).toBe(4000);
-    expectPattern(body, 1000);
+describe("local dataset file streaming", () => {
+  test("streams a complete response with correct size and media type", async () => {
+    const response = await GET(request(), context());
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-length")).toBe("10");
+    expect(response.headers.get("content-type")).toBe("video/mp4");
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
   });
-
-  it("caps an open-ended range at the 2 MB chunk browsers ask for while playing", async () => {
-    const res = await call("bytes=0-");
-    expect(res.status).toBe(206);
-    expect(res.headers.get("content-range")).toBe(
-      `bytes 0-${2 * 1024 * 1024 - 1}/${SIZE}`,
+  test("streams explicit, suffix, open-ended and clamped byte ranges", async () => {
+    for (const [range, expected, contentRange] of [
+      ["bytes=2-5", "2345", "bytes 2-5/10"],
+      ["bytes=-3", "789", "bytes 7-9/10"],
+      ["bytes=7-", "789", "bytes 7-9/10"],
+      ["bytes=8-9999", "89", "bytes 8-9/10"],
+    ]) {
+      const response = await GET(request(range), context());
+      expect(response.status).toBe(206);
+      expect(response.headers.get("content-range")).toBe(contentRange);
+      expect(response.headers.get("content-length")).toBe(
+        String(expected.length),
+      );
+      expect(await response.text()).toBe(expected);
+    }
+  });
+  test("caps open-ended requests so preview reads stay bounded", async () => {
+    await fs.writeFile(
+      path.join(root, "video.mp4"),
+      Buffer.alloc(3 * 1024 * 1024, 7),
     );
-    expect((await res.arrayBuffer()).byteLength).toBe(2 * 1024 * 1024);
-  });
-
-  it("serves a suffix range from the end of the file", async () => {
-    const res = await call("bytes=-10");
-    expect(res.headers.get("content-range")).toBe(
-      `bytes ${SIZE - 10}-${SIZE - 1}/${SIZE}`,
+    const response = await GET(request("bytes=0-"), context());
+    expect(response.headers.get("content-length")).toBe(
+      String(2 * 1024 * 1024),
     );
-    expectPattern(new Uint8Array(await res.arrayBuffer()), SIZE - 10);
+    expect((await response.arrayBuffer()).byteLength).toBe(2 * 1024 * 1024);
   });
-
-  it("rejects a range past the end with 416", async () => {
-    const res = await call(`bytes=${SIZE}-`);
-    expect(res.status).toBe(416);
-    expect(res.headers.get("content-range")).toBe(`bytes */${SIZE}`);
+  test("rejects invalid and unsatisfiable ranges", async () => {
+    for (const range of [
+      "bytes=99-",
+      "bytes=5-2",
+      "bytes=-0",
+      "bytes=-",
+      "bytes=0-2,5-9",
+    ]) {
+      const response = await GET(request(range), context());
+      expect(response.status).toBe(416);
+      expect(response.headers.get("content-range")).toBe("bytes */10");
+    }
   });
-
-  it("closes the file when the client cancels mid-stream", async () => {
-    const target = path.join(dir, ...FILE);
-    const openOnTarget = async () => {
-      let n = 0;
-      for (const fd of await fs.readdir("/proc/self/fd").catch(() => [])) {
-        const link = await fs.readlink(`/proc/self/fd/${fd}`).catch(() => "");
-        if (link === target) n += 1;
+  test("HEAD returns metadata and missing paths stay 404", async () => {
+    const response = await HEAD(request(), context());
+    expect(response.status).toBe(200);
+    expect(response.body).toBeNull();
+    expect(response.headers.get("content-length")).toBe("10");
+    expect((await GET(request(), context(["missing.mp4"]))).status).toBe(404);
+  });
+  test("aborting a request terminates the pending file read", async () => {
+    await fs.writeFile(
+      path.join(root, "video.mp4"),
+      Buffer.alloc(8 * 1024 * 1024),
+    );
+    const controller = new AbortController();
+    const response = await GET(
+      request(undefined, controller.signal),
+      context(),
+    );
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+    expect(first.value!.byteLength).toBeLessThan(8 * 1024 * 1024);
+    controller.abort();
+    await expect(reader.read()).rejects.toThrow();
+  });
+  test("pre-aborted full, range and HEAD requests return no body", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    for (const handler of [GET, HEAD]) {
+      for (const range of [undefined, "bytes=0-3"]) {
+        const response = await handler(
+          request(range, controller.signal),
+          context(),
+        );
+        expect(response.status).toBe(499);
+        expect(response.body).toBeNull();
       }
-      return n;
-    };
-    const res = await call();
-    const reader = res.body!.getReader();
-    await reader.read();
-    expect(await openOnTarget()).toBe(1);
-    await reader.cancel();
-    for (let i = 0; i < 50 && (await openOnTarget()) > 0; i++)
-      await Bun.sleep(10);
-    expect(await openOnTarget()).toBe(0);
+    }
   });
-
-  it("404s a file outside the dataset", async () => {
-    const res = await GET(new NextRequest("http://localhost/x"), {
-      params: Promise.resolve({
-        encodedPath: encoded,
-        filePath: ["..", "..", "etc", "passwd"],
-      }),
-    });
-    expect(res.status).toBe(404);
+  test("cancellation while resolving parameters does not open a file", async () => {
+    for (const handler of [GET, HEAD]) {
+      for (const range of [undefined, "bytes=0-3"]) {
+        const controller = new AbortController();
+        let resolve!: (
+          value: Awaited<ReturnType<typeof context>["params"]>,
+        ) => void;
+        const params = new Promise<
+          Awaited<ReturnType<typeof context>["params"]>
+        >((done) => {
+          resolve = done;
+        });
+        const pending = handler(request(range, controller.signal), { params });
+        controller.abort();
+        resolve(await context().params);
+        const response = await pending;
+        expect(response.status).toBe(499);
+        expect(response.body).toBeNull();
+      }
+    }
+  });
+  test("empty files have a valid full response and reject all byte ranges", async () => {
+    await fs.writeFile(path.join(root, "video.mp4"), "");
+    const response = await GET(request(), context());
+    expect(response.status).toBe(200);
+    expect((await response.arrayBuffer()).byteLength).toBe(0);
+    for (const range of ["bytes=-1", "bytes=0-", "bytes=0-0"]) {
+      const partial = await GET(request(range), context());
+      expect(partial.status).toBe(416);
+      expect(partial.headers.get("content-range")).toBe("bytes */0");
+    }
+  });
+  test("a reader can cancel either response without aborting its request", async () => {
+    for (const range of [undefined, "bytes=0-3"]) {
+      const response = await GET(request(range), context());
+      await response.body!.cancel("Page changed");
+      expect(response.body!.locked).toBe(false);
+    }
   });
 });

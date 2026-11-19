@@ -13,7 +13,8 @@
     "type-check": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
     "type-check:watch": "tsc --noEmit --watch",
     "test": "bun test",
-    "validate": "bun run type-check && bun run lint && bun run format:check && bun test"
+    "validate": "bun run type-check && bun run lint && bun run format:check && bun test",
+    "test:video-playback": "bun scripts/test-video-playback.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",

@@ -12,8 +12,13 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18.19.1"
 
       - uses: oven-sh/setup-bun@v1
         with:
@@ -22,5 +27,13 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      - name: Install video test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Run tests
         run: bun test
+
+      - name: Browser playback regression
+        run: bun run test:video-playback
