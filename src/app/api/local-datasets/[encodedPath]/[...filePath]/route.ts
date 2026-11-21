@@ -2,7 +2,13 @@ import { NextRequest } from "next/server";
 import { createReadStream } from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { statDatasetFile } from "@/lib/local-dataset-paths";
+import { ensureDepthPreview } from "@/lib/depth-preview";
+import {
+  resolveDatasetRoot,
+  statDatasetFile,
+  type LocalFileStat,
+} from "@/lib/local-dataset-paths";
+import fs from "node:fs/promises";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -69,8 +75,19 @@ export async function GET(
   ctx: { params: Promise<{ encodedPath: string; filePath: string[] }> },
 ) {
   const { encodedPath, filePath } = await ctx.params;
-  const file = await statDatasetFile(encodedPath, filePath);
+  let file = await statDatasetFile(encodedPath, filePath);
   if (!file) return new Response("Not found", { status: 404 });
+
+  if (req.nextUrl.searchParams.get("preview") === "depth") {
+    try {
+      file = await depthPreviewFile(encodedPath, filePath, file);
+    } catch (error) {
+      console.error("[depth-preview]", error);
+      return new Response("Depth preview failed (is ffmpeg on PATH?)", {
+        status: 500,
+      });
+    }
+  }
 
   const rangeHeader = req.headers.get("range");
   if (!rangeHeader) {
@@ -104,6 +121,24 @@ export async function GET(
     status: 206,
     headers,
   });
+}
+
+/**
+ * Swap a depth-map mp4 for its browser-playable preview (see `depth-preview.ts`). `filePath` is
+ * `videos/<video key>/chunk-…/file-….mp4`; the key picks the stream's range out of `meta/stats.json`.
+ */
+async function depthPreviewFile(
+  encodedPath: string,
+  filePath: string[],
+  source: LocalFileStat,
+): Promise<LocalFileStat> {
+  const absolutePath = await ensureDepthPreview({
+    ...source,
+    datasetRoot: resolveDatasetRoot(encodedPath) ?? "",
+    videoKey: filePath[0] === "videos" ? (filePath[1] ?? "") : "",
+  });
+  const stat = await fs.stat(absolutePath);
+  return { absolutePath, size: Number(stat.size), mtimeMs: stat.mtimeMs };
 }
 
 /**

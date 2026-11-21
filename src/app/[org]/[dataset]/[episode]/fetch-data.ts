@@ -1371,6 +1371,18 @@ function processEpisodeDataForCharts(
   };
 }
 
+/** `video.is_depth_map` lives under `info` (LeRobot v3) or `video_info` (older writers). */
+function isDepthMapFeature(feature: unknown): boolean {
+  const record = feature as {
+    info?: Record<string, unknown>;
+    video_info?: Record<string, unknown>;
+  };
+  return (
+    record?.info?.["video.is_depth_map"] === true ||
+    record?.video_info?.["video.is_depth_map"] === true
+  );
+}
+
 // Video info extraction with segmentation for v3.0
 function extractVideoInfoV3WithSegmentation(
   repoId: string,
@@ -1383,7 +1395,7 @@ function extractVideoInfoV3WithSegmentation(
     ([, value]) => value.dtype === "video",
   );
 
-  const videosInfo = videoFeatures.map(([videoKey]) => {
+  const videosInfo = videoFeatures.map(([videoKey, feature]) => {
     // Check if we have per-camera metadata in the episode row
     const cameraSpecificKeys = Object.keys(episodeMetadata).filter((key) =>
       key.startsWith(`videos/${videoKey}/`),
@@ -1423,7 +1435,10 @@ function extractVideoInfoV3WithSegmentation(
       bigIntToNumber(chunkIndex, 0),
       bigIntToNumber(fileIndex, 0),
     );
-    const fullUrl = buildVersionedUrl(repoId, version, videoPath);
+    // Depth maps are high-bit-depth monochrome no browser decodes: ask the file route for its preview
+    const fullUrl =
+      buildVersionedUrl(repoId, version, videoPath) +
+      (isDepthMapFeature(feature) ? "?preview=depth" : "");
 
     return {
       filename: videoKey,
