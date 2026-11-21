@@ -94,7 +94,20 @@ export function isChartableNumericFeature(feature: {
 }): boolean {
   return (
     CHARTABLE_NUMERIC_DTYPES.has(feature.dtype.toLowerCase()) &&
-    feature.shape.length === 1
+    feature.shape.length === 1 &&
+    !isWideArrayFeature(feature)
+  );
+}
+
+/** A numeric feature too wide to be channels worth reading or charting — see `CHART_CONFIG.MAX_FEATURE_DIMS`. */
+export function isWideArrayFeature(feature: {
+  dtype: string;
+  shape: number[];
+}): boolean {
+  return (
+    CHARTABLE_NUMERIC_DTYPES.has(feature.dtype.toLowerCase()) &&
+    feature.shape.length === 1 &&
+    (feature.shape[0] ?? 0) > CHART_CONFIG.MAX_FEATURE_DIMS
   );
 }
 
@@ -863,8 +876,9 @@ async function getEpisodeDataV2(
   const ignoredColumns = Object.entries(info.features)
     .filter(
       ([, value]) =>
-        CHARTABLE_NUMERIC_DTYPES.has(value.dtype.toLowerCase()) &&
-        value.shape.length > 1,
+        (CHARTABLE_NUMERIC_DTYPES.has(value.dtype.toLowerCase()) &&
+          value.shape.length > 1) ||
+        isWideArrayFeature(value),
     )
     .map(([key]) => key);
 
@@ -1014,7 +1028,11 @@ async function loadEpisodeDataV3(
               "bool",
               "boolean",
             ].includes(dtype);
-            return isNumericOrBool && feature.shape.length <= 1;
+            return (
+              isNumericOrBool &&
+              feature.shape.length <= 1 &&
+              !isWideArrayFeature(feature)
+            );
           })
           .map(([key]) => key),
       ]),
@@ -1341,8 +1359,9 @@ function processEpisodeDataForCharts(
     ...Object.entries(info.features)
       .filter(
         ([, value]) =>
-          CHARTABLE_NUMERIC_DTYPES.has(value.dtype.toLowerCase()) &&
-          value.shape.length > 2, // Only ignore 3D+ data
+          (CHARTABLE_NUMERIC_DTYPES.has(value.dtype.toLowerCase()) &&
+            value.shape.length > 2) || // Only ignore 3D+ data …
+          isWideArrayFeature(value), // … and arrays too wide to be channels
       )
       .map(([key]) => key),
     ...excludedColumns, // Also include the manually excluded columns
