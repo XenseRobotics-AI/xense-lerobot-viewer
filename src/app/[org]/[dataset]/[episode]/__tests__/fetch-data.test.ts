@@ -3,6 +3,7 @@ import {
   buildEpisodeChartTimestamps,
   computeColumnMinMax,
   isChartableNumericFeature,
+  isWideArrayFeature,
 } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 import type { ChartRow } from "@/app/[org]/[dataset]/[episode]/fetch-data";
 
@@ -33,6 +34,19 @@ describe("isChartableNumericFeature", () => {
         shape: [1, 72],
       }),
     ).toBe(false);
+  });
+
+  test("excludes dense arrays too wide to be channels", () => {
+    // TacFlow's derived tactile force grid: 35 × 20 × 3 flattened, four of them per frame
+    const forceGrid = { dtype: "float32", shape: [2100] };
+    expect(isWideArrayFeature(forceGrid)).toBe(true);
+    expect(isChartableNumericFeature(forceGrid)).toBe(false);
+    // the widest state vector in use (v2.1, 43 dims) and a 6-dim resultant stay
+    expect(isWideArrayFeature({ dtype: "float64", shape: [43] })).toBe(false);
+    expect(isChartableNumericFeature({ dtype: "float32", shape: [6] })).toBe(
+      true,
+    );
+    expect(isWideArrayFeature({ dtype: "video", shape: [2100] })).toBe(false);
   });
 });
 

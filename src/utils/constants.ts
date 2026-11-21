@@ -22,6 +22,10 @@ export const THRESHOLDS = {
 // Chart configuration
 export const CHART_CONFIG = {
   MAX_SERIES_PER_GROUP: 6,
+  // A numeric feature wider than this is a dense array (a tactile force field, a marker grid), not a set of
+  // named channels: it is neither read for an episode nor charted. TacFlow's derived tactile grids are 1400
+  // and 2100 wide across 4 sensors — reading them pulled over a gigabyte of parquet for one episode.
+  MAX_FEATURE_DIMS: 128,
   SERIES_NAME_DELIMITER: " | ",
 } as const;
 
